@@ -53,6 +53,7 @@ class WifiManager {
   String contentTypeForPath(const String &path) const;
   bool isSafePath(const String &path) const;
   bool isEpd4Path(const String &path) const;
+  bool removePathRecursive(const String &path) const;
   String currentIp() const;
   void initSensors();
   void updateSensors(uint32_t now_ms);

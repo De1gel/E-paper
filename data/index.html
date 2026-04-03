@@ -267,9 +267,11 @@
           <div class="status-item"><div class="k">设备 IP</div><div class="v" id="st_ip">--</div></div>
           <div class="status-item"><div class="k">AP IP</div><div class="v" id="st_apip">--</div></div>
           <div class="status-item"><div class="k">SD 卡状态</div><div class="v" id="st_sd">--</div></div>
+          <div class="status-item"><div class="k">SD 空间</div><div class="v" id="st_sdspace">--</div></div>
           <div class="status-item"><div class="k">已运行时长</div><div class="v" id="st_uptime">--</div></div>
           <div class="status-item"><div class="k">超时剩余</div><div class="v" id="st_timeout">--</div></div>
           <div class="status-item"><div class="k">温度</div><div class="v" id="st_temp">未接入</div></div>
+          <div class="status-item"><div class="k">湿度</div><div class="v" id="st_humidity">未接入</div></div>
           <div class="status-item"><div class="k">电量</div><div class="v" id="st_battery">未接入</div></div>
         </div>
         <div id="statusNote" class="notice"></div>
@@ -345,10 +347,6 @@
               <div class="field"><label>OpenWeatherMap API Key（预留）</label><input id="owmKey" disabled placeholder="暂未启用"></div>
               <div class="field"><label>天气位置（预留）</label><input id="weatherLocation" disabled placeholder="暂未启用"></div>
             </div>
-            <div class="row" style="margin-top:10px">
-              <button class="btn primary" onclick="saveCfg()">保存配置</button>
-              <button class="btn" onclick="testWeather()">测试天气服务</button>
-            </div>
             <div class="preset-note">已生效：时区、天气接口 URL。预留：NTP 单独配置、OpenWeatherMap 直连参数。</div>
             <pre id="cfgBox" style="margin-top:8px">等待操作...</pre>
           </div>
@@ -364,6 +362,15 @@
               <div class="field"><label>湿度校准（预留）</label><input id="humCal" disabled value="0.00"></div>
             </div>
             <div class="preset-note">这组参数目前仅作 UI 预留，后端尚未接通，不会生效。</div>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <button class="btn primary" onclick="saveCfg()">保存设置</button>
+              <button class="btn" onclick="saveCfg()">应用设置</button>
+              <button class="btn" onclick="testWeather()">测试天气服务</button>
+            </div>
+            <div class="preset-note">保存/应用当前会写入已接通的配置项；标注“预留”的字段仍不会生效。</div>
           </div>
         </div>
 
@@ -577,11 +584,19 @@
         document.getElementById("st_ip").textContent = j.ip || "--";
         document.getElementById("st_apip").textContent = j.ap_ip || "--";
         document.getElementById("st_sd").textContent = j.sd_ready ? "已挂载" : "未挂载";
+        const sdTotal = Number(j.sd_total_bytes || 0);
+        const sdUsed = Number(j.sd_used_bytes || 0);
+        const sdFree = Math.max(0, sdTotal - sdUsed);
+        document.getElementById("st_sdspace").textContent = j.sd_ready
+          ? `${formatSize(sdUsed)} / ${formatSize(sdTotal)}（剩余 ${formatSize(sdFree)}）`
+          : "未挂载";
         document.getElementById("st_uptime").textContent = fmtMs(j.uptime_ms || 0);
         const tmo = j.idle_remaining_ms ?? j.connect_remaining_ms ?? j.session_remaining_ms ?? 0;
         document.getElementById("st_timeout").textContent = fmtMs(tmo);
         document.getElementById("st_temp").textContent =
           (typeof j.temperature_c === "number" && j.temperature_c >= -100) ? `${j.temperature_c.toFixed(1)} °C` : "未接入";
+        document.getElementById("st_humidity").textContent =
+          (typeof j.humidity_pct === "number" && j.humidity_pct >= 0) ? `${j.humidity_pct.toFixed(1)} %RH` : "未接入";
         const mv = Number(j.battery_mv || 0);
         const pct = Number(j.battery_pct);
         const pin = j.battery_pin ?? "?";
@@ -633,6 +648,25 @@
       await listFiles(currentDir);
     }
     function goUpDir() { openDir(parentDir(currentDir)); }
+    async function deletePath(path, isDir) {
+      const target = normalizeDir(path);
+      const confirmed = window.confirm(isDir
+        ? `确认删除目录及其全部内容？\n${target}`
+        : `确认删除文件？\n${target}`);
+      if (!confirmed) return;
+      const rr = await fetch("/api/file?path=" + encodeURIComponent(target), { method:"DELETE" });
+      const txt = await rr.text();
+      let ok = false;
+      try { ok = !!JSON.parse(txt).ok; } catch {}
+      if (!ok) {
+        alert("删除失败: " + txt);
+        return;
+      }
+      if (isDir && currentDir === target) {
+        currentDir = parentDir(currentDir);
+      }
+      await listFiles(currentDir);
+    }
     async function createFolder() {
       const name = window.prompt("请输入新文件夹名称");
       if (name == null) return;
@@ -696,6 +730,11 @@
           openBtn.textContent = "进入";
           openBtn.onclick = () => openDir(p);
           ops.appendChild(openBtn);
+          const del = document.createElement("button");
+          del.className = "btn";
+          del.textContent = "删除";
+          del.onclick = () => deletePath(p, true);
+          ops.appendChild(del);
         } else {
           const a = document.createElement("a");
           a.href = "/api/file?path=" + encodeURIComponent(p);
@@ -705,11 +744,7 @@
           const del = document.createElement("button");
           del.className = "btn";
           del.textContent = "删除";
-          del.onclick = async () => {
-            const rr = await fetch("/api/file?path=" + encodeURIComponent(p), { method:"DELETE" });
-            alert(await rr.text());
-            listFiles(currentDir);
-          };
+          del.onclick = () => deletePath(p, false);
           ops.appendChild(del);
         }
         fileRows.appendChild(tr);

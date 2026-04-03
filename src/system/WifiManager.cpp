@@ -359,6 +359,31 @@ bool WifiManager::isEpd4Path(const String &path) const {
   return lower.endsWith(".epd4");
 }
 
+bool WifiManager::removePathRecursive(const String &path) const {
+  File entry = SD.open(path);
+  if (!entry) {
+    return false;
+  }
+  if (!entry.isDirectory()) {
+    entry.close();
+    return SD.remove(path);
+  }
+
+  File child = entry.openNextFile();
+  while (child) {
+    const String child_name = String(child.name());
+    const bool child_is_dir = child.isDirectory();
+    child.close();
+    if (!removePathRecursive(child_name)) {
+      entry.close();
+      return false;
+    }
+    child = entry.openNextFile();
+  }
+  entry.close();
+  return SD.rmdir(path);
+}
+
 String WifiManager::currentIp() const {
   if (state_ == State::ApRunning) {
     return WiFi.softAPIP().toString();
@@ -393,8 +418,16 @@ bool WifiManager::readAHT20(float &temperature_c, float &humidity_pct) {
 }
 
 int WifiManager::readBatteryMilliVolts(int pin) const {
-  const int mv = analogReadMilliVolts(static_cast<uint8_t>(pin));
-  return mv;
+  const int raw_mv = analogReadMilliVolts(static_cast<uint8_t>(pin));
+  if (raw_mv <= 0) {
+    return raw_mv;
+  }
+  // This board commonly feeds VBAT through a 1:1 divider to the ADC input.
+  const int scaled_mv = raw_mv * 2;
+  if (scaled_mv >= 3000 && scaled_mv <= 5000) {
+    return scaled_mv;
+  }
+  return raw_mv;
 }
 
 void WifiManager::detectBatteryPin() {}
@@ -1342,6 +1375,10 @@ void WifiManager::handleStatus() {
   json += jsonEscape(WiFi.softAPIP().toString());
   json += "\",\"sd_ready\":";
   json += sd_ready_ ? "true" : "false";
+  json += ",\"sd_total_bytes\":";
+  json += String(sd_ready_ ? static_cast<uint32_t>(SD.totalBytes()) : 0);
+  json += ",\"sd_used_bytes\":";
+  json += String(sd_ready_ ? static_cast<uint32_t>(SD.usedBytes()) : 0);
   json += ",\"uptime_ms\":";
   json += String(millis());
   json += ",\"temperature_c\":";
@@ -1349,6 +1386,12 @@ void WifiManager::handleStatus() {
     json += "-1000";
   } else {
     json += String(temperature_c_, 1);
+  }
+  json += ",\"humidity_pct\":";
+  if (isnan(humidity_pct_)) {
+    json += "-1";
+  } else {
+    json += String(humidity_pct_, 1);
   }
   json += ",\"battery_mv\":";
   json += String(battery_mv_);
@@ -1505,11 +1548,11 @@ void WifiManager::handleFileDelete() {
   }
   const String path = server_->arg("path");
   Serial.printf("[HTTP] DELETE /api/file path=%s\n", path.c_str());
-  if (!isSafePath(path)) {
+  if (!isSafePath(path) || path == "/") {
     server_->send(400, "application/json", "{\"ok\":false,\"error\":\"bad_path\"}");
     return;
   }
-  const bool ok = SD.remove(path);
+  const bool ok = removePathRecursive(path);
   server_->send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
