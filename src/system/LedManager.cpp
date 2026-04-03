@@ -18,6 +18,20 @@ void LedManager::begin(uint8_t pin) {
   breath_start_ms_ = last_toggle_ms_;
 }
 
+void LedManager::configure(bool enabled, uint8_t max_level, bool active_low) {
+  enabled_ = enabled;
+  max_level_ = max_level;
+  active_low_ = active_low;
+  if (!enabled_) {
+    state_on_ = false;
+    blink_active_ = false;
+    breath_active_ = false;
+    writeLevel(0);
+  } else {
+    writeLevel(state_on_ ? 255 : 0);
+  }
+}
+
 void LedManager::triggerBreath(uint8_t cycles) {
   if (pin_ == 255) {
     return;
@@ -124,7 +138,13 @@ void LedManager::update(OperationMode mode, uint32_t now_ms) {
 }
 
 void LedManager::writeLevel(uint8_t level) {
-  ledcWrite(kPwmChannel, level);
+  uint8_t logical = enabled_ ? level : 0;
+  const uint16_t scaled16 = (static_cast<uint16_t>(logical) * static_cast<uint16_t>(max_level_) + 127U) / 255U;
+  uint8_t scaled = static_cast<uint8_t>(scaled16 & 0xFFU);
+  if (active_low_) {
+    scaled = static_cast<uint8_t>(255U - scaled);
+  }
+  ledcWrite(kPwmChannel, scaled);
 }
 
 }  // namespace appfw

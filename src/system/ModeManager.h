@@ -19,11 +19,13 @@ class ModeManager {
   void begin(uint32_t now_ms);
   void update(uint32_t now_ms);
   void onInputEvent(InputEvent event, uint32_t now_ms);
+  void forceNormal(uint32_t now_ms, const char *reason);
 
   OperationMode mode() const;
   bool consumeApRequest();
   bool consumeStaRequest();
   bool consumeWhiteScreenRequest();
+  bool consumeStopWifiRequest();
 
  private:
   void setMode(OperationMode next, uint32_t now_ms);
@@ -34,6 +36,7 @@ class ModeManager {
   bool ap_request_ = false;
   bool sta_request_ = false;
   bool white_screen_request_ = false;
+  bool stop_wifi_request_ = false;
 
   static constexpr uint32_t kConfigWaitTimeoutMs = 60000;
 };

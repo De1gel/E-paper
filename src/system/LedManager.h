@@ -10,6 +10,7 @@ namespace appfw {
 class LedManager {
  public:
   void begin(uint8_t pin);
+  void configure(bool enabled, uint8_t max_level, bool active_low);
   void triggerBreath(uint8_t cycles = 1);
   void triggerDoubleBlink();
   void update(OperationMode mode, uint32_t now_ms);
@@ -18,6 +19,9 @@ class LedManager {
   void writeLevel(uint8_t level);
 
   uint8_t pin_ = 255;
+  bool enabled_ = true;
+  bool active_low_ = false;
+  uint8_t max_level_ = 255;
   bool state_on_ = false;
   uint32_t last_toggle_ms_ = 0;
   bool blink_active_ = false;
