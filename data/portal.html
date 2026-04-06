@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title data-i18n="app.title">E-paper 管理台</title>
+  <style>
+    :root {
+      --bg1:#eef3f8;
+      --bg2:#f7f9fc;
+      --card:#ffffffd9;
+      --line:#d7dee7;
+      --text:#1f2a36;
+      --muted:#5d6b79;
+      --accent:#0f7ae5;
+      --accent2:#2aa3f7;
+      --danger:#df4d4d;
+      --shadow:0 10px 24px rgba(17,34,68,.08);
+      --soft:#eef5fc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin:0;
+      font-family:"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+      background:
+        radial-gradient(1200px 500px at -10% -20%, #d5e7ff 0%, transparent 60%),
+        radial-gradient(1000px 600px at 110% -10%, #d8f1ff 0%, transparent 60%),
+        linear-gradient(180deg,var(--bg1),var(--bg2));
+      color:var(--text);
+      min-height:100vh;
+    }
+    .wrap { max-width:980px; margin:20px auto; padding:0 12px; }
+    .top,.card {
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:14px;
+      margin-bottom:12px;
+      backdrop-filter:blur(3px);
+      box-shadow:var(--shadow);
+    }
+    .title { font-size:24px; font-weight:700; margin-bottom:6px; letter-spacing:.3px; }
+    .meta,.small { color:var(--muted); font-size:12px; }
+    .meta { font-size:14px; }
+    .tabs,.row,.path-tools,.range-wrap,.crumbs {
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .tabs { margin-top:10px; }
+    .tab-btn,.btn,.crumb {
+      border:1px solid var(--line);
+      background:#fff;
+      color:var(--text);
+      padding:8px 12px;
+      border-radius:10px;
+      cursor:pointer;
+      transition:.2s ease;
+    }
+    .tab-btn:hover,.btn:hover { transform:translateY(-1px); }
+    .tab-btn.active,.btn.primary {
+      background:linear-gradient(135deg,var(--accent),var(--accent2));
+      color:#fff;
+      border-color:transparent;
+      box-shadow:0 4px 12px rgba(15,122,229,.28);
+    }
+    .btn.warn { background:var(--danger); color:#fff; border-color:var(--danger); }
+    .tab-panel { display:none; }
+    .tab-panel.active { display:block; }
+    .grid2,.status-grid { display:grid; gap:10px; }
+    .grid2 { grid-template-columns:1fr 1fr; }
+    .status-grid { grid-template-columns:repeat(2,minmax(220px,1fr)); margin-top:10px; }
+    .field label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+    .field input,.field select {
+      width:100%;
+      padding:9px 10px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#fff;
+    }
+    pre {
+      margin:0;
+      padding:10px;
+      background:#f5f7fa;
+      border:1px solid var(--line);
+      border-radius:10px;
+      overflow:auto;
+      line-height:1.45;
+      white-space:pre-wrap;
+    }
+    table { width:100%; border-collapse:collapse; margin-top:8px; }
+    th,td { padding:8px; border-bottom:1px solid var(--line); text-align:left; font-size:14px; }
+    th { color:var(--muted); font-weight:600; }
+    .status-item { border:1px solid var(--line); border-radius:10px; background:#f7f9fc; padding:10px; }
+    .status-item .k { font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .status-item .v { font-size:16px; font-weight:600; color:var(--text); }
+    .notice {
+      margin-top:10px;
+      padding:10px 12px;
+      border:1px solid #cfe0f3;
+      background:#f3f8fe;
+      border-radius:10px;
+      color:#37516d;
+      white-space:pre-wrap;
+      display:none;
+    }
+    .path-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    .crumb { background:var(--soft); border-radius:999px; padding:6px 10px; }
+    .crumb.current { background:#fff; font-weight:600; }
+    .file-table td.actions { width:220px; }
+    .name-btn {
+      border:none;
+      background:none;
+      color:var(--text);
+      cursor:pointer;
+      padding:0;
+      font:inherit;
+      text-align:left;
+    }
+    .name-btn.dir { color:var(--accent); font-weight:600; }
+    .badge {
+      display:inline-block;
+      min-width:56px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:#eef4fb;
+      color:#46627f;
+      font-size:12px;
+      text-align:center;
+    }
+    .badge.dir { background:#dff0ff; color:#185b91; }
+    .upload-extra {
+      margin-top:10px;
+      padding:12px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#f8fbff;
+      display:none;
+    }
+    .upload-extra.show { display:block; }
+    .hint-line { margin-top:8px; font-size:12px; color:#617180; line-height:1.6; }
+    .tooltip {
+      position:relative;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:18px;
+      height:18px;
+      border-radius:50%;
+      border:1px solid #b9c7d6;
+      color:#4c6075;
+      font-size:12px;
+      cursor:help;
+      background:#fff;
+    }
+    .tooltip .tip {
+      position:absolute;
+      left:50%;
+      bottom:calc(100% + 8px);
+      transform:translateX(-50%);
+      width:min(320px,80vw);
+      padding:10px 12px;
+      border-radius:10px;
+      background:#1f2a36;
+      color:#fff;
+      font-size:12px;
+      line-height:1.6;
+      box-shadow:0 10px 24px rgba(17,34,68,.22);
+      opacity:0;
+      pointer-events:none;
+      transition:.18s ease;
+      white-space:normal;
+      z-index:10;
+    }
+    .tooltip:hover .tip { opacity:1; }
+    .range-wrap input[type="range"] { width:200px; }
+    .mode-note {
+      margin-top:8px;
+      padding:8px 10px;
+      border-radius:10px;
+      background:#fff;
+      border:1px dashed #c9d7e6;
+      color:#5b6a78;
+      font-size:12px;
+      line-height:1.5;
+    }
+    .schedule-table td { vertical-align:middle; }
+    .swatch {
+      display:inline-block;
+      width:14px;
+      height:14px;
+      border-radius:4px;
+      border:1px solid #8a95a2;
+      margin-right:6px;
+      vertical-align:middle;
+    }
+    .section-head {
+      margin:0 0 10px;
+      padding:10px 12px;
+      border-radius:12px;
+      background:linear-gradient(135deg,#1698e8,#2db6f1);
+      color:#fff;
+      font-size:18px;
+      font-weight:700;
+      letter-spacing:.2px;
+    }
+    @media (max-width:700px) {
+      .grid2,.status-grid { grid-template-columns:1fr; }
+      .file-table td.actions { width:auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title" data-i18n="app.title">E-paper 管理台</div>
+      <div class="meta" data-i18n="app.subtitle">默认首页：设备状态</div>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="status" data-i18n="tabs.status">设备状态</button>
+        <button class="tab-btn" data-tab="config" data-i18n="tabs.config">配置</button>
+        <button class="tab-btn" data-tab="files" data-i18n="tabs.files">目录</button>
+      </div>
+    </div>
+
+    <section id="tab-status" class="tab-panel active">
+      <div class="card">
+        <div class="row">
+          <button class="btn primary" onclick="loadStatus()" data-i18n="status.refresh">刷新状态</button>
+          <button class="btn warn" onclick="stopPortal()" data-i18n="status.stop_portal">停止 WiFi 门户</button>
+        </div>
+        <div class="small" style="margin-top:8px" data-i18n="status.current_state">当前设备状态</div>
+        <div class="status-grid">
+          <div class="status-item"><div class="k" data-i18n="status.mode">运行模式</div><div class="v" id="st_mode">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.ip">设备 IP</div><div class="v" id="st_ip">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.ap_ip">AP IP</div><div class="v" id="st_apip">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.sd">SD 卡状态</div><div class="v" id="st_sd">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.sd_space">SD 空间</div><div class="v" id="st_sdspace">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.uptime">已运行时长</div><div class="v" id="st_uptime">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.timeout">超时剩余</div><div class="v" id="st_timeout">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.temp">温度</div><div class="v" id="st_temp">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.humidity">湿度</div><div class="v" id="st_humidity">--</div></div>
+          <div class="status-item"><div class="k" data-i18n="status.battery">电量</div><div class="v" id="st_battery">--</div></div>
+        </div>
+        <div id="statusNote" class="notice"></div>
+      </div>
+    </section>
+
+    <section id="tab-config" class="tab-panel">
+      <div class="card">
+        <div class="section-head" data-i18n="cfg.network.title">网络配置</div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="cfg.network.ssid">STA SSID</label>
+            <input id="ssid" data-i18n-placeholder="cfg.network.ssid_ph" placeholder="连接到现有 WiFi">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.network.pass">STA 密码</label>
+            <input id="pass" type="password" data-i18n-placeholder="cfg.network.pass_ph" placeholder="输入 WiFi 密码">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.network.language">页面语言</label>
+            <select id="uiLanguage">
+              <option value="zh" data-i18n="cfg.network.lang_zh">中文</option>
+              <option value="en" data-i18n="cfg.network.lang_en">English</option>
+              <option value="fr" data-i18n="cfg.network.lang_fr">Français</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-head" data-i18n="cfg.photo.title">图片轮播</div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="cfg.photo.interval">轮播间隔（秒）</label>
+            <input id="sec" type="number" min="30">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-head" data-i18n="cfg.calendar.title">日历事件</div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="cfg.calendar.layout">日历布局</label>
+            <select id="calendarLayout">
+              <option value="landscape_split" data-i18n="cfg.calendar.layout_landscape">横屏半屏（左日历 / 右日程）</option>
+              <option value="portrait_split" data-i18n="cfg.calendar.layout_portrait">竖屏半屏（上日历 / 下日程）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.calendar.refresh_sec">日历刷新间隔（秒）</label>
+            <input id="calendarSec" type="number" min="60" placeholder="900">
+          </div>
+          <div class="field" style="grid-column:1 / -1;">
+            <label data-i18n="cfg.calendar.url">日历数据 URL（预留）</label>
+            <input id="calendarUrl" data-i18n-placeholder="cfg.calendar.url_ph" placeholder="保留字段，当前离线日历不依赖该 URL">
+          </div>
+        </div>
+        <div class="small" style="margin-top:8px" data-i18n="cfg.calendar.note">离线日历仅依赖设备本地时间；联网后会自动校时。</div>
+      </div>
+
+      <div class="card">
+        <div class="section-head" data-i18n="cfg.schedule.title">手动日程</div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="cfg.schedule.name">日程标题</label>
+            <input id="scheduleTitle" data-i18n-placeholder="cfg.schedule.name_ph" placeholder="例如：团队周会">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.schedule.time">时间</label>
+            <input id="scheduleTime" type="time" value="09:00">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.schedule.color">颜色</label>
+            <select id="scheduleColor">
+              <option value="red" data-i18n="cfg.schedule.color_red">红色（重要提醒）</option>
+              <option value="blue" data-i18n="cfg.schedule.color_blue">蓝色（工作安排）</option>
+              <option value="green" data-i18n="cfg.schedule.color_green">绿色（日常任务）</option>
+              <option value="yellow" data-i18n="cfg.schedule.color_yellow">黄色（弹性事项）</option>
+              <option value="black" data-i18n="cfg.schedule.color_black">黑色（默认）</option>
+              <option value="white" data-i18n="cfg.schedule.color_white">白色（弱提示）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.schedule.repeat">重复机制</label>
+            <select id="scheduleRepeat">
+              <option value="weekly" data-i18n="cfg.schedule.repeat_weekly">每周重复</option>
+              <option value="daily" data-i18n="cfg.schedule.repeat_daily">每天重复</option>
+              <option value="once" data-i18n="cfg.schedule.repeat_once">仅一次</option>
+            </select>
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.schedule.date">日期（仅一次）</label>
+            <input id="scheduleDate" type="date">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.schedule.weekday">星期（每周重复）</label>
+            <select id="scheduleWeekday">
+              <option value="0" data-i18n="weekday.mon">周一</option>
+              <option value="1" data-i18n="weekday.tue">周二</option>
+              <option value="2" data-i18n="weekday.wed">周三</option>
+              <option value="3" data-i18n="weekday.thu">周四</option>
+              <option value="4" data-i18n="weekday.fri">周五</option>
+              <option value="5" data-i18n="weekday.sat">周六</option>
+              <option value="6" data-i18n="weekday.sun">周日</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn primary" onclick="addSchedule()" data-i18n="cfg.schedule.add">添加日程</button>
+          <button class="btn" onclick="loadSchedules()" data-i18n="cfg.schedule.reload">刷新日程</button>
+        </div>
+        <table class="schedule-table">
+          <thead>
+            <tr>
+              <th data-i18n="cfg.schedule.col_time">时间</th>
+              <th data-i18n="cfg.schedule.col_name">标题</th>
+              <th data-i18n="cfg.schedule.col_rule">规则</th>
+              <th data-i18n="cfg.schedule.col_color">颜色</th>
+              <th data-i18n="cfg.schedule.col_action">操作</th>
+            </tr>
+          </thead>
+          <tbody id="scheduleRows"></tbody>
+        </table>
+        <div class="small" id="scheduleSummary" style="margin-top:8px" data-i18n="cfg.schedule.empty">暂无日程</div>
+      </div>
+
+      <div class="card">
+        <div class="section-head" data-i18n="cfg.weather.title">天气与定位</div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="cfg.weather.city">城市</label>
+            <input id="weatherLocation" data-i18n-placeholder="cfg.weather.city_ph" placeholder="如 Shanghai 或 上海">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.weather.lat">纬度</label>
+            <input id="weatherLat" placeholder="31.2304">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.weather.lon">经度</label>
+            <input id="weatherLon" placeholder="121.4737">
+          </div>
+          <div class="field" style="grid-column:1 / -1;">
+            <label data-i18n="cfg.weather.url">天气接口 URL</label>
+            <input id="wurl" data-i18n-placeholder="cfg.weather.url_ph" placeholder="可手动填写，或由城市/经纬度自动生成">
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" onclick="resolveCity()" data-i18n="cfg.weather.resolve">解析城市</button>
+          <button class="btn" onclick="testWeather()" data-i18n="cfg.weather.test">测试天气服务</button>
+        </div>
+        <div class="small" style="margin-top:8px" data-i18n="cfg.weather.note">时区将根据天气接口返回值自动识别，并用于 WiFi 联网校时。</div>
+        <pre id="cfgBox" style="margin-top:8px" data-i18n="cfg.waiting">等待操作...</pre>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <button class="btn primary" onclick="saveCfg()" data-i18n="cfg.save">保存设置</button>
+          <button class="btn warn" onclick="rebootDevice()" data-i18n="cfg.reboot">重启设备</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-files" class="tab-panel">
+      <div class="card">
+        <div class="path-bar">
+          <button class="btn" onclick="goUpDir()" data-i18n="files.up">上一级</button>
+          <button class="btn" onclick="createFolder()" data-i18n="files.new_folder">新建文件夹</button>
+          <button class="btn primary" onclick="listFiles()" data-i18n="files.reload">刷新目录</button>
+        </div>
+        <div id="crumbs" class="crumbs"></div>
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th data-i18n="files.col_name">名称</th>
+              <th data-i18n="files.col_size">大小</th>
+              <th data-i18n="files.col_type">类型</th>
+              <th data-i18n="files.col_action">操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileRows"></tbody>
+        </table>
+        <div class="small" id="fileSummary" style="margin-top:8px" data-i18n="files.loading">等待加载...</div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <input id="uploadInput" type="file">
+          <select id="uploadMode" style="padding:8px;border:1px solid var(--line);border-radius:8px;min-width:220px;">
+            <option value="normal" data-i18n="upload.mode_normal">普通文件上传</option>
+            <option value="fit" data-i18n="upload.mode_fit">图片缩放上传</option>
+            <option value="crop" data-i18n="upload.mode_crop">图片裁剪上传</option>
+          </select>
+          <button class="btn primary" onclick="uploadFile()" data-i18n="upload.exec">执行上传</button>
+        </div>
+        <div id="uploadExtra" class="upload-extra">
+          <div class="grid2">
+            <div class="field">
+              <label data-i18n="upload.algo">抖动算法</label>
+              <select id="ditherMode">
+                <option value="fs_serpentine" selected data-i18n="upload.algo_fs">Floyd-Steinberg（通用默认 / 细节锐利）</option>
+                <option value="atkinson" data-i18n="upload.algo_atkinson">Atkinson（插画 / 图标 / 风格化）</option>
+                <option value="jjn" data-i18n="upload.algo_jjn">Jarvis-Judice-Ninke（照片 / 渐变平滑）</option>
+              </select>
+              <div id="ditherHint" class="hint-line"></div>
+            </div>
+            <div class="field">
+              <label style="display:flex;align-items:center;gap:6px;">
+                <span data-i18n="upload.gamma">Gamma</span>
+                <span class="tooltip">?
+                  <span class="tip" id="gammaTip" data-i18n="upload.gamma_tip">推荐值：1.00 通用；0.90~0.98 提亮暗部；1.05~1.15 增强层次；过高会压暗暗部细节。</span>
+                </span>
+              </label>
+              <div class="range-wrap">
+                <input id="gammaCtrl" type="range" min="0.80" max="1.40" step="0.01" value="1.00">
+                <span id="gammaVal">1.00</span>
+              </div>
+              <div id="gammaHint" class="hint-line"></div>
+            </div>
+          </div>
+          <div id="modeNote" class="mode-note"></div>
+        </div>
+        <pre id="uploadBox" style="margin-top:8px" data-i18n="upload.waiting">等待上传...</pre>
+      </div>
+    </section>
+  </div>
+
+  <script src="/app.js?v=20260406f"></script>
+</body>
+</html>

@@ -12,8 +12,10 @@ class LedManager {
   void begin(uint8_t pin);
   void configure(bool enabled, uint8_t max_level, bool active_low);
   void triggerBreath(uint8_t cycles = 1);
+  void startBreath();
+  void stopEffects();
   void triggerDoubleBlink();
-  void update(OperationMode mode, uint32_t now_ms);
+  void update(OperationMode mode, uint32_t now_ms, bool sta_connected = false);
 
  private:
   void writeLevel(uint8_t level);
@@ -28,12 +30,14 @@ class LedManager {
   uint8_t blink_step_ = 0;
   uint32_t blink_next_ms_ = 0;
   bool breath_active_ = false;
+  bool breath_hold_ = false;
   uint8_t breath_cycles_ = 0;
   uint8_t breath_cycles_done_ = 0;
   uint32_t breath_start_ms_ = 0;
   static constexpr uint32_t kFastBlinkMs = 150;
-  static constexpr uint32_t kDoubleBlinkOnMs = 90;
-  static constexpr uint32_t kDoubleBlinkOffMs = 90;
+  static constexpr uint32_t kStaConnectingBlinkMs = 220;
+  static constexpr uint32_t kDoubleBlinkOnMs = 120;
+  static constexpr uint32_t kDoubleBlinkOffMs = 180;
   static constexpr uint32_t kBreathPeriodMs = 1800;
   static constexpr uint8_t kPwmChannel = 0;
   static constexpr uint16_t kPwmFreqHz = 5000;
