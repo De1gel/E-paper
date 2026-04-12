@@ -804,7 +804,7 @@ void App::drawCalendarText3x5(uint16_t x, uint16_t y, const String &text, uint8_
                          color_nibble);
       }
     }
-    pen_x = static_cast<uint16_t>(pen_x + draw_w + style.letter_spacing);
+    pen_x = static_cast<uint16_t>(pen_x + draw_w + calendar::glyphLetterSpacingPx(glyph, style));
   }
 }
 

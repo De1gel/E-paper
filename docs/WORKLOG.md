@@ -18,3 +18,6 @@
 - Built `esp32dev` successfully after splitting the calendar info bar into two rows (`date/time` on the left, `weather/sensors` on the right).
 - Removed month-grid boxes and highlight fills so the calendar area now shows only the day numbers, with a slightly reduced month area height.
 - Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431165 / 7340032`).
+- Built `esp32dev` successfully after unifying ASCII glyph calibration so ASCII renders with the same sizing rules under both `Auto` and `CjkAuto`.
+- ASCII width, height, and letter spacing now use ASCII-specific metrics instead of inheriting CJK `base_height` during mixed-font rendering.
+- Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431421 / 7340032`).

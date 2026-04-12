@@ -12,6 +12,14 @@ struct FontBoxMetrics {
   uint8_t height;
 };
 
+struct GlyphRenderMetrics {
+  uint8_t left;
+  uint8_t top;
+  uint8_t width;
+  uint8_t height;
+  uint8_t base_height;
+};
+
 FontBoxMetrics fontBoxMetrics(TextFont font) {
   switch (font) {
     case TextFont::Cjk24:
@@ -76,6 +84,16 @@ uint8_t requestedCjkPx(TextFont font) {
 
 uint8_t textBaseHeight(TextFont font) {
   return fontBoxMetrics(font).height;
+}
+
+GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle &style) {
+  if (glyph.bits_per_pixel > 1u) {
+    return GlyphRenderMetrics{style.box_left, style.box_top, style.box_width, style.box_height,
+                              style.base_height};
+  }
+  const FontBoxMetrics ascii_box = fontBoxMetrics(TextFont::Auto);
+  return GlyphRenderMetrics{ascii_box.left, ascii_box.top, ascii_box.width, ascii_box.height,
+                            ascii_box.height};
 }
 
 uint8_t resolveCjkFontForPixelHeight(uint8_t pixel_height) {
@@ -222,15 +240,30 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
 }
 
 uint16_t glyphWidthPx(const GlyphBitmap &glyph, const TextStyle &style) {
-  const uint8_t source_width =
-      (glyph.bits_per_pixel > 1u && style.box_width > 0u) ? style.box_width : glyph.width;
-  return scaledDimension(source_width, style);
+  const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
+  TextStyle glyph_style = style;
+  glyph_style.base_height = metrics.base_height;
+  const uint8_t source_width = (metrics.width > 0u) ? metrics.width : glyph.width;
+  return scaledDimension(source_width, glyph_style);
 }
 
 uint16_t glyphHeightPx(const GlyphBitmap &glyph, const TextStyle &style) {
-  const uint8_t source_height =
-      (glyph.bits_per_pixel > 1u && style.box_height > 0u) ? style.box_height : glyph.height;
-  return scaledDimension(source_height, style);
+  const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
+  TextStyle glyph_style = style;
+  glyph_style.base_height = metrics.base_height;
+  const uint8_t source_height = (metrics.height > 0u) ? metrics.height : glyph.height;
+  return scaledDimension(source_height, glyph_style);
+}
+
+uint8_t glyphLetterSpacingPx(const GlyphBitmap &glyph, const TextStyle &style) {
+  const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
+  const uint8_t base_height = (metrics.base_height > 0u) ? metrics.base_height : style.base_height;
+  if (base_height == 0u) {
+    return 1u;
+  }
+  const uint16_t spacing =
+      static_cast<uint16_t>((style.pixel_height + (base_height / 2u)) / base_height);
+  return static_cast<uint8_t>((spacing == 0u) ? 1u : spacing);
 }
 
 uint16_t textWidthPx(const String &text, uint8_t pixel_height, TextFont font) {
@@ -248,7 +281,7 @@ uint16_t textWidthPx(const String &text, uint8_t pixel_height, TextFont font) {
       continue;
     }
     if (!first) {
-      total = static_cast<uint16_t>(total + style.letter_spacing);
+      total = static_cast<uint16_t>(total + glyphLetterSpacingPx(glyph, style));
     }
     total = static_cast<uint16_t>(total + glyphWidthPx(glyph, style));
     first = false;
@@ -312,12 +345,11 @@ bool buildTextCoverageMap(const String &text, uint8_t pixel_height, TextFont fon
     }
     const uint16_t draw_w = glyphWidthPx(glyph, style);
     const uint16_t draw_h = glyphHeightPx(glyph, style);
-    const uint8_t src_top = (glyph.bits_per_pixel > 1u) ? style.box_top : 0u;
-    const uint8_t src_left = (glyph.bits_per_pixel > 1u) ? style.box_left : 0u;
-    const uint8_t src_h =
-        (glyph.bits_per_pixel > 1u && style.box_height > 0u) ? style.box_height : glyph.height;
-    const uint8_t src_w =
-        (glyph.bits_per_pixel > 1u && style.box_width > 0u) ? style.box_width : glyph.width;
+    const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
+    const uint8_t src_top = metrics.top;
+    const uint8_t src_left = metrics.left;
+    const uint8_t src_h = (metrics.height > 0u) ? metrics.height : glyph.height;
+    const uint8_t src_w = (metrics.width > 0u) ? metrics.width : glyph.width;
 
     for (uint16_t dy = 0; dy < draw_h; ++dy) {
       const uint8_t src_row =
@@ -343,7 +375,7 @@ bool buildTextCoverageMap(const String &text, uint8_t pixel_height, TextFont fon
         }
       }
     }
-    pen_x = static_cast<uint16_t>(pen_x + draw_w + style.letter_spacing);
+    pen_x = static_cast<uint16_t>(pen_x + draw_w + glyphLetterSpacingPx(glyph, style));
   }
 
   return true;

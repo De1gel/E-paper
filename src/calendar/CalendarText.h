@@ -45,6 +45,7 @@ struct TextCoverageMap {
 TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font = TextFont::Auto);
 uint16_t glyphWidthPx(const GlyphBitmap &glyph, const TextStyle &style);
 uint16_t glyphHeightPx(const GlyphBitmap &glyph, const TextStyle &style);
+uint8_t glyphLetterSpacingPx(const GlyphBitmap &glyph, const TextStyle &style);
 uint16_t textWidthPx(const String &text, uint8_t pixel_height, TextFont font = TextFont::Auto);
 uint16_t textHeightPx(const String &text, uint8_t pixel_height, TextFont font = TextFont::Auto);
 bool buildTextCoverageMap(const String &text, uint8_t pixel_height, TextFont font,

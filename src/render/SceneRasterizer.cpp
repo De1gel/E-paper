@@ -134,7 +134,7 @@ class StripeSceneSink : public calendar::SceneSink {
                    color_nibble);
         }
       }
-      pen_x = static_cast<uint16_t>(pen_x + draw_w + style.letter_spacing);
+      pen_x = static_cast<uint16_t>(pen_x + draw_w + calendar::glyphLetterSpacingPx(glyph, style));
     }
   }
 
