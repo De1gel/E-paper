@@ -15,3 +15,6 @@
 - Built `esp32dev` successfully after increasing the left calendar header and weekday labels to `24px`, and reducing day numbers inside the month grid to `12px`.
 - Calendar layout header and weekday row heights were expanded to match the larger top text sizes.
 - Build result: RAM `17.5%` (`57216 / 327680`), Flash `33.1%` (`2431421 / 7340032`).
+- Built `esp32dev` successfully after splitting the calendar info bar into two rows (`date/time` on the left, `weather/sensors` on the right).
+- Removed month-grid boxes and highlight fills so the calendar area now shows only the day numbers, with a slightly reduced month area height.
+- Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431165 / 7340032`).

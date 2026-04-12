@@ -129,7 +129,8 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   model.title = "-- -- --";
   model.title = String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) + "-" +
                 twoDigits(local_tm.tm_mday);
-  model.header_datetime = model.title + " " + formatTimeHm(local_tm);
+  model.header_date = model.title;
+  model.header_time = formatTimeHm(local_tm);
 
   String weather_label = wifi_manager.weatherCity();
   weather_label.trim();

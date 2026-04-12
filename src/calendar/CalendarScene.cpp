@@ -121,15 +121,19 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   sink.strokeRect(layout.schedule_panel, green);
 
   const uint16_t header_left_x = static_cast<uint16_t>(layout.header_bar.x + 6);
-  const uint16_t header_y = static_cast<uint16_t>(layout.header_y + 6);
-  sink.text(header_left_x, header_y, model.header_datetime, header_px, white);
-  const String header_right = model.header_weather + "  " + model.header_sensors;
-  const uint16_t header_right_w = textWidthPx(header_right, header_px, header_font);
+  const uint16_t header_date_y = static_cast<uint16_t>(layout.header_y + 6);
+  const uint16_t header_time_y =
+      static_cast<uint16_t>(header_date_y + textHeightPx(model.header_date, header_px, header_font) + 2);
+  sink.text(header_left_x, header_date_y, model.header_date, header_px, white, header_font);
+  sink.text(header_left_x, header_time_y, model.header_time, header_px, white);
+  const uint16_t header_right_w = std::max(textWidthPx(model.header_weather, header_px, header_font),
+                                           textWidthPx(model.header_sensors, header_px, header_font));
   const uint16_t header_right_x =
       (layout.header_bar.w > header_right_w + 12)
           ? static_cast<uint16_t>(layout.header_bar.x + layout.header_bar.w - header_right_w - 6)
           : header_left_x;
-  sink.text(header_right_x, header_y, header_right, header_px, white, header_font);
+  sink.text(header_right_x, header_date_y, model.header_weather, header_px, white, header_font);
+  sink.text(header_right_x, header_time_y, model.header_sensors, header_px, white);
 
   if (layout.mode == LayoutMode::LandscapeSplit) {
     sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), 0, 1, layout.screen.h), blue);
@@ -142,30 +146,11 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       const String label = model.weekday_labels[col];
       const uint16_t label_w = textWidthPx(label, weekday_px, weekday_font);
       const uint16_t label_box_x = static_cast<uint16_t>(layout.grid.x + col * layout.cell_w);
-      if (col >= 5 && layout.cell_w > 2) {
-        sink.fillRect(makeRect(static_cast<uint16_t>(label_box_x + 1),
-                               static_cast<uint16_t>(layout.weekday_y + 1),
-                               static_cast<uint16_t>(layout.cell_w - 2),
-                               static_cast<uint16_t>(layout.weekday_h - 2)),
-                      yellow);
-      }
       const uint16_t label_x = static_cast<uint16_t>(
           layout.grid.x + col * layout.cell_w +
           ((layout.cell_w > label_w) ? (layout.cell_w - label_w) / 2u : 0u));
       sink.text(label_x, layout.weekday_y, label, weekday_px, (col >= 5) ? red : green,
                 weekday_font);
-    }
-
-    sink.strokeRect(layout.grid, blue);
-    for (uint8_t col = 1; col < 7; ++col) {
-      sink.fillRect(makeRect(static_cast<uint16_t>(layout.grid.x + col * layout.cell_w), layout.grid.y, 1,
-                             layout.grid.h),
-                    blue);
-    }
-    for (uint8_t row = 1; row < 6; ++row) {
-      sink.fillRect(makeRect(layout.grid.x, static_cast<uint16_t>(layout.grid.y + row * layout.cell_h),
-                             layout.grid.w, 1),
-                    blue);
     }
   }
 
@@ -276,13 +261,6 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const DateCell &cell = model.date_cells[index];
     const uint16_t cell_x = static_cast<uint16_t>(layout.grid.x + col * layout.cell_w);
     const uint16_t cell_y = static_cast<uint16_t>(layout.grid.y + row * layout.cell_h);
-
-    if (cell.is_today && layout.cell_w > 2 && layout.cell_h > 2) {
-      sink.fillRect(makeRect(static_cast<uint16_t>(cell_x + 1), static_cast<uint16_t>(cell_y + 1),
-                             static_cast<uint16_t>(layout.cell_w - 2),
-                             static_cast<uint16_t>(layout.cell_h - 2)),
-                    yellow);
-    }
 
     const String label = String(cell.day);
     const uint16_t day_px = 12;
