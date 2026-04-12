@@ -7,11 +7,11 @@ namespace calendar {
 namespace {
 
 constexpr uint8_t kAsciiBasePx = 5;
-constexpr uint8_t kZhWeekdayPx = 18;
+constexpr uint8_t kZhWeekdayPx = 24;
 constexpr uint8_t kZhItemPx = 24;
 constexpr uint8_t kZhMetaPx = 16;
 constexpr uint8_t kZhScheduleTitlePx = 48;
-constexpr uint8_t kHeaderPx = 10;
+constexpr uint8_t kHeaderPx = 24;
 constexpr bool kShowAATestPanel = false;
 
 uint8_t asciiPixelHeight(uint8_t scale) {
@@ -285,7 +285,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     }
 
     const String label = String(cell.day);
-    const uint16_t day_px = asciiPixelHeight(layout.day_scale);
+    const uint16_t day_px = 12;
     const uint16_t text_w = textWidthPx(label, day_px);
     const uint16_t text_h = textHeightPx(label, day_px);
     const uint16_t text_x = static_cast<uint16_t>(

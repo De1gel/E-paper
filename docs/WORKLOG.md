@@ -12,3 +12,6 @@
 - Built `esp32dev` successfully after moving the calendar status bar back into the left calendar panel and removing the duplicate large date line.
 - Calendar top info now renders only inside the calendar panel header; the right schedule panel no longer has a screen-wide shared header.
 - Build result: RAM `17.5%` (`57216 / 327680`), Flash `33.1%` (`2431449 / 7340032`).
+- Built `esp32dev` successfully after increasing the left calendar header and weekday labels to `24px`, and reducing day numbers inside the month grid to `12px`.
+- Calendar layout header and weekday row heights were expanded to match the larger top text sizes.
+- Build result: RAM `17.5%` (`57216 / 327680`), Flash `33.1%` (`2431421 / 7340032`).
