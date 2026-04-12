@@ -4,3 +4,5 @@
 - Built `esp32dev` successfully after removing quote support from the calendar path and collapsing text AA to `Threshold` plus `Burkes` only.
 - Calendar schedule area no longer reserves quote/footer space for `格言`; the landscape AA panel now shows only the `Burkes` sample row.
 - Build result: RAM `17.4%` (`57152 / 327680`), Flash `33.1%` (`2430517 / 7340032`).
+- Built `esp32dev` successfully after disabling the temporary Burkes comparison panel and restoring the normal schedule page on the right side.
+- Build result: RAM `17.4%` (`57152 / 327680`), Flash `33.1%` (`2430041 / 7340032`).

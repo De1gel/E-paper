@@ -11,7 +11,7 @@ constexpr uint8_t kZhWeekdayPx = 18;
 constexpr uint8_t kZhItemPx = 24;
 constexpr uint8_t kZhMetaPx = 16;
 constexpr uint8_t kZhScheduleTitlePx = 48;
-constexpr bool kShowAATestPanel = true;
+constexpr bool kShowAATestPanel = false;
 
 uint8_t asciiPixelHeight(uint8_t scale) {
   return static_cast<uint8_t>(kAsciiBasePx * scale);
