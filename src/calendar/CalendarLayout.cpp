@@ -9,34 +9,33 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   layout = CalendarLayout{};
   layout.mode = mode;
   layout.screen = makeRect(0, 0, screen_width, screen_height);
-  layout.header_y = 0;
   layout.header_h =
       (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(24) : static_cast<uint16_t>(22);
-  layout.header_bar = makeRect(0, 0, screen_width, layout.header_h);
-  const uint16_t body_y = layout.header_h;
-  const uint16_t body_h =
-      (screen_height > layout.header_h) ? static_cast<uint16_t>(screen_height - layout.header_h) : 0;
   if (mode == LayoutMode::LandscapeSplit) {
-    layout.calendar_panel = makeRect(0, body_y, static_cast<uint16_t>(screen_width / 2), body_h);
-    layout.schedule_panel = makeRect(static_cast<uint16_t>(screen_width / 2), body_y,
-                                     static_cast<uint16_t>(screen_width / 2), body_h);
+    layout.calendar_panel = makeRect(0, 0, static_cast<uint16_t>(screen_width / 2), screen_height);
+    layout.schedule_panel = makeRect(static_cast<uint16_t>(screen_width / 2), 0,
+                                     static_cast<uint16_t>(screen_width / 2), screen_height);
   } else {
-    layout.calendar_panel = makeRect(0, body_y, screen_width, static_cast<uint16_t>(body_h / 2));
-    layout.schedule_panel = makeRect(0, static_cast<uint16_t>(body_y + body_h / 2), screen_width,
-                                     static_cast<uint16_t>(body_h / 2));
+    layout.calendar_panel = makeRect(0, 0, screen_width, static_cast<uint16_t>(screen_height / 2));
+    layout.schedule_panel = makeRect(0, static_cast<uint16_t>(screen_height / 2), screen_width,
+                                     static_cast<uint16_t>(screen_height / 2));
   }
 
   const uint16_t margin = (mode == LayoutMode::LandscapeSplit) ? 10 : 8;
+  layout.header_y = static_cast<uint16_t>(layout.calendar_panel.y + margin);
+  layout.header_bar = makeRect(static_cast<uint16_t>(layout.calendar_panel.x + margin), layout.header_y,
+                               static_cast<uint16_t>(layout.calendar_panel.w > margin * 2
+                                                         ? (layout.calendar_panel.w - margin * 2)
+                                                         : layout.calendar_panel.w),
+                               layout.header_h);
   layout.title_scale = (mode == LayoutMode::LandscapeSplit) ? 4 : 3;
   layout.weekday_scale = (mode == LayoutMode::LandscapeSplit) ? 2 : 1;
   layout.day_scale = (mode == LayoutMode::LandscapeSplit) ? 3 : 2;
 
-  layout.title_y = static_cast<uint16_t>(layout.calendar_panel.y + margin);
-  layout.title_bar_x = static_cast<uint16_t>(layout.calendar_panel.x + margin);
-  layout.title_bar_w = static_cast<uint16_t>(
-      layout.calendar_panel.w > margin * 2 ? (layout.calendar_panel.w - margin * 2)
-                                           : layout.calendar_panel.w);
-  layout.weekday_y = static_cast<uint16_t>(layout.title_y + 5 * layout.title_scale + 8);
+  layout.title_y = layout.header_y;
+  layout.title_bar_x = layout.header_bar.x;
+  layout.title_bar_w = layout.header_bar.w;
+  layout.weekday_y = static_cast<uint16_t>(layout.header_y + layout.header_h + 8);
   layout.weekday_h =
       (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(28) : static_cast<uint16_t>(18);
   const uint16_t grid_top = static_cast<uint16_t>(layout.weekday_y + layout.weekday_h + 4);

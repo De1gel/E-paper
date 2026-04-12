@@ -120,35 +120,22 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   sink.strokeRect(layout.calendar_panel, blue);
   sink.strokeRect(layout.schedule_panel, green);
 
-  const uint16_t header_left_x = 8;
+  const uint16_t header_left_x = static_cast<uint16_t>(layout.header_bar.x + 6);
   const uint16_t header_y = static_cast<uint16_t>(layout.header_y + 6);
   sink.text(header_left_x, header_y, model.header_datetime, header_px, white);
   const String header_right = model.header_weather + "  " + model.header_sensors;
   const uint16_t header_right_w = textWidthPx(header_right, header_px, header_font);
   const uint16_t header_right_x =
-      (layout.screen.w > header_right_w + 8) ? static_cast<uint16_t>(layout.screen.w - header_right_w - 8) : 8;
+      (layout.header_bar.w > header_right_w + 12)
+          ? static_cast<uint16_t>(layout.header_bar.x + layout.header_bar.w - header_right_w - 6)
+          : header_left_x;
   sink.text(header_right_x, header_y, header_right, header_px, white, header_font);
 
   if (layout.mode == LayoutMode::LandscapeSplit) {
-    sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), layout.header_h, 1,
-                           static_cast<uint16_t>(layout.screen.h - layout.header_h)),
-                  blue);
+    sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), 0, 1, layout.screen.h), blue);
   } else {
-    sink.fillRect(makeRect(0, static_cast<uint16_t>(layout.header_h + layout.calendar_panel.h),
-                           layout.screen.w, 1),
-                  blue);
+    sink.fillRect(makeRect(0, static_cast<uint16_t>(layout.screen.h / 2), layout.screen.w, 1), blue);
   }
-
-  sink.fillRect(makeRect(layout.title_bar_x,
-                         static_cast<uint16_t>(layout.title_y > 3 ? layout.title_y - 3 : layout.title_y),
-                         layout.title_bar_w,
-                         static_cast<uint16_t>(textHeightPx(model.title, title_px) + 6)),
-                blue);
-  const uint16_t title_w = textWidthPx(model.title, title_px);
-  const uint16_t title_x = static_cast<uint16_t>(
-      layout.calendar_panel.x +
-      ((layout.calendar_panel.w > title_w) ? ((layout.calendar_panel.w - title_w) / 2u) : 0u));
-  sink.text(title_x, layout.title_y, model.title, title_px, white);
 
   if (layout.has_grid) {
     for (uint8_t col = 0; col < 7; ++col) {

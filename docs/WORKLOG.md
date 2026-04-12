@@ -9,3 +9,6 @@
 - Built `esp32dev` successfully after adding a full-width top status bar for calendar view with date, time, weather city, and temperature/humidity.
 - Calendar layout now reserves a dedicated header bar above both panels; weather and sensor data are read from `WifiManager` getters.
 - Build result: RAM `17.5%` (`57216 / 327680`), Flash `33.1%` (`2431601 / 7340032`).
+- Built `esp32dev` successfully after moving the calendar status bar back into the left calendar panel and removing the duplicate large date line.
+- Calendar top info now renders only inside the calendar panel header; the right schedule panel no longer has a screen-wide shared header.
+- Build result: RAM `17.5%` (`57216 / 327680`), Flash `33.1%` (`2431449 / 7340032`).
