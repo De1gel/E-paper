@@ -10,11 +10,14 @@ namespace calendar {
 struct CalendarLayout {
   LayoutMode mode = LayoutMode::LandscapeSplit;
   Rect screen;
+  Rect header_bar;
   Rect calendar_panel;
   Rect schedule_panel;
   Rect schedule_inner;
   Rect grid;
 
+  uint16_t header_y = 0;
+  uint16_t header_h = 0;
   uint16_t title_bar_x = 0;
   uint16_t title_bar_w = 0;
   uint16_t title_x = 0;

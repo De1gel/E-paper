@@ -42,6 +42,10 @@ String formatDateYmd(const struct tm &local_tm) {
          twoDigits(local_tm.tm_mday);
 }
 
+String formatTimeHm(const struct tm &local_tm) {
+  return twoDigits(local_tm.tm_hour) + ":" + twoDigits(local_tm.tm_min);
+}
+
 int32_t dayKeyFromTm(const struct tm &t) {
   return static_cast<int32_t>((t.tm_year + 1900) * 1000 + t.tm_yday);
 }
@@ -123,9 +127,25 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   model.ui_language = normalizeUiLanguage(ui_language);
   fillUiStrings(model);
   model.title = "-- -- --";
-  if (time_valid) {
-    model.title = String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) + "-" +
-                  twoDigits(local_tm.tm_mday);
+  model.title = String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) + "-" +
+                twoDigits(local_tm.tm_mday);
+  model.header_datetime = model.title + " " + formatTimeHm(local_tm);
+
+  String weather_label = wifi_manager.weatherCity();
+  weather_label.trim();
+  if (weather_label.length() == 0) {
+    weather_label = (model.ui_language == "zh") ? "TIAN QI" : "WEATHER";
+  } else if (model.ui_language == "zh") {
+    weather_label = fallbackMissingGlyphs(weather_label, TextFont::Cjk16, "TIAN QI");
+  }
+  model.header_weather = weather_label;
+
+  const float temperature_c = wifi_manager.temperatureC();
+  const float humidity_pct = wifi_manager.humidityPct();
+  if (isnan(temperature_c) || isnan(humidity_pct)) {
+    model.header_sensors = "--.-C --%";
+  } else {
+    model.header_sensors = String(temperature_c, 1) + "C " + String(humidity_pct, 0) + "%";
   }
 
   const int today_weekday = time_valid ? ((local_tm.tm_wday + 6) % 7) : -1;

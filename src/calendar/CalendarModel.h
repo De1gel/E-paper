@@ -34,6 +34,9 @@ struct CalendarModel {
   LayoutMode layout_mode = LayoutMode::LandscapeSplit;
   String ui_language;
   String title;
+  String header_datetime;
+  String header_weather;
+  String header_sensors;
   String schedule_title;
   String no_time_label;
   String more_label;

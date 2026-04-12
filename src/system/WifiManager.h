@@ -57,6 +57,9 @@ class WifiManager {
   const Settings &settings() const;
   size_t calendarEventCount() const;
   bool calendarEventAt(size_t index, CalendarEvent &event) const;
+  float temperatureC() const { return temperature_c_; }
+  float humidityPct() const { return humidity_pct_; }
+  String weatherCity() const { return settings_.weather_city; }
 
  private:
   enum class State : uint8_t {
@@ -96,12 +99,16 @@ class WifiManager {
   void initSD();
   void deinitSD();
   void initWebFs();
+  bool serveWebAsset(const char *path, const char *content_type);
   String listDirectoryJson(const char *path);
   String contentTypeForPath(const String &path) const;
   bool isSafePath(const String &path) const;
   bool isEpd4Path(const String &path) const;
   bool removePathRecursive(const String &path) const;
   String currentIp() const;
+  bool syncClockFromWeather(String &resolved_timezone, bool &timezone_updated, String &local_time,
+                            String &time_sync_error, String &preview, int &http_status,
+                            String &request_error);
   void initSensors();
   void updateSensors(uint32_t now_ms);
   bool readAHT20(float &temperature_c, float &humidity_pct);

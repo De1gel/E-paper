@@ -11,6 +11,7 @@ constexpr uint8_t kZhWeekdayPx = 18;
 constexpr uint8_t kZhItemPx = 24;
 constexpr uint8_t kZhMetaPx = 16;
 constexpr uint8_t kZhScheduleTitlePx = 48;
+constexpr uint8_t kHeaderPx = 10;
 constexpr bool kShowAATestPanel = false;
 
 uint8_t asciiPixelHeight(uint8_t scale) {
@@ -108,18 +109,34 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   const uint8_t schedule_title_px = zh_ui ? kZhScheduleTitlePx : asciiPixelHeight(2);
   const uint8_t item_px = zh_ui ? kZhItemPx : asciiPixelHeight(layout.list_scale);
   const uint8_t meta_px = zh_ui ? kZhMetaPx : kAsciiBasePx;
+  const uint8_t header_px = kHeaderPx;
   const TextFont weekday_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont schedule_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont item_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont meta_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
+  const TextFont header_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   sink.strokeRect(layout.screen, blue);
+  sink.fillRect(layout.header_bar, blue);
   sink.strokeRect(layout.calendar_panel, blue);
   sink.strokeRect(layout.schedule_panel, green);
 
+  const uint16_t header_left_x = 8;
+  const uint16_t header_y = static_cast<uint16_t>(layout.header_y + 6);
+  sink.text(header_left_x, header_y, model.header_datetime, header_px, white);
+  const String header_right = model.header_weather + "  " + model.header_sensors;
+  const uint16_t header_right_w = textWidthPx(header_right, header_px, header_font);
+  const uint16_t header_right_x =
+      (layout.screen.w > header_right_w + 8) ? static_cast<uint16_t>(layout.screen.w - header_right_w - 8) : 8;
+  sink.text(header_right_x, header_y, header_right, header_px, white, header_font);
+
   if (layout.mode == LayoutMode::LandscapeSplit) {
-    sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), 0, 1, layout.screen.h), blue);
+    sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), layout.header_h, 1,
+                           static_cast<uint16_t>(layout.screen.h - layout.header_h)),
+                  blue);
   } else {
-    sink.fillRect(makeRect(0, static_cast<uint16_t>(layout.screen.h / 2), layout.screen.w, 1), blue);
+    sink.fillRect(makeRect(0, static_cast<uint16_t>(layout.header_h + layout.calendar_panel.h),
+                           layout.screen.w, 1),
+                  blue);
   }
 
   sink.fillRect(makeRect(layout.title_bar_x,
