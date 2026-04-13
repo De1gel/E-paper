@@ -1,121 +1,202 @@
-﻿# 7.3" E6 墨水屏相框项目交接说明（精简版）
+# 7.3" E6 墨水屏相框项目现状与交接说明
 
-更新时间：2026-04-01
-项目目录：`D:\MyCode\ESP\E-paper`
+更新时间：2026-04-10  
+本文按当前工作区代码整理，不再沿用 2026-04-01 早期“点屏 demo”阶段的状态描述。  
+项目目录：`D:\MyCode\ESP\E-paper`  
 驱动板硬件详表：`docs/ESP32S_DRIVER_BOARD_INFO.md`
 
-## 1. 项目目标（按优先级）
-- P1：本地可用版（照片轮播 + 日历显示）
-- P2：联网数据版（先接自控 JSON，再接 Outlook 中转）
-- P3：优化版（低功耗 + 局部刷新实验）
+## 1. 当前完成度
 
-## 2. 关键硬件与板级约束（必须保留）
+### P1：本地可用版
+
+当前代码已经基本具备 P1 所需主链路：
+- 照片页：从 SD 卡 `/pic` 目录读取 `.epd4` 文件并流式写屏
+- 日历页：本地时间驱动的月历 + 日程列表 + quote 区域
+- 页面切换：中键短按在照片页与日历页之间切换
+- 按键控制：照片页支持上一张 / 下一张；长按进入配置模式
+- 显示会话：每次渲染前上电，渲染后 `EPD_sleep()` + `IO32 LOW`
+
+### P2：联网数据版
+
+当前代码已具备联网基础设施，但还没有真正接入远端日历同步：
+- 已实现 AP / STA WiFi Portal
+- 已实现设置持久化、手动日程 CRUD、文件管理、天气接口测试、地理解析、联网校时
+- `calendar_url` 仍是保留字段，当前没有拉取远端日历数据的主路径
+
+### P3：优化版
+
+当前代码已有优化基础，但还不是最终形态：
+- 已有局刷命令链模块 `src/display/PartialRefresh.*`
+- 已有条带全刷路径，降低日历页全刷对大块连续内存的依赖
+- 仍未实现 ESP32 自身 `light/deep sleep`
+- 日历局刷路径仍依赖整屏 packed framebuffer，尚未完成脏区化
+
+## 2. 当前构建与工程状态
+
+- PlatformIO 环境：`espressif32 + arduino`
+- 目标板：`esp32dev`
+- Flash 配置：`16MB`
+- 分区方案：双 app OTA + SPIFFS
+- 文件系统：`spiffs`
+- 本地验证：`platformio run --environment esp32dev` 已于 2026-04-10 编译通过
+
+当前构建入口与约束：
+- `platformio.ini`：主构建配置
+- `partitions_16mb.csv`：16MB 分区表
+- `build_src_filter = +<*> -<image.cpp>`：旧的 `src/image.cpp` 示例资源已排除出主构建
+
+## 3. 必须保留的硬件约束
+
 - 屏型：`GDEP073E01(E6)`，分辨率 `800x480`
 - 板级关键差异：
   - `CS = GPIO33`
   - `IO32` 拉高后外设上电
   - 当前可用 SPI 初始化：`SPI.begin(13, 12, 14, 33)`
-- 结论：这不是标准微雪参考板，后续所有自研固件都必须沿用以上适配前提。
 
-## 3. 当前代码状态（已完成）
-- 已迁移到 PlatformIO 工程结构并可编译、可上传。
-- 当前固件是“点屏 demo”，不是原厂相框系统。
-- 已确认构建与上传成功（ESP32 / COM4）。
+结论：
+- 这不是标准微雪参考板
+- 后续所有固件开发都必须沿用当前板级适配前提
 
-现有工程核心文件：
-- `src/main.cpp`：入口与示例流程
-- `src/Display_EPD_W21.cpp`、`src/Display_EPD_W21_spi.cpp`：底层驱动
-- `src/image.cpp` + `include/image.h`：图片数据与声明
-- `platformio.ini`：构建配置
+## 4. 当前运行方式
 
-## 4. 原厂闭源能力与当前现实
-原厂曾具备 AP/STA、Web 配置、相册、日历、串口命令、I2C 探测等完整产品能力；但目前没有可复用应用层源码。
+### 启动与主循环
 
-项目路线必须是：**以现有 demo 为底座，自研应用层固件**，而不是“在原厂程序上小改”。
+- `src/main.cpp`
+  - 初始化 BUSY / RES / DC / CS / PWR_ON
+  - 打开 `IO32`
+  - 初始化 SPI
+  - 进入 `App::begin()`
+- `loop()`
+  - 周期调用 `App::update()` 和 `App::render()`
+  - 固定 `delay(50)`
 
-## 5. 当前可用性定义
-已有：
-- 板级驱动通路
-- 显示链路
-- 可编译/可刷写 PlatformIO 工程
+### 页面与按键
 
-未有：
-- 页面系统
-- 照片系统
-- 日历系统
-- 联网与存储系统
-- 完整低功耗状态机
+- 默认进入照片页
+- 中键短按：照片页 / 日历页切换
+- 上键短按：照片页上一张
+- 下键短按：照片页下一张
+- 中键长按：进入 `ConfigWait`
 
-## 6. 推荐目录分层
-- `src/display/`：显示与驱动封装
-- `src/ui/`：页面渲染（主页/照片/日历/调试）
-- `src/photo/`：轮播索引与切换策略
-- `src/calendar/`：日历数据与布局
-- `src/input/`：按键去抖与事件识别
-- `src/storage/`：配置、状态、索引
-- `src/network/`：HTTP/JSON 拉取
-- `src/power/`：睡眠/唤醒
+### 配置模式
 
-原则：**分层，不做巨型 `loop()`。**
+- `ConfigWait`
+  - 60 秒无操作自动退出
+  - 上键：进入 AP Portal
+  - 下键：进入 STA Portal
+  - 中键短按：执行白屏操作后返回 Normal
+- `ConfigAP`
+  - 启动热点 `PhotoFrame_Config`
+- `ConfigSTA`
+  - 尝试连接已保存的路由器配置
 
-## 7. 开发顺序（执行版）
-1. 阶段1：骨架重构
-- 把 demo 拆成模块；加入串口日志；建立 `AppState`；封装显示接口。
+## 5. 当前代码结构
 
-2. 阶段2：本地 UI
-- 先做静态页面：照片页、日历页、调试页；先用假数据跑通刷新路径。
+### 业务主链路
 
-3. 阶段3：照片轮播
-- 本地索引、自动轮播、上一张/下一张、轮播间隔。
+- `src/app/App.*`
+  - 页面状态
+  - 渲染调度
+  - 照片轮播
+  - 日历页刷新策略
 
-4. 阶段4：本地日历
-- 日期、月视图、今日高亮、事件列表占位。
+### 系统层
 
-5. 阶段5：存储与图片来源
-- 决策板载 Flash 或 TF 卡；建议保留 `/pic` 目录语义。
+- `src/system/InputManager.*`
+  - 按键去抖与事件队列
+- `src/system/ModeManager.*`
+  - `Normal / ConfigWait / ConfigAP / ConfigSTA`
+- `src/system/LedManager.*`
+  - 呼吸灯、双闪、配置态指示
+- `src/system/WifiManager.*`
+  - WiFi、Portal、设置、手动日程、地理解析、天气校时、SD 文件 API、传感器状态
 
-6. 阶段6：联网
-- 先接自控 JSON 接口，不直接上 Graph OAuth。
+### 日历渲染链
 
-7. 阶段7：Outlook
-- 通过中转服务下发轻量 JSON（未读数、今日事件、下一条日程）。
+- `src/calendar/CalendarModel.*`
+  - 本地日历数据与可见事件整理
+- `src/calendar/CalendarLayout.*`
+  - 横竖布局与区域计算
+- `src/calendar/CalendarScene.*`
+  - 将 model + layout 转成绘制命令
+- `src/calendar/CalendarText.*`
+  - ASCII / UTF-8 / 中文字形适配
+- `src/render/StripeBuffer.*`
+  - 条带缓冲
+- `src/render/SceneRasterizer.*`
+  - 条带栅格化
 
-8. 阶段8：优化
-- 深睡眠、唤醒策略、刷新节奏优化、局刷实验。
+### 显示层
 
-## 8. 风险与已知坑
-- 不能把原厂闭源固件能力误认为当前源码能力。
-- 构建配置调整时注意 Flash Size / 分区一致性。
-- 图片解码、缩放、抖动会显著吃 RAM/CPU。
-- 局部刷新当前只能作为实验项，不纳入 P1 交付。
-- 按键需重新实现：去抖、短按/长按、唤醒后再采样、异常诊断。
+- `src/Display_EPD_W21.cpp`
+- `src/Display_EPD_W21_spi.cpp`
+- `src/display/PartialRefresh.*`
+- `src/display/ColorMap.*`
 
-## 9. 第一周开发计划（建议）
-- Day1：建立模块目录和 `AppState`，保留现有显示链路可运行。
-- Day2：接入串口日志与基础页面路由（照片/日历/调试）。
-- Day3：实现照片页静态绘制与切页框架。
-- Day4：实现日历页静态绘制与假数据绑定。
-- Day5：完成按键事件框架（短按/长按/双击）并接入页面切换。
+### Portal 与静态资源
 
-## 10. 首批 Codex 任务清单
-- 任务A：重构 `main.cpp` 为 `App` 主循环（状态机 + 定时驱动）。
-- 任务B：抽象 `display` 接口，隔离厂商驱动细节。
-- 任务C：实现 `ui` 页面接口（`enter/update/render/exit`）。
-- 任务D：实现 `input` 去抖与事件识别。
-- 任务E：建立统一日志与错误码机制。
+- `data/portal.html`
+- `data/app.js`
 
-## 11. 当前决策原则（一句话）
-**先把“显示系统 + 照片轮播 + 本地日历”做稳，再做联网；先做全刷可用版，再做局刷优化版。**
+当前 Portal 主路径优先从 SPIFFS 提供静态文件；若未执行 `uploadfs`，固件会回退到内嵌最小提示页。
 
-## 12. 当前代码整理状态（2026-04-01）
-- 主流程（`src/app`）已清理为产品路径：页面轮播 + 键控切换 + 全屏渲染。
-- 局刷能力已模块化沉淀到 `src/display/PartialRefresh.*`，可复用。
-- 局刷实验逻辑已从运行时移除，测试说明迁移到 `test/partial_refresh/README.md`。
+### 字体与工具
 
-## 13. 配套学习文档
-- `docs/DESIGN_ASSETS_INDEX.md`：设计思路资料索引与可用信息
-- `docs/REFRESH_STRATEGY_NOTES.md`：全刷/快刷/局刷策略笔记
-- `docs/PARTIAL_REFRESH_EXPERIMENT_LOG.md`：局刷实验记录
-- `docs/IMAGE_PIPELINE_NOTES.md`：图片取模与颜色映射策略
-- `docs/CODEBASE_MAP.md`：代码模块地图
-- `docs/LOW_POWER_POLICY.md`：低功耗选型与开发强制约束
+- `src/fonts/ZhSubsetFont.*`
+  - 3000 常用中文字形子集
+- `tools/fonts/generate_zh_subset_font.py`
+  - 字库生成脚本
+
+## 6. 当前功能边界
+
+### 已实现
+
+- SD 卡 `.epd4` 照片轮播
+- 本地日历页
+- Portal 配置页 / 状态页 / 文件页
+- 手动日程增删改查
+- Open-Meteo 地理解析与天气请求测试
+- 联网后自动校时并更新时区
+- 电量 / 温湿度状态显示（硬件接入时生效）
+
+### 未完成或仅保留接口
+
+- `calendar_url` 未接入远端同步
+- `calendar_enabled` 已持久化，但当前没有实际关闭日历页的运行分支
+- 没有 `CalendarStore / CalendarSyncService / RefreshPlanner`
+- 没有 ESP32 级别休眠状态机
+- 日历局刷仍是实验能力，不是主路径
+
+## 7. 已知风险与注意事项
+
+- 不能把原厂闭源固件能力误认为当前源码能力
+- 构建配置调整时要同步检查 Flash Size / 分区 / SPIFFS
+- Portal 静态资源需要单独 `uploadfs`
+- 照片页只识别大小正确的 `.epd4` 文件
+- 日历当前虽然已有条带全刷，但仍保留整屏 framebuffer 作为局刷兼容路径
+- 测试目录目前以脚本和实验记录为主，不是完整单元测试体系
+
+## 8. 建议的下一阶段优先级
+
+1. 完成日历渲染主路径去 framebuffer 化  
+   - 把 `calendar_frame_` 从默认路径剥离，仅保留实验态或完全替换
+
+2. 把手动事件与未来同步事件抽到独立存储层  
+   - 降低 `WifiManager` 与日历显示的直接耦合
+
+3. 落实 MCU 级低功耗  
+   - 让 `Normal` 真正进入 `light/deep sleep`
+
+4. 明确局刷纳入条件  
+   - 在残影、闪烁、稳定性达标前，继续以全刷 / 条带全刷为产品路径
+
+## 9. 配套文档索引
+
+- `docs/CODEBASE_MAP.md`：当前代码模块地图
+- `docs/WIFI_PORTAL.md`：当前 Portal 行为与 API
+- `docs/WIFI_PORTAL_TEST_PLAN.md`：Portal 测试清单
+- `docs/LOW_POWER_POLICY.md`：低功耗目标与当前实现状态
+- `docs/CALENDAR_RENDER_REFACTOR_PLAN.md`：日历重构现状与剩余问题
+- `docs/REFRESH_STRATEGY_NOTES.md`：全刷 / 快刷 / 局刷策略笔记
+- `docs/IMAGE_PIPELINE_NOTES.md`：图片上传与 `.epd4` 处理链路
+- `docs/DESIGN_ASSETS_INDEX.md`：资料索引

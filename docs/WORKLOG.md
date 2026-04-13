@@ -21,3 +21,7 @@
 - Built `esp32dev` successfully after unifying ASCII glyph calibration so ASCII renders with the same sizing rules under both `Auto` and `CjkAuto`.
 - ASCII width, height, and letter spacing now use ASCII-specific metrics instead of inheriting CJK `base_height` during mixed-font rendering.
 - Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431421 / 7340032`).
+## 2026-04-13
+- Built `esp32dev` successfully with the current pending workspace changes across calendar rendering, portal UI, WiFi/session handling, LED behavior, and project documentation.
+- Pending tracked changes reviewed before commit: `data/*`, `src/app/App.cpp`, `src/calendar/*`, `src/system/LedManager.*`, `src/system/WifiManager.cpp`, and multiple `docs/*` updates. Untracked local folders such as `.codex/` and `assets/` remain excluded from version control.
+- Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431969 / 7340032`).

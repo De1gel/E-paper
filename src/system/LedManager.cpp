@@ -62,6 +62,13 @@ void LedManager::startBreath() {
 
 void LedManager::stopEffects() {
   blink_active_ = false;
+  if (breath_active_) {
+    const uint32_t elapsed = millis() - breath_start_ms_;
+    const uint32_t done_cycles = elapsed / kBreathPeriodMs;
+    breath_hold_ = false;
+    breath_cycles_ = static_cast<uint8_t>(done_cycles + 1U);
+    return;
+  }
   breath_active_ = false;
   breath_hold_ = false;
   state_on_ = false;
@@ -155,12 +162,14 @@ void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected)
     const uint32_t elapsed = now_ms - breath_start_ms_;
     const uint32_t phase = elapsed % kBreathPeriodMs;
     const uint32_t half = kBreathPeriodMs / 2;
-    uint8_t level = 0;
+    uint8_t linear = 0;
     if (phase < half) {
-      level = static_cast<uint8_t>((phase * 255U) / half);
+      linear = static_cast<uint8_t>((phase * 255U) / half);
     } else {
-      level = static_cast<uint8_t>(((kBreathPeriodMs - phase) * 255U) / half);
+      linear = static_cast<uint8_t>(((kBreathPeriodMs - phase) * 255U) / half);
     }
+    const uint8_t level =
+        static_cast<uint8_t>((static_cast<uint16_t>(linear) * static_cast<uint16_t>(linear)) / 255U);
     writeLevel(level);
     const uint32_t done_cycles = elapsed / kBreathPeriodMs;
     if (!breath_hold_ && done_cycles >= breath_cycles_) {

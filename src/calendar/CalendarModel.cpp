@@ -10,10 +10,10 @@ constexpr const char kZhScheduleTitle[] = "\xE5\xAE\x89\xE6\x8E\x92";
 constexpr const char kZhNoTimeLabel[] = "\xE6\x97\xA0\xE6\x97\xB6\xE9\x97\xB4";
 constexpr const char kZhMoreLabel[] = "\xE6\x9B\xB4\xE5\xA4\x9A";
 constexpr const char *kZhWeekdayLabels[] = {
-    "\xE4\xB8\x80", "\xE4\xBA\x8C", "\xE4\xB8\x89", "\xE5\x9B\x9B",
-    "\xE4\xBA\x94", "\xE5\x85\xAD", "\xE6\x97\xA5",
+    "\xE6\x97\xA5", "\xE4\xB8\x80", "\xE4\xBA\x8C", "\xE4\xB8\x89",
+    "\xE5\x9B\x9B", "\xE4\xBA\x94", "\xE5\x85\xAD",
 };
-constexpr const char *kZhWeekdayFallbacks[] = {"YI", "ER", "SAN", "SI", "WU", "LIU", "RI"};
+constexpr const char *kZhWeekdayFallbacks[] = {"RI", "YI", "ER", "SAN", "SI", "WU", "LIU"};
 
 bool isLeapYear(int year) {
   return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
@@ -65,7 +65,7 @@ void fillUiStrings(CalendarModel &model) {
     model.schedule_title = "AGENDA";
     model.no_time_label = "PAS D HEURE";
     model.more_label = "PLUS";
-    const char *labels[7] = {"LUN", "MAR", "MER", "JEU", "VEN", "SAM", "DIM"};
+    const char *labels[7] = {"DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"};
     for (uint8_t i = 0; i < 7; ++i) {
       model.weekday_labels[i] = labels[i];
     }
@@ -87,7 +87,7 @@ void fillUiStrings(CalendarModel &model) {
   model.schedule_title = "SCHEDULE";
   model.no_time_label = "NO TIME";
   model.more_label = "MORE";
-  const char *labels[7] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
+  const char *labels[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
   for (uint8_t i = 0; i < 7; ++i) {
     model.weekday_labels[i] = labels[i];
   }
@@ -114,6 +114,10 @@ bool calendarEventMatchesToday(const appfw::WifiManager::CalendarEvent &event, c
     return event.weekday == today_weekday;
   }
   return event.date == today_ymd;
+}
+
+bool isWeekendColumn(int col) {
+  return col == 0 || col == 6;
 }
 
 }  // namespace
@@ -228,7 +232,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   first_day.tm_sec = 0;
   mktime(&first_day);
 
-  const int first_col = (first_day.tm_wday + 6) % 7;
+  const int first_col = first_day.tm_wday;
   const int cur_days = daysInMonth(year, month);
   const int prev_month = (month == 1) ? 12 : (month - 1);
   const int prev_year = (month == 1) ? (year - 1) : year;
@@ -248,10 +252,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
 
     cell.is_today = cell.in_current && (cell.day == today);
     cell.text_color = cell.in_current ? black : blue;
-    if (cell.in_current && col >= 5) {
-      cell.text_color = green;
-    }
-    if (cell.is_today) {
+    if (isWeekendColumn(col)) {
       cell.text_color = red;
     }
   }

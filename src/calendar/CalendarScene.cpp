@@ -6,7 +6,7 @@
 namespace calendar {
 namespace {
 
-constexpr uint8_t kAsciiBasePx = 5;
+constexpr uint8_t kAsciiBasePx = 7;
 constexpr uint8_t kZhWeekdayPx = 24;
 constexpr uint8_t kZhItemPx = 24;
 constexpr uint8_t kZhMetaPx = 16;
@@ -16,6 +16,47 @@ constexpr bool kShowAATestPanel = false;
 
 uint8_t asciiPixelHeight(uint8_t scale) {
   return static_cast<uint8_t>(kAsciiBasePx * scale);
+}
+
+bool isWeekendColumn(uint8_t col) {
+  return col == 0 || col == 6;
+}
+
+void plotCirclePoints(SceneSink &sink, int cx, int cy, int x, int y, uint8_t color_nibble) {
+  const Rect pts[] = {
+      makeRect(static_cast<uint16_t>(cx + x), static_cast<uint16_t>(cy + y), 1, 1),
+      makeRect(static_cast<uint16_t>(cx - x), static_cast<uint16_t>(cy + y), 1, 1),
+      makeRect(static_cast<uint16_t>(cx + x), static_cast<uint16_t>(cy - y), 1, 1),
+      makeRect(static_cast<uint16_t>(cx - x), static_cast<uint16_t>(cy - y), 1, 1),
+      makeRect(static_cast<uint16_t>(cx + y), static_cast<uint16_t>(cy + x), 1, 1),
+      makeRect(static_cast<uint16_t>(cx - y), static_cast<uint16_t>(cy + x), 1, 1),
+      makeRect(static_cast<uint16_t>(cx + y), static_cast<uint16_t>(cy - x), 1, 1),
+      makeRect(static_cast<uint16_t>(cx - y), static_cast<uint16_t>(cy - x), 1, 1),
+  };
+  for (const Rect &pt : pts) {
+    sink.fillRect(pt, color_nibble);
+  }
+}
+
+void emitCircleOutline(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
+                       uint8_t color_nibble) {
+  if (radius == 0) {
+    return;
+  }
+
+  int x = static_cast<int>(radius);
+  int y = 0;
+  int decision = 1 - x;
+  while (y <= x) {
+    plotCirclePoints(sink, static_cast<int>(cx), static_cast<int>(cy), x, y, color_nibble);
+    ++y;
+    if (decision <= 0) {
+      decision += 2 * y + 1;
+    } else {
+      --x;
+      decision += 2 * (y - x) + 1;
+    }
+  }
 }
 
 String truncateWithTilde(const String &text, size_t max_chars) {
@@ -149,7 +190,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       const uint16_t label_x = static_cast<uint16_t>(
           layout.grid.x + col * layout.cell_w +
           ((layout.cell_w > label_w) ? (layout.cell_w - label_w) / 2u : 0u));
-      sink.text(label_x, layout.weekday_y, label, weekday_px, (col >= 5) ? red : green,
+      sink.text(label_x, layout.weekday_y, label, weekday_px, isWeekendColumn(col) ? red : green,
                 weekday_font);
     }
   }
@@ -266,6 +307,21 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t day_px = 12;
     const uint16_t text_w = textWidthPx(label, day_px);
     const uint16_t text_h = textHeightPx(label, day_px);
+    if (cell.is_today) {
+      const uint16_t cell_cx = static_cast<uint16_t>(cell_x + layout.cell_w / 2u);
+      const uint16_t cell_cy = static_cast<uint16_t>(cell_y + layout.cell_h / 2u);
+      const uint16_t text_box = (text_w > text_h) ? text_w : text_h;
+      uint16_t radius = static_cast<uint16_t>(text_box / 2u + 5u);
+      const uint16_t max_radius =
+          (layout.cell_w < layout.cell_h ? layout.cell_w : layout.cell_h) > 8
+              ? static_cast<uint16_t>((layout.cell_w < layout.cell_h ? layout.cell_w : layout.cell_h) /
+                                      2u - 3u)
+              : 0u;
+      if (radius > max_radius) {
+        radius = max_radius;
+      }
+      emitCircleOutline(sink, cell_cx, cell_cy, radius, red);
+    }
     const uint16_t text_x = static_cast<uint16_t>(
         static_cast<uint16_t>(cell_x + 1) +
         (((layout.cell_w > 2 ? layout.cell_w - 2 : 0) > text_w)

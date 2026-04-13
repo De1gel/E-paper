@@ -814,7 +814,7 @@ void App::drawCalendarNumberInCell(uint16_t x, uint16_t y, uint16_t w, uint16_t 
     return;
   }
   const String label = String(day_number);
-  const uint8_t pixel_height = static_cast<uint8_t>(5 * scale);
+  const uint8_t pixel_height = static_cast<uint8_t>(7 * scale);
   const uint16_t text_w = calendar::textWidthPx(label, pixel_height);
   const uint16_t text_h = calendar::textHeightPx(label, pixel_height);
   const uint16_t text_x = static_cast<uint16_t>(x + ((w > text_w) ? ((w - text_w) / 2u) : 0u));

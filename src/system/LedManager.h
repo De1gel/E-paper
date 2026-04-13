@@ -38,7 +38,7 @@ class LedManager {
   static constexpr uint32_t kStaConnectingBlinkMs = 220;
   static constexpr uint32_t kDoubleBlinkOnMs = 120;
   static constexpr uint32_t kDoubleBlinkOffMs = 180;
-  static constexpr uint32_t kBreathPeriodMs = 1800;
+  static constexpr uint32_t kBreathPeriodMs = 1200;
   static constexpr uint8_t kPwmChannel = 0;
   static constexpr uint16_t kPwmFreqHz = 5000;
   static constexpr uint8_t kPwmBits = 8;

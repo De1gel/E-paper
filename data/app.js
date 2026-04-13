@@ -5,15 +5,6 @@ const panels = {
   files: document.getElementById("tab-files"),
 };
 
-tabs.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    tabs.forEach((b) => b.classList.remove("active"));
-    Object.values(panels).forEach((p) => p.classList.remove("active"));
-    btn.classList.add("active");
-    panels[btn.dataset.tab].classList.add("active");
-  });
-});
-
 const statusNote = document.getElementById("statusNote");
 const crumbs = document.getElementById("crumbs");
 const fileRows = document.getElementById("fileRows");
@@ -55,6 +46,16 @@ let latestStatusState = "";
 let currentLanguage = "zh";
 let lastScheduleItems = [];
 let lastFileItems = [];
+let activeTabKey = "status";
+let cfgLoadedOnce = false;
+let filesLoadedOnce = false;
+let schedulesLoadedOnce = false;
+let statusPollTimer = null;
+let statusPollInFlight = false;
+
+const STATUS_POLL_MS_ACTIVE = 8000;
+const STATUS_POLL_MS_IDLE = 30000;
+const STATUS_POLL_MS_HIDDEN = 60000;
 
 const I18N = {
   zh: {
@@ -88,7 +89,7 @@ const I18N = {
     "cfg.network.language": "页面语言",
     "cfg.network.lang_zh": "中文",
     "cfg.network.lang_en": "English",
-    "cfg.network.lang_fr": "Français",
+    "cfg.network.lang_fr": "Francais",
     "cfg.photo.title": "图片轮播",
     "cfg.photo.interval": "轮播间隔（秒）",
     "cfg.calendar.title": "日历事件",
@@ -798,50 +799,120 @@ if (scheduleRepeat) {
 }
 syncScheduleRepeatFields();
 
-async function loadStatus() {
-  const r = await fetch("/api/status");
-  const txt = await r.text();
-  try {
-    const j = JSON.parse(txt);
-    latestStatusState = j.state || "";
-    document.getElementById("st_mode").textContent = stateLabel(j.state || "");
-    document.getElementById("st_ip").textContent = j.ip || "--";
-    document.getElementById("st_apip").textContent = j.ap_ip || "--";
-    document.getElementById("st_sd").textContent = j.sd_ready ? t("status.mounted") : t("status.unmounted");
-    const sdTotal = Number(j.sd_total_bytes || 0);
-    const sdUsed = Number(j.sd_used_bytes || 0);
-    const sdFree = Math.max(0, sdTotal - sdUsed);
-    document.getElementById("st_sdspace").textContent = j.sd_ready
-      ? fmt("status.sd_space_fmt", {
-          used: formatSize(sdUsed),
-          total: formatSize(sdTotal),
-          free: formatSize(sdFree),
-        })
-      : t("status.unmounted");
-    document.getElementById("st_uptime").textContent = fmtMs(j.uptime_ms || 0);
-    const tmo = j.idle_remaining_ms ?? j.connect_remaining_ms ?? 0;
-    document.getElementById("st_timeout").textContent = fmtMs(tmo);
-    document.getElementById("st_temp").textContent =
-      (typeof j.temperature_c === "number" && j.temperature_c >= -100) ? `${j.temperature_c.toFixed(1)} °C` : t("status.not_connected");
-    document.getElementById("st_humidity").textContent =
-      (typeof j.humidity_pct === "number" && j.humidity_pct >= 0) ? `${j.humidity_pct.toFixed(1)} %RH` : t("status.not_connected");
-    const mv = Number(j.battery_mv || 0);
-    const pct = Number(j.battery_pct);
-    const pin = j.battery_pin ?? "?";
-    if (mv > 0 && Number.isFinite(pct) && pct > 0.1) {
-      document.getElementById("st_battery").textContent = fmt("status.battery_full_fmt", {
-        pct: pct.toFixed(1),
-        mv,
-        pin,
-      });
-    } else if (mv > 0) {
-      document.getElementById("st_battery").textContent = fmt("status.battery_mv_fmt", { mv, pin });
-    } else {
-      document.getElementById("st_battery").textContent = t("status.not_connected");
+function nextStatusPollDelayMs() {
+  if (document.hidden) return STATUS_POLL_MS_HIDDEN;
+  return activeTabKey === "status" ? STATUS_POLL_MS_ACTIVE : STATUS_POLL_MS_IDLE;
+}
+
+function scheduleStatusPolling(delayMs) {
+  if (statusPollTimer) {
+    clearTimeout(statusPollTimer);
+  }
+  statusPollTimer = setTimeout(async () => {
+    await loadStatus();
+    scheduleStatusPolling(nextStatusPollDelayMs());
+  }, delayMs);
+}
+
+async function ensureDataForTab(tabKey, force = false) {
+  if (tabKey === "status") {
+    await loadStatus();
+    return;
+  }
+  if (tabKey === "config") {
+    if (!cfgLoadedOnce || force) {
+      await loadCfg();
+      cfgLoadedOnce = true;
     }
-    setNotice("");
-  } catch {
-    setNotice(txt || t("common.request_failed"));
+    if (!schedulesLoadedOnce || force) {
+      await loadSchedules();
+      schedulesLoadedOnce = true;
+    }
+    return;
+  }
+  if (tabKey === "files") {
+    if (!filesLoadedOnce || force) {
+      await listFiles(currentDir || "/pic");
+      filesLoadedOnce = true;
+    }
+  }
+}
+
+function setActiveTab(tabKey) {
+  activeTabKey = panels[tabKey] ? tabKey : "status";
+  tabs.forEach((b) => b.classList.toggle("active", b.dataset.tab === activeTabKey));
+  Object.entries(panels).forEach(([name, panel]) => {
+    panel.classList.toggle("active", name === activeTabKey);
+  });
+  void ensureDataForTab(activeTabKey);
+  scheduleStatusPolling(nextStatusPollDelayMs());
+}
+
+tabs.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setActiveTab(btn.dataset.tab || "status");
+  });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    void loadStatus();
+  }
+  scheduleStatusPolling(nextStatusPollDelayMs());
+});
+
+async function loadStatus() {
+  if (statusPollInFlight) {
+    return;
+  }
+  statusPollInFlight = true;
+  try {
+    const r = await fetch("/api/status");
+    const txt = await r.text();
+    try {
+      const j = JSON.parse(txt);
+      latestStatusState = j.state || "";
+      document.getElementById("st_mode").textContent = stateLabel(j.state || "");
+      document.getElementById("st_ip").textContent = j.ip || "--";
+      document.getElementById("st_apip").textContent = j.ap_ip || "--";
+      document.getElementById("st_sd").textContent = j.sd_ready ? t("status.mounted") : t("status.unmounted");
+      const sdTotal = Number(j.sd_total_bytes || 0);
+      const sdUsed = Number(j.sd_used_bytes || 0);
+      const sdFree = Math.max(0, sdTotal - sdUsed);
+      document.getElementById("st_sdspace").textContent = j.sd_ready
+        ? fmt("status.sd_space_fmt", {
+            used: formatSize(sdUsed),
+            total: formatSize(sdTotal),
+            free: formatSize(sdFree),
+          })
+        : t("status.unmounted");
+      document.getElementById("st_uptime").textContent = fmtMs(j.uptime_ms || 0);
+      const tmo = j.idle_remaining_ms ?? j.connect_remaining_ms ?? 0;
+      document.getElementById("st_timeout").textContent = fmtMs(tmo);
+      document.getElementById("st_temp").textContent =
+        (typeof j.temperature_c === "number" && j.temperature_c >= -100) ? `${j.temperature_c.toFixed(1)} °C` : t("status.not_connected");
+      document.getElementById("st_humidity").textContent =
+        (typeof j.humidity_pct === "number" && j.humidity_pct >= 0) ? `${j.humidity_pct.toFixed(1)} %RH` : t("status.not_connected");
+      const mv = Number(j.battery_mv || 0);
+      const pct = Number(j.battery_pct);
+      const pin = j.battery_pin ?? "?";
+      if (mv > 0 && Number.isFinite(pct) && pct > 0.1) {
+        document.getElementById("st_battery").textContent = fmt("status.battery_full_fmt", {
+          pct: pct.toFixed(1),
+          mv,
+          pin,
+        });
+      } else if (mv > 0) {
+        document.getElementById("st_battery").textContent = fmt("status.battery_mv_fmt", { mv, pin });
+      } else {
+        document.getElementById("st_battery").textContent = t("status.not_connected");
+      }
+      setNotice("");
+    } catch {
+      setNotice(txt || t("common.request_failed"));
+    }
+  } finally {
+    statusPollInFlight = false;
   }
 }
 
@@ -866,6 +937,7 @@ async function loadCfg() {
   weatherLat.value = j.weather_lat || "";
   weatherLon.value = j.weather_lon || "";
   wurl.value = j.weather_url || "";
+  cfgLoadedOnce = true;
 }
 
 async function saveCfg() {
@@ -1061,6 +1133,7 @@ async function loadSchedules() {
       return;
     }
     renderScheduleRows(j.items);
+    schedulesLoadedOnce = true;
   } catch {
     scheduleRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.schedule_read_failed")}</td></tr>`;
     scheduleSummary.textContent = t("common.request_failed");
@@ -1302,6 +1375,7 @@ async function listFiles(path) {
   renderRows(items);
   fileSummary.textContent = fmt("common.current_dir_fmt", { dir: currentDir, count: items.length });
   setNotice("");
+  filesLoadedOnce = true;
 }
 
 function clamp255(v) {
@@ -1526,8 +1600,4 @@ async function uploadFile() {
 }
 
 applyI18n(normalizeLang(uiLanguage ? uiLanguage.value : "zh"));
-loadStatus();
-loadCfg();
-listFiles();
-loadSchedules();
-setInterval(loadStatus, 5000);
+setActiveTab("status");

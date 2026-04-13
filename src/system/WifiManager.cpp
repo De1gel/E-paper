@@ -178,6 +178,90 @@ String extractJsonStringField(const String &json, const char *key) {
   return out;
 }
 
+bool extractJsonIntField(const String &json, const char *key, int32_t &value) {
+  value = 0;
+  if (key == nullptr || key[0] == '\0') {
+    return false;
+  }
+  const String token = String("\"") + key + "\":";
+  const int start = json.indexOf(token);
+  if (start < 0) {
+    return false;
+  }
+
+  int pos = start + static_cast<int>(token.length());
+  while (pos < static_cast<int>(json.length()) &&
+         (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+    ++pos;
+  }
+  if (pos >= static_cast<int>(json.length())) {
+    return false;
+  }
+
+  int end = pos;
+  if (json[end] == '-') {
+    ++end;
+  }
+  bool saw_digit = false;
+  while (end < static_cast<int>(json.length()) && isDigit(json[end])) {
+    saw_digit = true;
+    ++end;
+  }
+  if (!saw_digit) {
+    return false;
+  }
+  value = static_cast<int32_t>(json.substring(pos, end).toInt());
+  return true;
+}
+
+String posixTimezoneFromUtcOffsetSeconds(int32_t utc_offset_seconds) {
+  const long posix_offset = static_cast<long>(-utc_offset_seconds);
+  const long abs_offset = labs(posix_offset);
+  const long hours = abs_offset / 3600L;
+  const long minutes = (abs_offset % 3600L) / 60L;
+  const long seconds = abs_offset % 60L;
+
+  String tz = "UTC";
+  if (posix_offset > 0) {
+    tz += "+";
+  } else if (posix_offset < 0) {
+    tz += "-";
+  } else {
+    tz += "0";
+    return tz;
+  }
+  tz += String(hours);
+  if (minutes != 0 || seconds != 0) {
+    if (minutes < 10) tz += ":0";
+    else tz += ":";
+    tz += String(minutes);
+    if (seconds != 0) {
+      if (seconds < 10) tz += ":0";
+      else tz += ":";
+      tz += String(seconds);
+    }
+  }
+  return tz;
+}
+
+String timezoneForEsp(const String &timezone_name, bool has_utc_offset, int32_t utc_offset_seconds) {
+  if (has_utc_offset) {
+    return posixTimezoneFromUtcOffsetSeconds(utc_offset_seconds);
+  }
+
+  String tz = timezone_name;
+  tz.trim();
+  if (tz.length() == 0) {
+    return "";
+  }
+  if (tz == "Asia/Shanghai") return "CST-8";
+  if (tz == "UTC" || tz == "Etc/UTC" || tz == "GMT") return "UTC0";
+  if (tz.indexOf('/') >= 0) {
+    return "";
+  }
+  return tz;
+}
+
 bool syncClockWithTimezone(const String &timezone, String &local_time, String &error_msg) {
   local_time = "";
   error_msg = "";
@@ -439,14 +523,26 @@ void WifiManager::update(uint32_t now_ms) {
         Serial.printf("[WIFI] STA connected ip=%s mdns_start_failed\n",
                       WiFi.localIP().toString().c_str());
       }
+      String resolved_timezone;
       String local_time;
       String sync_error;
-      if (syncClockWithTimezone(settings_.timezone, local_time, sync_error)) {
+      String preview;
+      String request_error;
+      bool timezone_updated = false;
+      int http_status = 0;
+      if (syncClockFromWeather(resolved_timezone, timezone_updated, local_time, sync_error, preview,
+                               http_status, request_error)) {
         Serial.printf("[TIME] synced tz=%s local=%s\n",
-                      settings_.timezone.c_str(), local_time.c_str());
+                      resolved_timezone.c_str(), local_time.c_str());
       } else {
-        Serial.printf("[TIME] sync failed tz=%s err=%s\n",
-                      settings_.timezone.c_str(), sync_error.c_str());
+        const String effective_tz = timezoneForEsp(settings_.timezone, false, 0);
+        if (syncClockWithTimezone(effective_tz, local_time, sync_error)) {
+          Serial.printf("[TIME] fallback synced tz=%s local=%s\n",
+                        effective_tz.c_str(), local_time.c_str());
+        } else {
+          Serial.printf("[TIME] sync failed weather_err=%s tz=%s err=%s\n",
+                        request_error.c_str(), effective_tz.c_str(), sync_error.c_str());
+        }
       }
     } else if ((now_ms - sta_connect_start_ms_) >= kStaConnectTimeoutMs) {
       Serial.printf("[WIFI] STA connect timeout -> stop (last_status=%s/%d)\n",
@@ -552,6 +648,68 @@ bool WifiManager::isStaConnected() const {
 
 const WifiManager::Settings &WifiManager::settings() const {
   return settings_;
+}
+
+bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone_updated,
+                                       String &local_time, String &time_sync_error, String &preview,
+                                       int &http_status, String &request_error) {
+  resolved_timezone = "";
+  timezone_updated = false;
+  local_time = "";
+  time_sync_error = "";
+  preview = "";
+  http_status = 0;
+  request_error = "";
+
+  if (!(settings_.weather_url.startsWith("http://") || settings_.weather_url.startsWith("https://"))) {
+    request_error = "bad_weather_url";
+    return false;
+  }
+
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(8000);
+  if (!http.begin(settings_.weather_url)) {
+    request_error = "http_begin_failed";
+    return false;
+  }
+
+  http_status = http.GET();
+  if (http_status <= 0) {
+    http.end();
+    request_error = "weather_request_failed";
+    return false;
+  }
+
+  String body = http.getString();
+  http.end();
+
+  preview = body;
+  preview.replace("\r", " ");
+  preview.replace("\n", " ");
+  if (preview.length() > 240) {
+    preview = preview.substring(0, 240);
+  }
+
+  resolved_timezone = extractJsonStringField(body, "timezone");
+  int32_t utc_offset_seconds = 0;
+  const bool has_utc_offset = extractJsonIntField(body, "utc_offset_seconds", utc_offset_seconds);
+  if (resolved_timezone.length() == 0) {
+    resolved_timezone = settings_.timezone;
+  }
+  const String tz_for_sync = timezoneForEsp(resolved_timezone, has_utc_offset, utc_offset_seconds);
+
+  if (resolved_timezone.length() > 0 && resolved_timezone != settings_.timezone) {
+    settings_.timezone = resolved_timezone;
+    saveSettings();
+    timezone_updated = true;
+    Serial.printf("[TIME] timezone updated from weather: %s\n", settings_.timezone.c_str());
+  }
+
+  if (!syncClockWithTimezone(tz_for_sync, local_time, time_sync_error)) {
+    return false;
+  }
+  return true;
 }
 
 size_t WifiManager::calendarEventCount() const {
@@ -975,16 +1133,8 @@ void WifiManager::startServer() {
   server_->on("/", HTTP_GET, [this]() { handleRoot(); });
   server_->on("/app.js", HTTP_GET, [this]() {
     markActivity(millis());
-    initWebFs();
-    if (web_fs_ready_) {
-      File file = SPIFFS.open("/app.js", FILE_READ);
-      if (file) {
-        server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-        server_->sendHeader("Pragma", "no-cache");
-        server_->streamFile(file, "application/javascript; charset=utf-8");
-        file.close();
-        return;
-      }
+    if (serveWebAsset("/app.js", "application/javascript; charset=utf-8")) {
+      return;
     }
     server_->send(404, "application/json", "{\"ok\":false,\"error\":\"not_found\"}");
   });
@@ -1110,6 +1260,25 @@ void WifiManager::initWebFs() {
   }
   web_fs_ready_ = SPIFFS.begin(false);
   Serial.printf("[WEB] SPIFFS init %s\n", web_fs_ready_ ? "ok" : "failed");
+}
+
+bool WifiManager::serveWebAsset(const char *path, const char *content_type) {
+  if (server_ == nullptr || path == nullptr || content_type == nullptr) {
+    return false;
+  }
+  initWebFs();
+  if (!web_fs_ready_) {
+    return false;
+  }
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    return false;
+  }
+  server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server_->sendHeader("Pragma", "no-cache");
+  server_->streamFile(file, content_type);
+  file.close();
+  return true;
 }
 
 String WifiManager::listDirectoryJson(const char *path) {
@@ -1358,22 +1527,18 @@ float WifiManager::estimateBatteryPercent(int battery_mv) const {
 
 void WifiManager::handleRoot() {
   markActivity(millis());
-  const String mode = (state_ == State::ApRunning) ? "AP" : ((state_ == State::StaRunning) ? "STA" : "IDLE");
+  const String mode = (state_ == State::ApRunning)
+                          ? "AP"
+                          : ((state_ == State::StaRunning) ? "STA" : "IDLE");
   Serial.printf("[HTTP] GET / from %s mode=%s\n", server_->client().remoteIP().toString().c_str(),
                 mode.c_str());
-  initWebFs();
+  if (serveWebAsset(kPortalHtmlPath, "text/html; charset=utf-8")) {
+    return;
+  }
   if (web_fs_ready_) {
-    File file = SPIFFS.open(kPortalHtmlPath, FILE_READ);
-    if (file) {
-      server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-      server_->sendHeader("Pragma", "no-cache");
-      server_->streamFile(file, "text/html; charset=utf-8");
-      file.close();
-      return;
-    }
-    Serial.println("[WEB] missing /portal.html in SPIFFS, falling back to embedded page");
+    Serial.println("[WEB] missing /portal.html in SPIFFS, falling back to minimal page");
   } else {
-    Serial.println("[WEB] SPIFFS not ready, falling back to embedded page");
+    Serial.println("[WEB] SPIFFS not ready, falling back to minimal page");
   }
   const char *fallback =
       "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
@@ -1652,7 +1817,6 @@ void WifiManager::handleRoot() {
         <div class='grid2'>
           <div class='field'><label>STA SSID</label><input id='ssid'></div>
           <div class='field'><label>STA 密码</label><input id='pass' type='password'></div>
-          <div class='field'><label>时区</label><input id='tz'></div>
           <div class='field'><label>轮播间隔（秒）</label><input id='sec' type='number' min='30'></div>
           <div class='field' style='grid-column:1/3'><label>天气接口 URL</label><input id='wurl'></div>
         </div>
@@ -1915,13 +2079,12 @@ void WifiManager::handleRoot() {
       const j = await r.json();
       ssid.value = j.sta_ssid || '';
       pass.value = j.sta_pass || '';
-      tz.value = j.timezone || '';
       sec.value = j.photo_interval_sec || 300;
       wurl.value = j.weather_url || '';
     }
 
     async function saveCfg() {
-      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&timezone=${encodeURIComponent(tz.value)}&photo_interval_sec=${encodeURIComponent(sec.value)}&weather_url=${encodeURIComponent(wurl.value)}`;
+      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&photo_interval_sec=${encodeURIComponent(sec.value)}&weather_url=${encodeURIComponent(wurl.value)}`;
       const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
       document.getElementById('cfgBox').textContent = await r.text();
     }
@@ -2384,7 +2547,6 @@ void WifiManager::handleSettingsPost() {
   if (server_->hasArg("sta_ssid")) settings_.sta_ssid = server_->arg("sta_ssid");
   if (server_->hasArg("sta_pass")) settings_.sta_pass = server_->arg("sta_pass");
   if (server_->hasArg("ui_language")) settings_.ui_language = server_->arg("ui_language");
-  if (server_->hasArg("timezone")) settings_.timezone = server_->arg("timezone");
   if (server_->hasArg("photo_interval_sec")) {
     settings_.photo_interval_sec = static_cast<uint32_t>(server_->arg("photo_interval_sec").toInt());
     if (settings_.photo_interval_sec < 30) settings_.photo_interval_sec = 30;
@@ -2409,7 +2571,6 @@ void WifiManager::handleSettingsPost() {
 
   settings_.sta_ssid.trim();
   settings_.ui_language.trim();
-  settings_.timezone.trim();
   settings_.calendar_layout.trim();
   settings_.calendar_url.trim();
   settings_.weather_city.trim();
@@ -2419,9 +2580,6 @@ void WifiManager::handleSettingsPost() {
   if (settings_.sta_ssid.length() == 0) {
     server_->send(400, "application/json", "{\"ok\":false,\"error\":\"empty_sta_ssid\"}");
     return;
-  }
-  if (settings_.timezone.length() == 0) {
-    settings_.timezone = kDefaultTimezone;
   }
   settings_.ui_language.toLowerCase();
   if (!(settings_.ui_language == "zh" || settings_.ui_language == "en" ||
@@ -2771,51 +2929,27 @@ void WifiManager::handleWeatherTest() {
     return;
   }
 
-  HTTPClient http;
-  http.setConnectTimeout(8000);
-  http.setTimeout(8000);
-  if (!http.begin(settings_.weather_url)) {
-    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"http_begin_failed\"}");
-    return;
-  }
-
-  const int code = http.GET();
-  if (code <= 0) {
-    http.end();
-    server_->send(502, "application/json", "{\"ok\":false,\"error\":\"weather_request_failed\"}");
-    return;
-  }
-
-  String body = http.getString();
-  http.end();
-
-  String resolved_timezone = extractJsonStringField(body, "timezone");
+  String resolved_timezone;
   bool timezone_updated = false;
-  if (resolved_timezone.length() == 0) {
-    resolved_timezone = settings_.timezone;
-  } else if (resolved_timezone != settings_.timezone) {
-    settings_.timezone = resolved_timezone;
-    saveSettings();
-    timezone_updated = true;
-    Serial.printf("[TIME] timezone updated from weather: %s\n", settings_.timezone.c_str());
-  }
-
   String local_time;
   String time_sync_error;
-  const bool time_sync_ok = syncClockWithTimezone(resolved_timezone, local_time, time_sync_error);
+  String preview;
+  int code = 0;
+  String request_error;
+  const bool time_sync_ok = syncClockFromWeather(resolved_timezone, timezone_updated, local_time,
+                                                 time_sync_error, preview, code, request_error);
+  if (code <= 0) {
+    const int status = (request_error == "bad_weather_url") ? 400 : 502;
+    server_->send(status, "application/json",
+                  String("{\"ok\":false,\"error\":\"") + request_error + "\"}");
+    return;
+  }
   if (time_sync_ok) {
     Serial.printf("[TIME] weather sync ok tz=%s local=%s\n",
                   resolved_timezone.c_str(), local_time.c_str());
   } else {
     Serial.printf("[TIME] weather sync failed tz=%s err=%s\n",
                   resolved_timezone.c_str(), time_sync_error.c_str());
-  }
-
-  String preview = body;
-  preview.replace("\r", " ");
-  preview.replace("\n", " ");
-  if (preview.length() > 240) {
-    preview = preview.substring(0, 240);
   }
 
   String json = "{";

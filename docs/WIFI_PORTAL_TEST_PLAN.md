@@ -1,36 +1,77 @@
-# WiFi Portal Test Plan (No Upload Stage)
+# WiFi Portal Test Plan（按当前代码）
 
-## 1) Config Mode Entry / Exit
-- Long press middle key (~600ms) -> enter `ConfigWait`, LED fast blink.
-- No key for 60s -> auto exit to `Normal` and serial shows timeout log.
-- In `ConfigWait`, short press middle key -> white screen render, then auto exit to `Normal`.
+更新时间：2026-04-10
 
-## 2) AP Mode
-- In `ConfigWait`, press UP key -> AP starts.
-- Connect phone/laptop to `PhotoFrame_Config` / `12345678`.
-- Open `http://192.168.4.1/` and verify:
-  - `Status` returns JSON.
-  - `Settings` can read/write and persists after reboot.
-  - `Weather Test` returns lightweight JSON check result.
-  - `Stop WiFi Portal` button exits WiFi mode and returns to Normal.
-  - `Files` lists `/pic`.
-  - Upload one test file to `/pic`.
-  - Download and delete a test file.
-- Wait 60s without access -> AP auto stops, mode returns `Normal`.
+## 1) 配置模式入口 / 退出
 
-## 3) STA Mode
-- Set real `sta_ssid` / `sta_pass` in settings page.
-- In `ConfigWait`, press DOWN key -> STA connects.
-- Check serial for assigned LAN IP and open `http://<lan_ip>/`.
-- Keep idle (no HTTP access) for 120s -> STA portal auto stops, mode returns `Normal`.
-- Test wrong password: after 30s connect timeout, STA auto stops and mode returns `Normal`.
-- Verify `/api/weather_test` only succeeds when STA is connected and URL format is valid.
+- 长按中键约 `600ms` -> 进入 `ConfigWait`
+- `ConfigWait` 下 LED 快闪
+- `60s` 无按键操作 -> 自动回到 `Normal`
+- `ConfigWait` 中短按中键 -> 白屏动作 -> 返回 `Normal`
 
-## 4) Path Safety
-- Call `/api/files?path=../` -> should return `bad_path`.
-- Call `/api/file?path=../x` -> should return `bad_path`.
+## 2) AP 模式
 
-## 5) Regression
-- Photo carousel still auto-switches according to `photo_interval_sec`.
-- Middle short press still toggles Photo/Calendar page.
-- White screen action still shows breathing indicator.
+- 在 `ConfigWait` 中短按上键 -> 进入 AP
+- 连接 `PhotoFrame_Config / 12345678`
+- 打开 `http://192.168.4.1/`
+
+检查项：
+- SPIFFS 已上传时，能看到完整 Portal 页面
+- SPIFFS 未上传时，能看到最小 fallback 提示页
+- `GET /api/status` 正常
+- `GET /api/settings` / `POST /api/settings` 正常
+- `GET /api/calendar/events` / `POST` / `DELETE` 正常
+- `GET /api/files`、`POST /api/dir`、`GET /api/file`、`DELETE /api/file` 正常
+- `POST /api/upload` 正常
+- `POST /api/stop` 能退出 Portal
+- `POST /api/reboot` 能触发重启
+
+超时检查：
+- AP 空闲超时当前为 `300s`
+- 若仍有终端连接 AP，活动时间会持续刷新
+
+## 3) STA 模式
+
+- 先在设置页写入真实 `sta_ssid / sta_pass`
+- 在 `ConfigWait` 中短按下键 -> 进入 STA 连接
+- 串口应输出 LAN IP
+- 打开 `http://<device_ip>/`
+
+检查项：
+- `GET /api/geocode?city=...` 正常
+- `GET /api/weather_test` 仅在 STA 已连通时成功
+- 校时成功后，串口能看到时区 / 本地时间日志
+
+超时检查：
+- STA 连接超时当前为 `30s`
+- STA 运行态空闲超时当前关闭，不应再按旧文档的 `120s` 预期测试
+
+## 4) 日程与文件
+
+### 日程
+
+- 添加 `weekly` / `daily` / `once` 三类日程
+- 删除单条日程
+- 重启设备后确认日程仍能读回
+
+### 文件
+
+- 新建目录
+- 上传一个普通文件
+- 上传一张图片并走 `fit` 或 `crop` 浏览器预处理路径
+- 下载文件
+- 删除文件
+- 删除目录
+
+## 5) 路径安全
+
+- 调用 `/api/files?path=../` -> 返回 `bad_path`
+- 调用 `/api/file?path=../x` -> 返回 `bad_path`
+- 对根目录 `/` 做删除 -> 应被拒绝
+
+## 6) 回归项
+
+- 照片轮播仍按 `photo_interval_sec` 工作
+- 中键短按仍能切换 Photo / Calendar
+- 白屏动作仍可执行
+- 日历页仍能读取手动日程并渲染
