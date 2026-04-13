@@ -8,6 +8,7 @@ namespace calendar {
 enum class TextFont : uint8_t {
   Auto = 0,
   CjkAuto = 1,
+  AsciiSmooth = 2,
   Cjk16 = 16,
   Cjk24 = 24,
 };

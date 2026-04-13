@@ -67,6 +67,10 @@ class App {
   void drawCalendarNumberInCell(uint16_t x, uint16_t y, uint16_t w, uint16_t h, int day_number,
                                 uint8_t scale, uint8_t color_nibble);
   void drawCalendarScene(const struct tm &local_tm, bool time_valid);
+  calendar::Rect calendarHeaderTimeRect(const calendar::CalendarModel &model,
+                                        const calendar::CalendarLayout &layout) const;
+  void redrawCalendarHeaderTime(const calendar::CalendarModel &model,
+                                const calendar::CalendarLayout &layout);
   void pushCalendarFullRefresh();
   void pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
                                       const calendar::CalendarLayout &layout);
@@ -86,6 +90,7 @@ class App {
   static constexpr uint16_t kCalendarStripeRows = 32u;
   uint8_t *calendar_frame_ = nullptr;
   render::StripeBuffer calendar_stripe_;
+  render::StripeBuffer calendar_window_buffer_;
   CalendarLayout calendar_layout_ = CalendarLayout::LandscapeSplit;
   calendar::CalendarModel calendar_model_cache_{};
   calendar::CalendarLayout calendar_layout_cache_{};
@@ -93,6 +98,7 @@ class App {
   uint16_t calendar_partial_refresh_count_ = 0;
   uint32_t last_calendar_check_ms_ = 0;
   int32_t last_calendar_day_key_ = -1;
+  int32_t last_calendar_render_minute_key_ = -1;
   bool clock_valid_ = false;
   time_t clock_anchor_epoch_ = 0;
   uint32_t clock_anchor_ms_ = 0;

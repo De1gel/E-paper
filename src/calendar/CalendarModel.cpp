@@ -234,6 +234,9 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
 
   const int first_col = first_day.tm_wday;
   const int cur_days = daysInMonth(year, month);
+  const int required_rows = (first_col + cur_days + 6) / 7;
+  model.month_row_count =
+      static_cast<uint8_t>(required_rows < 4 ? 4 : (required_rows > 6 ? 6 : required_rows));
   const int prev_month = (month == 1) ? 12 : (month - 1);
   const int prev_year = (month == 1) ? (year - 1) : year;
   const int prev_days = daysInMonth(prev_year, prev_month);

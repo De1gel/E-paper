@@ -42,6 +42,7 @@ struct CalendarModel {
   String no_time_label;
   String more_label;
   String weekday_labels[7];
+  uint8_t month_row_count = 6;
 
   size_t visible_event_count = 0;
   VisibleEvent visible_events[appfw::WifiManager::kMaxCalendarEvents];

@@ -30,6 +30,8 @@ struct CalendarLayout {
   uint16_t weekday_h = 0;
   uint16_t cell_w = 0;
   uint16_t cell_h = 0;
+  uint8_t grid_rows = 6;
+  uint8_t cell_pad_y = 2;
   uint16_t list_top = 0;
   uint16_t list_bottom = 0;
   uint16_t row_h = 0;
@@ -43,7 +45,7 @@ struct CalendarLayout {
 };
 
 bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t screen_width,
-                         uint16_t screen_height);
+                         uint16_t screen_height, uint8_t month_row_count);
 
 }  // namespace calendar
 

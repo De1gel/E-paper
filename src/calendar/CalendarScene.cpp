@@ -7,7 +7,7 @@ namespace calendar {
 namespace {
 
 constexpr uint8_t kAsciiBasePx = 7;
-constexpr uint8_t kZhWeekdayPx = 24;
+constexpr uint8_t kZhWeekdayPx = 26;
 constexpr uint8_t kZhItemPx = 24;
 constexpr uint8_t kZhMetaPx = 16;
 constexpr uint8_t kZhScheduleTitlePx = 48;
@@ -20,6 +20,29 @@ uint8_t asciiPixelHeight(uint8_t scale) {
 
 bool isWeekendColumn(uint8_t col) {
   return col == 0 || col == 6;
+}
+
+bool isAsciiOnlyText(const String &text) {
+  for (size_t i = 0; i < text.length(); ++i) {
+    if (static_cast<uint8_t>(text.charAt(i)) >= 0x80u) {
+      return false;
+    }
+  }
+  return true;
+}
+
+TextFont preferredTextFont(const String &text, TextFont fallback_font, uint8_t pixel_height) {
+  if (isAsciiOnlyText(text) && pixel_height >= 14u) {
+    return TextFont::AsciiSmooth;
+  }
+  return fallback_font;
+}
+
+TextAAMode preferredAsciiAAMode(const String &text, TextFont font, uint8_t pixel_height) {
+  (void)text;
+  (void)font;
+  (void)pixel_height;
+  return TextAAMode::Threshold;
 }
 
 void plotCirclePoints(SceneSink &sink, int cx, int cy, int x, int y, uint8_t color_nibble) {
@@ -184,16 +207,36 @@ void emitAATestPanel(SceneSink &sink, const CalendarLayout &layout) {
 void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout, SceneSink &sink) {
   const bool zh_ui = (model.ui_language == "zh");
   const uint8_t title_px = asciiPixelHeight(layout.title_scale);
-  const uint8_t weekday_px = zh_ui ? kZhWeekdayPx : asciiPixelHeight(layout.weekday_scale);
+  const uint8_t weekday_px =
+      zh_ui ? kZhWeekdayPx
+            : static_cast<uint8_t>(asciiPixelHeight(layout.weekday_scale) +
+                                   (layout.mode == LayoutMode::LandscapeSplit ? 2 : 1));
   const uint8_t schedule_title_px = zh_ui ? kZhScheduleTitlePx : asciiPixelHeight(2);
   const uint8_t item_px = zh_ui ? kZhItemPx : asciiPixelHeight(layout.list_scale);
   const uint8_t meta_px = zh_ui ? kZhMetaPx : kAsciiBasePx;
   const uint8_t header_px = kHeaderPx;
+  const uint8_t day_px =
+      (layout.mode == LayoutMode::LandscapeSplit) ? static_cast<uint8_t>(20)
+                                                  : asciiPixelHeight(layout.day_scale);
   const TextFont weekday_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont schedule_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont item_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont meta_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
   const TextFont header_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
+  const TextFont header_date_font = preferredTextFont(model.header_date, header_font, header_px);
+  const TextFont header_time_font = preferredTextFont(model.header_time, TextFont::Auto, header_px);
+  const TextFont header_weather_font =
+      preferredTextFont(model.header_weather, header_font, header_px);
+  const TextFont header_sensors_font =
+      preferredTextFont(model.header_sensors, header_font, header_px);
+  const TextAAMode header_date_aa =
+      preferredAsciiAAMode(model.header_date, header_date_font, header_px);
+  const TextAAMode header_time_aa =
+      preferredAsciiAAMode(model.header_time, header_time_font, header_px);
+  const TextAAMode header_weather_aa =
+      preferredAsciiAAMode(model.header_weather, header_weather_font, header_px);
+  const TextAAMode header_sensors_aa =
+      preferredAsciiAAMode(model.header_sensors, header_sensors_font, header_px);
   sink.strokeRect(layout.screen, blue);
   sink.fillRect(layout.header_bar, blue);
   sink.strokeRect(layout.calendar_panel, blue);
@@ -203,16 +246,20 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   const uint16_t header_date_y = static_cast<uint16_t>(layout.header_y + 6);
   const uint16_t header_time_y =
       static_cast<uint16_t>(header_date_y + textHeightPx(model.header_date, header_px, header_font) + 2);
-  sink.text(header_left_x, header_date_y, model.header_date, header_px, white, header_font);
-  sink.text(header_left_x, header_time_y, model.header_time, header_px, white);
+  sink.text(header_left_x, header_date_y, model.header_date, header_px, white, header_date_font,
+            header_date_aa);
+  sink.text(header_left_x, header_time_y, model.header_time, header_px, white, header_time_font,
+            header_time_aa);
   const uint16_t header_right_w = std::max(textWidthPx(model.header_weather, header_px, header_font),
                                            textWidthPx(model.header_sensors, header_px, header_font));
   const uint16_t header_right_x =
       (layout.header_bar.w > header_right_w + 12)
           ? static_cast<uint16_t>(layout.header_bar.x + layout.header_bar.w - header_right_w - 6)
           : header_left_x;
-  sink.text(header_right_x, header_date_y, model.header_weather, header_px, white, header_font);
-  sink.text(header_right_x, header_time_y, model.header_sensors, header_px, white);
+  sink.text(header_right_x, header_date_y, model.header_weather, header_px, white, header_weather_font,
+            header_weather_aa);
+  sink.text(header_right_x, header_time_y, model.header_sensors, header_px, white, header_sensors_font,
+            header_sensors_aa);
 
   if (layout.mode == LayoutMode::LandscapeSplit) {
     sink.fillRect(makeRect(static_cast<uint16_t>(layout.screen.w / 2), 0, 1, layout.screen.h), blue);
@@ -228,8 +275,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       const uint16_t label_x = static_cast<uint16_t>(
           layout.grid.x + col * layout.cell_w +
           ((layout.cell_w > label_w) ? (layout.cell_w - label_w) / 2u : 0u));
+      const TextFont label_font = preferredTextFont(label, weekday_font, weekday_px);
       sink.text(label_x, layout.weekday_y, label, weekday_px, isWeekendColumn(col) ? red : green,
-                weekday_font);
+                label_font, preferredAsciiAAMode(label, label_font, weekday_px));
     }
   }
 
@@ -237,8 +285,11 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   const uint16_t schedule_title_x = static_cast<uint16_t>(layout.schedule_inner.x + 8);
   const uint16_t schedule_title_y = static_cast<uint16_t>(layout.schedule_inner.y + 8);
   const uint16_t schedule_title_h = textHeightPx(model.schedule_title, schedule_title_px, schedule_font);
+  const TextFont schedule_title_font =
+      preferredTextFont(model.schedule_title, schedule_font, schedule_title_px);
   sink.text(schedule_title_x, schedule_title_y, model.schedule_title, schedule_title_px, green,
-            schedule_font);
+            schedule_title_font,
+            preferredAsciiAAMode(model.schedule_title, schedule_title_font, schedule_title_px));
 
   if (kShowAATestPanel && layout.mode == LayoutMode::LandscapeSplit) {
     emitAATestPanel(sink, layout);
@@ -246,9 +297,12 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   }
 
   if (!model.time_valid) {
+    const TextFont no_time_font =
+        preferredTextFont(model.no_time_label, schedule_font, schedule_title_px);
     sink.text(static_cast<uint16_t>(layout.schedule_panel.x + 20),
               static_cast<uint16_t>(schedule_title_y + schedule_title_h + 8),
-              model.no_time_label, schedule_title_px, red, schedule_font);
+              model.no_time_label, schedule_title_px, red, no_time_font,
+              preferredAsciiAAMode(model.no_time_label, no_time_font, schedule_title_px));
   }
 
   uint8_t rendered_rows = 0;
@@ -267,8 +321,12 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     }
 
     const ScheduleGroup &group = model.schedule_groups[row];
+    const TextFont group_time_font =
+        preferredTextFont(group.time_hhmm, TextFont::Auto, asciiPixelHeight(layout.list_scale));
     sink.text(layout.content_x, static_cast<uint16_t>(y + 4), group.time_hhmm,
-              asciiPixelHeight(layout.list_scale), blue);
+              asciiPixelHeight(layout.list_scale), blue, group_time_font,
+              preferredAsciiAAMode(group.time_hhmm, group_time_font,
+                                   asciiPixelHeight(layout.list_scale)));
     if (layout.items_w == 0) {
       continue;
     }
@@ -313,9 +371,12 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       const uint16_t text_x = static_cast<uint16_t>(lane_inner_x + 12);
       const uint16_t text_space =
           static_cast<uint16_t>(lane_inner_w > 14 ? (lane_inner_w - 14) : 0);
+      const String visible_title = truncateTextToWidth(title, text_space, item_px, item_font);
+      const TextFont title_font = preferredTextFont(visible_title, item_font, item_px);
       sink.text(text_x, static_cast<uint16_t>(y + 4),
-                truncateTextToWidth(title, text_space, item_px, item_font),
-                item_px, black, item_font);
+                visible_title,
+                item_px, black, title_font,
+                preferredAsciiAAMode(visible_title, title_font, item_px));
     }
   }
 
@@ -325,9 +386,13 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t footer_y = (layout.list_bottom + meta_px + 4u <= schedule_bottom)
                                   ? static_cast<uint16_t>(layout.list_bottom + 2)
                                   : static_cast<uint16_t>(schedule_bottom - meta_px - 4);
+    const String footer_text =
+        "+" + String(model.schedule_group_count - rendered_rows) + " " + model.more_label;
+    const TextFont footer_font = preferredTextFont(footer_text, meta_font, meta_px);
     sink.text(static_cast<uint16_t>(layout.schedule_inner.x + 8), footer_y,
-              "+" + String(model.schedule_group_count - rendered_rows) + " " + model.more_label,
-              meta_px, red, meta_font);
+              footer_text,
+              meta_px, red, footer_font,
+              preferredAsciiAAMode(footer_text, footer_font, meta_px));
   }
 
   if (!model.time_valid || !layout.has_grid) {
@@ -337,6 +402,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   for (int index = 0; index < 42; ++index) {
     const int row = index / 7;
     const int col = index % 7;
+    if (row >= layout.grid_rows) {
+      continue;
+    }
     const DateCell &cell = model.date_cells[index];
     if (!cell.in_current) {
       continue;
@@ -345,17 +413,20 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t cell_y = static_cast<uint16_t>(layout.grid.y + row * layout.cell_h);
 
     const String label = String(cell.day);
-    const uint16_t day_px = 12;
     const uint16_t text_w = textWidthPx(label, day_px);
     const uint16_t text_h = textHeightPx(label, day_px);
+    const uint16_t content_h =
+        (layout.cell_h > static_cast<uint16_t>(layout.cell_pad_y * 2u))
+            ? static_cast<uint16_t>(layout.cell_h - layout.cell_pad_y * 2u)
+            : layout.cell_h;
     if (cell.is_today) {
       const uint16_t cell_cx = static_cast<uint16_t>(cell_x + layout.cell_w / 2u);
       const uint16_t cell_cy = static_cast<uint16_t>(cell_y + layout.cell_h / 2u);
       const uint16_t text_box = (text_w > text_h) ? text_w : text_h;
       uint16_t radius = static_cast<uint16_t>(text_box / 2u + 5u);
       const uint16_t max_radius =
-          (layout.cell_w < layout.cell_h ? layout.cell_w : layout.cell_h) > 8
-              ? static_cast<uint16_t>((layout.cell_w < layout.cell_h ? layout.cell_w : layout.cell_h) /
+          (layout.cell_w < content_h ? layout.cell_w : content_h) > 8
+              ? static_cast<uint16_t>((layout.cell_w < content_h ? layout.cell_w : content_h) /
                                       2u - 3u)
               : 0u;
       if (radius > max_radius) {
@@ -364,16 +435,17 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       emitFilledCircle(sink, cell_cx, cell_cy, radius, red);
     }
     const uint16_t text_x = static_cast<uint16_t>(
-        static_cast<uint16_t>(cell_x + 1) +
-        (((layout.cell_w > 2 ? layout.cell_w - 2 : 0) > text_w)
-             ? (((layout.cell_w - 2) - text_w) / 2u)
+        cell_x +
+        ((layout.cell_w > text_w)
+             ? ((layout.cell_w - text_w) / 2u)
              : 0u));
     const uint16_t text_y = static_cast<uint16_t>(
-        static_cast<uint16_t>(cell_y + 1) +
-        (((layout.cell_h > 2 ? layout.cell_h - 2 : 0) > text_h)
-             ? (((layout.cell_h - 2) - text_h) / 2u)
+        static_cast<uint16_t>(cell_y + layout.cell_pad_y) +
+        ((content_h > text_h)
+             ? ((content_h - text_h) / 2u)
              : 0u));
-    sink.text(text_x, text_y, label, day_px, cell.text_color);
+    sink.text(text_x, text_y, label, day_px, cell.text_color, TextFont::AsciiSmooth,
+              preferredAsciiAAMode(label, TextFont::AsciiSmooth, day_px));
   }
 }
 

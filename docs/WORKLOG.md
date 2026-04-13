@@ -25,3 +25,8 @@
 - Built `esp32dev` successfully with the current pending workspace changes across calendar rendering, portal UI, WiFi/session handling, LED behavior, and project documentation.
 - Pending tracked changes reviewed before commit: `data/*`, `src/app/App.cpp`, `src/calendar/*`, `src/system/LedManager.*`, `src/system/WifiManager.cpp`, and multiple `docs/*` updates. Untracked local folders such as `.codex/` and `assets/` remain excluded from version control.
 - Build result: RAM `17.5%` (`57232 / 327680`), Flash `33.1%` (`2431969 / 7340032`).
+- Updated the calendar month page to hide out-of-month days, use a filled red circle for today, expand the header/weekday rows, and switch the month grid to dynamic `4/5/6` rows while keeping the default boot page on calendar for iteration.
+- Replaced stretched ASCII with a native `20px` smooth ASCII font for calendar numerals and header values, then routed header/date/time/weather ASCII rendering through that font without dithering.
+- Added true header-time partial refresh using the coordinate-window partial refresh module and a dedicated packed window buffer, so minute ticks can refresh only the time area instead of falling back to a full-screen update.
+- Fixed two runtime issues: idle LED no longer starts breathing immediately after upload, and NTP sync no longer triggers an unnecessary second calendar refresh when only sub-minute drift changes.
+- Build result: RAM `17.5%` (`57248 / 327680`), Flash `33.3%` (`2442265 / 7340032`).

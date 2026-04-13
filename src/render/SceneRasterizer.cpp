@@ -101,6 +101,9 @@ class StripeSceneSink : public calendar::SceneSink {
     if (style.pixel_height == 0 || style.base_height == 0) {
       return;
     }
+    const uint8_t coverage_threshold =
+        (style.font == calendar::TextFont::AsciiSmooth) ? static_cast<uint8_t>(6u)
+                                                        : static_cast<uint8_t>(8u);
     uint16_t pen_x = x;
     size_t byte_index = 0;
     calendar::GlyphBitmap glyph;
@@ -126,7 +129,7 @@ class StripeSceneSink : public calendar::SceneSink {
           if (coverage == 0u) {
             continue;
           }
-          if (glyph.bits_per_pixel > 1u && coverage < 8u) {
+          if (glyph.bits_per_pixel > 1u && coverage < coverage_threshold) {
             continue;
           }
           fillRect(calendar::makeRect(static_cast<uint16_t>(pen_x + dx), static_cast<uint16_t>(y + dy),

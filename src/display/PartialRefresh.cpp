@@ -57,6 +57,58 @@ void fillWindowSolid(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
   triggerPartialRefresh();
 }
 
+void writeWindowFromBuffer(const uint8_t *packed_buffer, uint16_t buffer_width_px,
+                           uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
+  if (packed_buffer == nullptr || buffer_width_px == 0 || width == 0 || height == 0) {
+    return;
+  }
+  if (x >= EPD_WIDTH || y >= EPD_HEIGHT) {
+    return;
+  }
+  if (width > buffer_width_px) {
+    width = buffer_width_px;
+  }
+  if (x + width > EPD_WIDTH) {
+    width = static_cast<uint16_t>(EPD_WIDTH - x);
+  }
+  if (y + height > EPD_HEIGHT) {
+    height = static_cast<uint16_t>(EPD_HEIGHT - y);
+  }
+  if (width == 0 || height == 0) {
+    return;
+  }
+
+  const uint16_t x_end = static_cast<uint16_t>(x + width - 1u);
+  const uint16_t y_end = static_cast<uint16_t>(y + height - 1u);
+
+  EPD_W21_WriteCMD(kCmdPartialWindow);
+  EPD_W21_WriteDATA((x >> 8) & 0x03);
+  EPD_W21_WriteDATA(x & 0xFF);
+  EPD_W21_WriteDATA((x_end >> 8) & 0x03);
+  EPD_W21_WriteDATA(x_end & 0xFF);
+  EPD_W21_WriteDATA((y >> 8) & 0x03);
+  EPD_W21_WriteDATA(y & 0xFF);
+  EPD_W21_WriteDATA((y_end >> 8) & 0x03);
+  EPD_W21_WriteDATA(y_end & 0xFF);
+  EPD_W21_WriteDATA(0x01);
+  lcd_chkstatus();
+
+  EPD_W21_WriteCMD(DTM);
+  const uint16_t src_stride_bytes = static_cast<uint16_t>(buffer_width_px / 2u);
+  const uint16_t write_bytes_per_row = static_cast<uint16_t>(width / 2u);
+  for (uint16_t row = 0; row < height; ++row) {
+    const uint8_t *src = packed_buffer + static_cast<uint32_t>(row) * src_stride_bytes;
+    for (uint16_t i = 0; i < write_bytes_per_row; ++i) {
+      EPD_W21_WriteDATA(src[i]);
+    }
+    if ((row & 0x07u) == 0u) {
+      yield();
+    }
+  }
+  lcd_chkstatus();
+  triggerPartialRefresh();
+}
+
 void writeWindowFromPacked(const uint8_t *packed_frame, uint16_t frame_width_px,
                            uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
   if (packed_frame == nullptr || frame_width_px == 0 || width == 0 || height == 0) {

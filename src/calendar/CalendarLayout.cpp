@@ -5,12 +5,14 @@
 namespace calendar {
 
 bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t screen_width,
-                         uint16_t screen_height) {
+                         uint16_t screen_height, uint8_t month_row_count) {
   layout = CalendarLayout{};
   layout.mode = mode;
   layout.screen = makeRect(0, 0, screen_width, screen_height);
+  layout.grid_rows =
+      static_cast<uint8_t>(month_row_count < 4 ? 4 : (month_row_count > 6 ? 6 : month_row_count));
   layout.header_h =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(64) : static_cast<uint16_t>(56);
+      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(65) : static_cast<uint16_t>(57);
   if (mode == LayoutMode::LandscapeSplit) {
     layout.calendar_panel = makeRect(0, 0, static_cast<uint16_t>(screen_width / 2), screen_height);
     layout.schedule_panel = makeRect(static_cast<uint16_t>(screen_width / 2), 0,
@@ -21,7 +23,7 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
                                      static_cast<uint16_t>(screen_height / 2));
   }
 
-  const uint16_t margin = (mode == LayoutMode::LandscapeSplit) ? 10 : 8;
+  const uint16_t margin = (mode == LayoutMode::LandscapeSplit) ? 8 : 6;
   layout.header_y = static_cast<uint16_t>(layout.calendar_panel.y + margin);
   layout.header_bar = makeRect(static_cast<uint16_t>(layout.calendar_panel.x + margin), layout.header_y,
                                static_cast<uint16_t>(layout.calendar_panel.w > margin * 2
@@ -30,15 +32,15 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
                                layout.header_h);
   layout.title_scale = (mode == LayoutMode::LandscapeSplit) ? 4 : 3;
   layout.weekday_scale = (mode == LayoutMode::LandscapeSplit) ? 2 : 1;
-  layout.day_scale = (mode == LayoutMode::LandscapeSplit) ? 3 : 2;
+  layout.day_scale = (mode == LayoutMode::LandscapeSplit) ? 4 : 3;
 
   layout.title_y = layout.header_y;
   layout.title_bar_x = layout.header_bar.x;
   layout.title_bar_w = layout.header_bar.w;
-  layout.weekday_y = static_cast<uint16_t>(layout.header_y + layout.header_h + 8);
+  layout.weekday_y = static_cast<uint16_t>(layout.header_y + layout.header_h + 4);
   layout.weekday_h =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(34) : static_cast<uint16_t>(30);
-  const uint16_t grid_top = static_cast<uint16_t>(layout.weekday_y + layout.weekday_h + 4);
+      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(32) : static_cast<uint16_t>(28);
+  const uint16_t grid_top = static_cast<uint16_t>(layout.weekday_y + layout.weekday_h + 2);
   const uint16_t grid_left_base = static_cast<uint16_t>(layout.calendar_panel.x + margin);
   const uint16_t grid_right =
       static_cast<uint16_t>(layout.calendar_panel.x + layout.calendar_panel.w - margin);
@@ -48,7 +50,7 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
 
   uint16_t grid_w = static_cast<uint16_t>(grid_right - grid_left_base);
   const uint16_t grid_bottom_margin =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(18) : static_cast<uint16_t>(14);
+      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(10) : static_cast<uint16_t>(8);
   uint16_t grid_h = static_cast<uint16_t>(
       layout.calendar_panel.y + layout.calendar_panel.h > (margin + grid_bottom_margin) &&
               (layout.calendar_panel.y + layout.calendar_panel.h - margin - grid_bottom_margin) > grid_top
@@ -56,9 +58,12 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
           : 0);
   if (grid_w >= 140 && grid_h >= 60) {
     layout.cell_w = static_cast<uint16_t>(grid_w / 7u);
-    layout.cell_h = static_cast<uint16_t>(grid_h / 6u);
+    layout.cell_h = static_cast<uint16_t>(grid_h / layout.grid_rows);
     grid_w = static_cast<uint16_t>(layout.cell_w * 7u);
-    grid_h = static_cast<uint16_t>(layout.cell_h * 6u);
+    grid_h = static_cast<uint16_t>(layout.cell_h * layout.grid_rows);
+    layout.cell_pad_y = (layout.grid_rows <= 4) ? static_cast<uint8_t>(6)
+                        : (layout.grid_rows == 5) ? static_cast<uint8_t>(4)
+                                                  : static_cast<uint8_t>(2);
     const uint16_t grid_left = static_cast<uint16_t>(
         grid_left_base + ((grid_right - grid_left_base - grid_w) / 2u));
     layout.grid = makeRect(grid_left, grid_top, grid_w, grid_h);

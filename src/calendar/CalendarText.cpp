@@ -1,5 +1,6 @@
 #include "calendar/CalendarText.h"
 
+#include "fonts/AsciiSmoothFont.h"
 #include "fonts/ZhSubsetFont.h"
 
 namespace calendar {
@@ -25,6 +26,8 @@ struct GlyphRenderMetrics {
 
 FontBoxMetrics fontBoxMetrics(TextFont font) {
   switch (font) {
+    case TextFont::AsciiSmooth:
+      return FontBoxMetrics{0, 0, 0, fonts::kAsciiSmoothFontPx};
     case TextFont::Cjk24:
       return FontBoxMetrics{fonts::kZhFont24BoxLeft, fonts::kZhFont24BoxTop,
                             fonts::kZhFont24BoxWidth, fonts::kZhFont24BoxHeight};
@@ -224,7 +227,9 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
   }
 
   style.pixel_height = pixel_height;
-  if (font == TextFont::CjkAuto) {
+  if (font == TextFont::Auto && pixel_height >= 14u) {
+    style.font = TextFont::AsciiSmooth;
+  } else if (font == TextFont::CjkAuto) {
     const uint8_t resolved_px = resolveCjkFontForPixelHeight(pixel_height);
     style.font = (resolved_px >= fonts::kZhFontPx24) ? TextFont::Cjk24 : TextFont::Cjk16;
   } else {
@@ -518,6 +523,12 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
   }
 
   if (codepoint < 0x80u) {
+    if (font == TextFont::AsciiSmooth) {
+      if (fonts::lookupAsciiSmoothGlyph(static_cast<char>(codepoint), glyph.rows, glyph.width,
+                                        glyph.height, glyph.row_bytes, glyph.bits_per_pixel)) {
+        return true;
+      }
+    }
     glyph.rows = glyph3x5(static_cast<char>(codepoint));
     glyph.width = kAsciiGlyphWidth;
     glyph.height = kAsciiGlyphHeight;
@@ -541,6 +552,12 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
     return true;
   }
 
+  if (font == TextFont::AsciiSmooth) {
+    if (fonts::lookupAsciiSmoothGlyph('?', glyph.rows, glyph.width, glyph.height, glyph.row_bytes,
+                                      glyph.bits_per_pixel)) {
+      return true;
+    }
+  }
   glyph.rows = glyph3x5('?');
   glyph.width = kAsciiGlyphWidth;
   glyph.height = kAsciiGlyphHeight;
