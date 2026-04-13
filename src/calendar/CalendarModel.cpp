@@ -255,6 +255,9 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     if (isWeekendColumn(col)) {
       cell.text_color = red;
     }
+    if (cell.is_today) {
+      cell.text_color = white;
+    }
   }
 }
 

@@ -38,6 +38,15 @@ void plotCirclePoints(SceneSink &sink, int cx, int cy, int x, int y, uint8_t col
   }
 }
 
+void emitHorizontalSpan(SceneSink &sink, int x0, int x1, int y, uint8_t color_nibble) {
+  if (x1 < x0 || y < 0) {
+    return;
+  }
+  sink.fillRect(makeRect(static_cast<uint16_t>(x0), static_cast<uint16_t>(y),
+                         static_cast<uint16_t>(x1 - x0 + 1), 1),
+                color_nibble);
+}
+
 void emitCircleOutline(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
                        uint8_t color_nibble) {
   if (radius == 0) {
@@ -49,6 +58,35 @@ void emitCircleOutline(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radiu
   int decision = 1 - x;
   while (y <= x) {
     plotCirclePoints(sink, static_cast<int>(cx), static_cast<int>(cy), x, y, color_nibble);
+    ++y;
+    if (decision <= 0) {
+      decision += 2 * y + 1;
+    } else {
+      --x;
+      decision += 2 * (y - x) + 1;
+    }
+  }
+}
+
+void emitFilledCircle(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
+                      uint8_t color_nibble) {
+  if (radius == 0) {
+    sink.fillRect(makeRect(cx, cy, 1, 1), color_nibble);
+    return;
+  }
+
+  int x = static_cast<int>(radius);
+  int y = 0;
+  int decision = 1 - x;
+  while (y <= x) {
+    emitHorizontalSpan(sink, static_cast<int>(cx) - x, static_cast<int>(cx) + x,
+                       static_cast<int>(cy) + y, color_nibble);
+    emitHorizontalSpan(sink, static_cast<int>(cx) - x, static_cast<int>(cx) + x,
+                       static_cast<int>(cy) - y, color_nibble);
+    emitHorizontalSpan(sink, static_cast<int>(cx) - y, static_cast<int>(cx) + y,
+                       static_cast<int>(cy) + x, color_nibble);
+    emitHorizontalSpan(sink, static_cast<int>(cx) - y, static_cast<int>(cx) + y,
+                       static_cast<int>(cy) - x, color_nibble);
     ++y;
     if (decision <= 0) {
       decision += 2 * y + 1;
@@ -300,6 +338,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const int row = index / 7;
     const int col = index % 7;
     const DateCell &cell = model.date_cells[index];
+    if (!cell.in_current) {
+      continue;
+    }
     const uint16_t cell_x = static_cast<uint16_t>(layout.grid.x + col * layout.cell_w);
     const uint16_t cell_y = static_cast<uint16_t>(layout.grid.y + row * layout.cell_h);
 
@@ -320,7 +361,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       if (radius > max_radius) {
         radius = max_radius;
       }
-      emitCircleOutline(sink, cell_cx, cell_cy, radius, red);
+      emitFilledCircle(sink, cell_cx, cell_cy, radius, red);
     }
     const uint16_t text_x = static_cast<uint16_t>(
         static_cast<uint16_t>(cell_x + 1) +
