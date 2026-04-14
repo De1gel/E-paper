@@ -8,19 +8,25 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
                          uint16_t screen_height, uint8_t month_row_count) {
   layout = CalendarLayout{};
   layout.mode = mode;
-  layout.screen = makeRect(0, 0, screen_width, screen_height);
+  const uint16_t logical_width =
+      (mode == LayoutMode::PortraitSplit) ? screen_height : screen_width;
+  const uint16_t logical_height =
+      (mode == LayoutMode::PortraitSplit) ? screen_width : screen_height;
+  layout.screen = makeRect(0, 0, logical_width, logical_height);
   layout.grid_rows =
       static_cast<uint8_t>(month_row_count < 4 ? 4 : (month_row_count > 6 ? 6 : month_row_count));
   layout.header_h =
       (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(65) : static_cast<uint16_t>(57);
   if (mode == LayoutMode::LandscapeSplit) {
-    layout.calendar_panel = makeRect(0, 0, static_cast<uint16_t>(screen_width / 2), screen_height);
-    layout.schedule_panel = makeRect(static_cast<uint16_t>(screen_width / 2), 0,
-                                     static_cast<uint16_t>(screen_width / 2), screen_height);
+    layout.calendar_panel =
+        makeRect(0, 0, static_cast<uint16_t>(logical_width / 2), logical_height);
+    layout.schedule_panel = makeRect(static_cast<uint16_t>(logical_width / 2), 0,
+                                     static_cast<uint16_t>(logical_width / 2), logical_height);
   } else {
-    layout.calendar_panel = makeRect(0, 0, screen_width, static_cast<uint16_t>(screen_height / 2));
-    layout.schedule_panel = makeRect(0, static_cast<uint16_t>(screen_height / 2), screen_width,
-                                     static_cast<uint16_t>(screen_height / 2));
+    layout.calendar_panel =
+        makeRect(0, 0, logical_width, static_cast<uint16_t>(logical_height / 2));
+    layout.schedule_panel = makeRect(0, static_cast<uint16_t>(logical_height / 2), logical_width,
+                                     static_cast<uint16_t>(logical_height / 2));
   }
 
   const uint16_t margin = (mode == LayoutMode::LandscapeSplit) ? 8 : 6;

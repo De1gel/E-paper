@@ -9,10 +9,28 @@
 namespace render {
 namespace {
 
+bool logicalToPhysical(const calendar::CalendarLayout &layout, uint16_t x, uint16_t y,
+                       uint16_t &physical_x, uint16_t &physical_y) {
+  if (layout.mode == calendar::LayoutMode::PortraitSplit) {
+    if (x >= layout.screen.w || y >= layout.screen.h) {
+      return false;
+    }
+    physical_x = y;
+    physical_y = static_cast<uint16_t>(layout.screen.w - 1u - x);
+    return true;
+  }
+  if (x >= layout.screen.w || y >= layout.screen.h) {
+    return false;
+  }
+  physical_x = x;
+  physical_y = y;
+  return true;
+}
+
 class StripeSceneSink : public calendar::SceneSink {
  public:
-  StripeSceneSink(StripeBuffer &buffer, uint16_t stripe_y)
-      : buffer_(buffer), stripe_y_(stripe_y) {}
+  StripeSceneSink(StripeBuffer &buffer, uint16_t stripe_y, const calendar::CalendarLayout &layout)
+      : buffer_(buffer), stripe_y_(stripe_y), layout_(layout) {}
 
   void fillRect(const calendar::Rect &rect, uint8_t color_nibble) override {
     if (!buffer_.ready() || rect.w == 0 || rect.h == 0) {
@@ -24,16 +42,16 @@ class StripeSceneSink : public calendar::SceneSink {
     int32_t y1 = static_cast<int32_t>(rect.y + rect.h);
 
     if (x0 < 0) x0 = 0;
-    if (y0 < static_cast<int32_t>(stripe_y_)) y0 = stripe_y_;
-    if (x1 > static_cast<int32_t>(buffer_.widthPx())) x1 = buffer_.widthPx();
-    if (y1 > static_cast<int32_t>(stripe_y_ + buffer_.rows())) y1 = stripe_y_ + buffer_.rows();
+    if (y0 < 0) y0 = 0;
+    if (x1 > static_cast<int32_t>(layout_.screen.w)) x1 = layout_.screen.w;
+    if (y1 > static_cast<int32_t>(layout_.screen.h)) y1 = layout_.screen.h;
     if (x0 >= x1 || y0 >= y1) {
       return;
     }
 
     for (int32_t y = y0; y < y1; ++y) {
       for (int32_t x = x0; x < x1; ++x) {
-        setPixel(static_cast<uint16_t>(x), static_cast<uint16_t>(y - stripe_y_), color_nibble);
+        setPixel(static_cast<uint16_t>(x), static_cast<uint16_t>(y), color_nibble);
       }
     }
   }
@@ -143,10 +161,17 @@ class StripeSceneSink : public calendar::SceneSink {
 
  private:
   void setPixel(uint16_t x, uint16_t y, uint8_t color_nibble) {
-    if (x >= buffer_.widthPx() || y >= buffer_.rows()) {
+    uint16_t physical_x = 0;
+    uint16_t physical_y = 0;
+    if (!logicalToPhysical(layout_, x, y, physical_x, physical_y)) {
       return;
     }
-    const uint32_t pixel_index = static_cast<uint32_t>(y) * buffer_.widthPx() + x;
+    if (physical_x >= buffer_.widthPx() || physical_y < stripe_y_ ||
+        physical_y >= static_cast<uint16_t>(stripe_y_ + buffer_.rows())) {
+      return;
+    }
+    const uint16_t local_y = static_cast<uint16_t>(physical_y - stripe_y_);
+    const uint32_t pixel_index = static_cast<uint32_t>(local_y) * buffer_.widthPx() + physical_x;
     const uint32_t byte_index = pixel_index >> 1;
     const uint8_t nib = static_cast<uint8_t>(color_nibble & 0x0Fu);
     uint8_t *bytes = buffer_.data();
@@ -159,18 +184,32 @@ class StripeSceneSink : public calendar::SceneSink {
 
   StripeBuffer &buffer_;
   uint16_t stripe_y_ = 0;
+  const calendar::CalendarLayout &layout_;
 };
 
 }  // namespace
 
+uint16_t calendarPhysicalWidth(const calendar::CalendarLayout &layout) {
+  return (layout.mode == calendar::LayoutMode::PortraitSplit) ? layout.screen.h : layout.screen.w;
+}
+
+uint16_t calendarPhysicalHeight(const calendar::CalendarLayout &layout) {
+  return (layout.mode == calendar::LayoutMode::PortraitSplit) ? layout.screen.w : layout.screen.h;
+}
+
+bool calendarLogicalToPhysical(const calendar::CalendarLayout &layout, uint16_t x, uint16_t y,
+                               uint16_t &physical_x, uint16_t &physical_y) {
+  return logicalToPhysical(layout, x, y, physical_x, physical_y);
+}
+
 bool rasterizeCalendarSceneStripe(const calendar::CalendarModel &model,
                                   const calendar::CalendarLayout &layout, uint16_t stripe_y,
                                   uint16_t stripe_rows, StripeBuffer &buffer) {
-  if (!buffer.ensure(layout.screen.w, stripe_rows)) {
+  if (!buffer.ensure(calendarPhysicalWidth(layout), stripe_rows)) {
     return false;
   }
   buffer.clear(white);
-  StripeSceneSink sink(buffer, stripe_y);
+  StripeSceneSink sink(buffer, stripe_y, layout);
   calendar::emitCalendarScene(model, layout, sink);
   return true;
 }

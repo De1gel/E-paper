@@ -915,14 +915,59 @@ void App::clearCalendarFrame(uint8_t color_nibble) {
   memset(calendar_frame_, packed, kCalendarFrameBytes);
 }
 
+bool App::calendarUsesPortraitRotation() const {
+  return calendar_layout_ == CalendarLayout::PortraitSplit;
+}
+
+uint16_t App::calendarLogicalWidth() const {
+  return calendarUsesPortraitRotation() ? kScreenHeight : kScreenWidth;
+}
+
+uint16_t App::calendarLogicalHeight() const {
+  return calendarUsesPortraitRotation() ? kScreenWidth : kScreenHeight;
+}
+
+bool App::calendarLogicalToPhysical(uint16_t x, uint16_t y, uint16_t &physical_x,
+                                    uint16_t &physical_y) const {
+  if (calendarUsesPortraitRotation()) {
+    if (x >= kScreenHeight || y >= kScreenWidth) {
+      return false;
+    }
+    physical_x = y;
+    physical_y = static_cast<uint16_t>(kScreenHeight - 1u - x);
+    return true;
+  }
+  if (x >= kScreenWidth || y >= kScreenHeight) {
+    return false;
+  }
+  physical_x = x;
+  physical_y = y;
+  return true;
+}
+
+calendar::Rect App::calendarLogicalRectToPhysical(const calendar::Rect &rect) const {
+  if (rect.w == 0 || rect.h == 0) {
+    return calendar::makeRect(0, 0, 0, 0);
+  }
+  if (calendarUsesPortraitRotation()) {
+    const uint16_t physical_x = rect.y;
+    const uint16_t physical_y =
+        static_cast<uint16_t>(kScreenHeight - static_cast<uint16_t>(rect.x + rect.w));
+    return calendar::makeRect(physical_x, physical_y, rect.h, rect.w);
+  }
+  return rect;
+}
+
 void App::setCalendarPixel(uint16_t x, uint16_t y, uint8_t color_nibble) {
   if (calendar_frame_ == nullptr) {
     return;
   }
-  if (x >= kScreenWidth || y >= kScreenHeight) {
+  uint16_t physical_x = 0;
+  uint16_t physical_y = 0;
+  if (!calendarLogicalToPhysical(x, y, physical_x, physical_y)) {
     return;
   }
-  const uint32_t pixel_index = static_cast<uint32_t>(y) * kScreenWidth + x;
+  const uint32_t pixel_index = static_cast<uint32_t>(physical_y) * kScreenWidth + physical_x;
   const uint32_t byte_index = pixel_index >> 1;
   const uint8_t nib = static_cast<uint8_t>(color_nibble & 0x0Fu);
   if ((pixel_index & 0x01u) == 0u) {
@@ -934,16 +979,18 @@ void App::setCalendarPixel(uint16_t x, uint16_t y, uint8_t color_nibble) {
 }
 
 void App::fillCalendarRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble) {
-  if (w == 0 || h == 0 || x >= kScreenWidth || y >= kScreenHeight) {
+  const uint16_t logical_width = calendarLogicalWidth();
+  const uint16_t logical_height = calendarLogicalHeight();
+  if (w == 0 || h == 0 || x >= logical_width || y >= logical_height) {
     return;
   }
   uint16_t x_end = static_cast<uint16_t>(x + w);
   uint16_t y_end = static_cast<uint16_t>(y + h);
-  if (x_end > kScreenWidth || x_end < x) {
-    x_end = kScreenWidth;
+  if (x_end > logical_width || x_end < x) {
+    x_end = logical_width;
   }
-  if (y_end > kScreenHeight || y_end < y) {
-    y_end = kScreenHeight;
+  if (y_end > logical_height || y_end < y) {
+    y_end = logical_height;
   }
   for (uint16_t yy = y; yy < y_end; ++yy) {
     for (uint16_t xx = x; xx < x_end; ++xx) {
@@ -1105,12 +1152,29 @@ calendar::Rect App::calendarHeaderTimeRect(const calendar::CalendarModel &model,
   return alignRectToPartialGrid(raw, layout.header_bar);
 }
 
-void App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
-                                   const calendar::CalendarLayout &layout) {
+bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
+                                   const calendar::CalendarLayout &layout,
+                                   calendar::Rect &physical_area) {
   constexpr uint8_t kHeaderPx = 24;
   calendar::Rect rect = calendarHeaderTimeRect(model, layout);
   if (rect.w == 0 || rect.h == 0) {
-    return;
+    return false;
+  }
+  if (calendarUsesPortraitRotation()) {
+    if (!ensureCalendarFrameBuffer("portrait_header_partial")) {
+      return false;
+    }
+    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, blue);
+    const uint16_t header_left_x = static_cast<uint16_t>(layout.header_bar.x + 6);
+    const uint16_t header_date_y = static_cast<uint16_t>(layout.header_y + 6);
+    const uint16_t header_time_y = static_cast<uint16_t>(
+        header_date_y + calendar::textHeightPx(model.header_date, kHeaderPx,
+                                               calendar::TextFont::AsciiSmooth) + 2);
+    drawCalendarText3x5(header_left_x, header_time_y, model.header_time, kHeaderPx, white,
+                        calendar::TextFont::AsciiSmooth, calendar::TextAAMode::Threshold);
+    physical_area = calendarLogicalRectToPhysical(rect);
+    pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
+    return true;
   }
   if ((rect.x & 0x01u) != 0u) {
     --rect.x;
@@ -1124,8 +1188,9 @@ void App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
     rect.w &= static_cast<uint16_t>(~0x01u);
   }
   if (rect.w < 2u) {
-    return;
+    return false;
   }
+  physical_area = rect;
 
   const calendar::TextFont date_font = calendar::TextFont::AsciiSmooth;
   const uint16_t header_left_x = static_cast<uint16_t>(layout.header_bar.x + 6);
@@ -1133,7 +1198,7 @@ void App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
   const uint16_t header_time_y = static_cast<uint16_t>(
       header_date_y + calendar::textHeightPx(model.header_date, kHeaderPx, date_font) + 2);
   if (!calendar_window_buffer_.ensure(rect.w, rect.h)) {
-    return;
+    return false;
   }
   calendar_window_buffer_.clear(blue);
   if (kDebugCalendarHeaderPartialPattern) {
@@ -1212,6 +1277,7 @@ void App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
   partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),
                                          calendar_window_buffer_.widthPx(),
                                          rect.x, rect.y, rect.w, rect.h);
+  return true;
 }
 
 void App::rebuildCalendarSceneCache(const struct tm &local_tm, bool time_valid) {
@@ -1326,9 +1392,15 @@ void App::renderCalendarPage(uint32_t now_ms) {
                                                                         : "portrait_split");
   } else if (time_only_refresh) {
     const uint32_t partial_begin_ms = millis();
-    const calendar::Rect area =
-        calendarHeaderTimeRect(calendar_model_cache_, calendar_layout_cache_);
-    redrawCalendarHeaderTime(calendar_model_cache_, calendar_layout_cache_);
+    calendar::Rect area = calendar::makeRect(0, 0, 0, 0);
+    if (!redrawCalendarHeaderTime(calendar_model_cache_, calendar_layout_cache_, area)) {
+      pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
+      force_calendar_full_refresh_ = false;
+      calendar_partial_refresh_count_ = 0;
+      Serial.println("[CAL] header partial unavailable -> full striped refresh");
+      last_calendar_render_minute_key_ = minute_key;
+      return;
+    }
     Serial.printf("[CAL] header time partial area=(%u,%u,%u,%u) elapsed=%lums\n",
                   area.x, area.y, area.w, area.h,
                   static_cast<unsigned long>(millis() - partial_begin_ms));

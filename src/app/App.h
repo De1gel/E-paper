@@ -58,6 +58,12 @@ class App {
   bool isEpd4Name(const String &name) const;
   void renderCalendarPage(uint32_t now_ms);
   void clearCalendarFrame(uint8_t color_nibble);
+  bool calendarUsesPortraitRotation() const;
+  uint16_t calendarLogicalWidth() const;
+  uint16_t calendarLogicalHeight() const;
+  bool calendarLogicalToPhysical(uint16_t x, uint16_t y, uint16_t &physical_x,
+                                 uint16_t &physical_y) const;
+  calendar::Rect calendarLogicalRectToPhysical(const calendar::Rect &rect) const;
   void setCalendarPixel(uint16_t x, uint16_t y, uint8_t color_nibble);
   void fillCalendarRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble);
   void drawCalendarRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble);
@@ -70,8 +76,9 @@ class App {
   void drawCalendarScene(const struct tm &local_tm, bool time_valid);
   calendar::Rect calendarHeaderTimeRect(const calendar::CalendarModel &model,
                                         const calendar::CalendarLayout &layout) const;
-  void redrawCalendarHeaderTime(const calendar::CalendarModel &model,
-                                const calendar::CalendarLayout &layout);
+  bool redrawCalendarHeaderTime(const calendar::CalendarModel &model,
+                                const calendar::CalendarLayout &layout,
+                                calendar::Rect &physical_area);
   void pushCalendarFullRefresh();
   void pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
                                       const calendar::CalendarLayout &layout);
