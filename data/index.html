@@ -273,6 +273,16 @@
             </select>
           </div>
           <div class="field"><label>日历刷新间隔（秒）</label><input id="calendarSec" type="number" min="60" placeholder="900"></div>
+          <div class="field">
+            <label>时间刷新间隔</label>
+            <select id="calendarTimeRefreshSec">
+              <option value="600">10 分钟</option>
+              <option value="1200">20 分钟</option>
+              <option value="1800">30 分钟</option>
+              <option value="3600">60 分钟</option>
+              <option value="0">与日历页同时刷新</option>
+            </select>
+          </div>
           <div class="field" style="grid-column:1 / -1;"><label>日历数据 URL（预留）</label><input id="calendarUrl" placeholder="保留字段，当前离线日历不依赖该 URL"></div>
         </div>
         <div class="small" style="margin-top:8px">离线日历仅依赖设备本地时间；联网后会自动校时。</div>

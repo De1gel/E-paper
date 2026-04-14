@@ -38,6 +38,7 @@ class WifiManager {
     bool calendar_enabled = false;
     String calendar_layout;
     uint32_t calendar_refresh_sec = 900;
+    uint32_t calendar_time_refresh_sec = 600;
     String calendar_url;
     String weather_city;
     String weather_lat;

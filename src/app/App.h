@@ -42,7 +42,8 @@ class App {
   void updatePhotoCarousel(uint32_t now_ms);
   void nextPhoto(const char *reason, uint32_t now_ms);
   void prevPhoto(const char *reason, uint32_t now_ms);
-  void beginDisplaySession();
+  bool willUseCalendarPartialRefresh(uint32_t now_ms) const;
+  void beginDisplaySession(bool partial_refresh = false);
   void endDisplaySession();
   void setState(AppState next);
   bool ensureCalendarFrameBuffer(const char *reason);

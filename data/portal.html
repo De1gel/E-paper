@@ -293,6 +293,16 @@
             <label data-i18n="cfg.calendar.refresh_sec">日历刷新间隔（秒）</label>
             <input id="calendarSec" type="number" min="60" placeholder="900">
           </div>
+          <div class="field">
+            <label data-i18n="cfg.calendar.time_refresh">时间刷新间隔</label>
+            <select id="calendarTimeRefreshSec">
+              <option value="600" data-i18n="cfg.calendar.time_refresh_10">10 分钟</option>
+              <option value="1200" data-i18n="cfg.calendar.time_refresh_20">20 分钟</option>
+              <option value="1800" data-i18n="cfg.calendar.time_refresh_30">30 分钟</option>
+              <option value="3600" data-i18n="cfg.calendar.time_refresh_60">60 分钟</option>
+              <option value="0" data-i18n="cfg.calendar.time_refresh_follow">与日历页同时刷新</option>
+            </select>
+          </div>
           <div class="field" style="grid-column:1 / -1;">
             <label data-i18n="cfg.calendar.url">日历数据 URL（预留）</label>
             <input id="calendarUrl" data-i18n-placeholder="cfg.calendar.url_ph" placeholder="保留字段，当前离线日历不依赖该 URL">

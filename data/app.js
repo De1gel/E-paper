@@ -24,6 +24,7 @@ const ssid = document.getElementById("ssid");
 const pass = document.getElementById("pass");
 const sec = document.getElementById("sec");
 const calendarSec = document.getElementById("calendarSec");
+const calendarTimeRefreshSec = document.getElementById("calendarTimeRefreshSec");
 const calendarUrl = document.getElementById("calendarUrl");
 const calendarLayout = document.getElementById("calendarLayout");
 const weatherLocation = document.getElementById("weatherLocation");
@@ -97,6 +98,12 @@ const I18N = {
     "cfg.calendar.layout_landscape": "横屏半屏（左日历 / 右日程）",
     "cfg.calendar.layout_portrait": "竖屏半屏（上日历 / 下日程）",
     "cfg.calendar.refresh_sec": "日历刷新间隔（秒）",
+    "cfg.calendar.time_refresh": "时间刷新间隔",
+    "cfg.calendar.time_refresh_10": "10 分钟",
+    "cfg.calendar.time_refresh_20": "20 分钟",
+    "cfg.calendar.time_refresh_30": "30 分钟",
+    "cfg.calendar.time_refresh_60": "60 分钟",
+    "cfg.calendar.time_refresh_follow": "与日历页同时刷新",
     "cfg.calendar.url": "日历数据 URL（预留）",
     "cfg.calendar.url_ph": "保留字段，当前离线日历不依赖该 URL",
     "cfg.calendar.note": "离线日历仅依赖设备本地时间；联网后会自动校时。",
@@ -275,6 +282,12 @@ const I18N = {
     "cfg.calendar.layout_landscape": "Landscape Split (calendar left / schedule right)",
     "cfg.calendar.layout_portrait": "Portrait Split (calendar top / schedule bottom)",
     "cfg.calendar.refresh_sec": "Refresh interval (seconds)",
+    "cfg.calendar.time_refresh": "Time refresh interval",
+    "cfg.calendar.time_refresh_10": "10 minutes",
+    "cfg.calendar.time_refresh_20": "20 minutes",
+    "cfg.calendar.time_refresh_30": "30 minutes",
+    "cfg.calendar.time_refresh_60": "60 minutes",
+    "cfg.calendar.time_refresh_follow": "Follow calendar page refresh",
     "cfg.calendar.url": "Calendar URL (reserved)",
     "cfg.calendar.url_ph": "Reserved field; offline calendar does not use this URL now",
     "cfg.calendar.note": "Offline calendar uses local time only; network sync updates clock automatically.",
@@ -453,6 +466,12 @@ const I18N = {
     "cfg.calendar.layout_landscape": "Partage paysage (calendrier gauche / planning droite)",
     "cfg.calendar.layout_portrait": "Partage portrait (calendrier haut / planning bas)",
     "cfg.calendar.refresh_sec": "Intervalle de rafraichissement (secondes)",
+    "cfg.calendar.time_refresh": "Intervalle d actualisation de l heure",
+    "cfg.calendar.time_refresh_10": "10 minutes",
+    "cfg.calendar.time_refresh_20": "20 minutes",
+    "cfg.calendar.time_refresh_30": "30 minutes",
+    "cfg.calendar.time_refresh_60": "60 minutes",
+    "cfg.calendar.time_refresh_follow": "Suivre le rafraichissement du calendrier",
     "cfg.calendar.url": "URL calendrier (reserve)",
     "cfg.calendar.url_ph": "Champ reserve ; le mode hors ligne ne l utilise pas",
     "cfg.calendar.note": "Le calendrier hors ligne utilise l heure locale ; la connexion reseau synchronise l horloge.",
@@ -597,6 +616,11 @@ const I18N = {
 function normalizeLang(raw) {
   const lang = String(raw || "").trim().toLowerCase();
   return (lang === "en" || lang === "fr") ? lang : "zh";
+}
+
+function normalizeCalendarTimeRefreshSec(raw) {
+  const value = Number(raw);
+  return [0, 600, 1200, 1800, 3600].includes(value) ? value : 600;
 }
 
 function t(key) {
@@ -932,6 +956,9 @@ async function loadCfg() {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
   calendarSec.value = j.calendar_refresh_sec || 900;
+  if (calendarTimeRefreshSec) {
+    calendarTimeRefreshSec.value = String(normalizeCalendarTimeRefreshSec(j.calendar_time_refresh_sec));
+  }
   calendarUrl.value = j.calendar_url || "";
   weatherLocation.value = j.weather_city || "";
   weatherLat.value = j.weather_lat || "";
@@ -962,8 +989,11 @@ async function saveCfg() {
     }
 
     const calendarLayoutValue = calendarLayout ? calendarLayout.value : "landscape_split";
+    const calendarTimeRefreshValue = calendarTimeRefreshSec
+      ? normalizeCalendarTimeRefreshSec(calendarTimeRefreshSec.value)
+      : 600;
     const langValue = uiLanguage ? normalizeLang(uiLanguage.value) : "zh";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",

@@ -5,6 +5,25 @@
 namespace partial_refresh {
 namespace {
 constexpr uint8_t kCmdPartialWindow = 0x83;
+constexpr uint16_t kPartialXAlignPx = 4u;
+
+void normalizePartialWindow(uint16_t &x, uint16_t &width) {
+  if (width == 0) {
+    return;
+  }
+  const uint16_t aligned_x = static_cast<uint16_t>(x & ~(kPartialXAlignPx - 1u));
+  const uint16_t grow_left = static_cast<uint16_t>(x - aligned_x);
+  x = aligned_x;
+  width = static_cast<uint16_t>(width + grow_left);
+  const uint16_t remainder = static_cast<uint16_t>(width % kPartialXAlignPx);
+  if (remainder != 0u) {
+    width = static_cast<uint16_t>(width + (kPartialXAlignPx - remainder));
+  }
+  if (x + width > EPD_WIDTH) {
+    width = static_cast<uint16_t>(EPD_WIDTH - x);
+    width = static_cast<uint16_t>(width - (width % kPartialXAlignPx));
+  }
+}
 
 void triggerPartialRefresh() {
   EPD_W21_WriteCMD(PON);
@@ -41,6 +60,10 @@ void fillWindowSolid(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
   lcd_chkstatus();
 
   EPD_W21_WriteCMD(DTM);
+  // Partial-window writes on this panel expect one mode byte before pixel data.
+  // Without it, the first pixel byte is consumed as the mode and the whole window
+  // data stream shifts, which visibly skews rendered glyphs.
+  EPD_W21_WriteDATA(0x00);
   const uint8_t packed =
       static_cast<uint8_t>(((color_nibble & 0x0F) << 4) | (color_nibble & 0x0F));
 
@@ -77,6 +100,10 @@ void writeWindowFromBuffer(const uint8_t *packed_buffer, uint16_t buffer_width_p
   if (width == 0 || height == 0) {
     return;
   }
+  normalizePartialWindow(x, width);
+  if (width == 0) {
+    return;
+  }
 
   const uint16_t x_end = static_cast<uint16_t>(x + width - 1u);
   const uint16_t y_end = static_cast<uint16_t>(y + height - 1u);
@@ -94,6 +121,8 @@ void writeWindowFromBuffer(const uint8_t *packed_buffer, uint16_t buffer_width_p
   lcd_chkstatus();
 
   EPD_W21_WriteCMD(DTM);
+  // Match the verified partial-refresh command chain from the panel sample code.
+  EPD_W21_WriteDATA(0x00);
   const uint16_t src_stride_bytes = static_cast<uint16_t>(buffer_width_px / 2u);
   const uint16_t write_bytes_per_row = static_cast<uint16_t>(width / 2u);
   for (uint16_t row = 0; row < height; ++row) {
@@ -126,21 +155,8 @@ void writeWindowFromPacked(const uint8_t *packed_frame, uint16_t frame_width_px,
   if (width == 0 || height == 0) {
     return;
   }
-
-  if ((x & 0x01u) != 0u) {
-    if (x == 0) {
-      return;
-    }
-    --x;
-    ++width;
-  }
-  if ((width & 0x01u) != 0u) {
-    ++width;
-    if (x + width > EPD_WIDTH) {
-      width = static_cast<uint16_t>(width - 2u);
-    }
-  }
-  if (width < 2u) {
+  normalizePartialWindow(x, width);
+  if (width < kPartialXAlignPx) {
     return;
   }
 
@@ -160,6 +176,8 @@ void writeWindowFromPacked(const uint8_t *packed_frame, uint16_t frame_width_px,
   lcd_chkstatus();
 
   EPD_W21_WriteCMD(DTM);
+  // Match the verified partial-refresh command chain from the panel sample code.
+  EPD_W21_WriteDATA(0x00);
   const uint16_t src_stride_bytes = static_cast<uint16_t>(frame_width_px / 2u);
   const uint16_t write_bytes_per_row = static_cast<uint16_t>(width / 2u);
   for (uint16_t row = 0; row < height; ++row) {

@@ -34,6 +34,19 @@ constexpr uint8_t kI2cSdaPin = 21;
 constexpr uint8_t kI2cSclPin = 22;
 constexpr uint8_t kAht20Address = 0x38;
 
+uint32_t normalizeCalendarTimeRefreshSec(uint32_t value) {
+  switch (value) {
+    case 0u:
+    case 600u:
+    case 1200u:
+    case 1800u:
+    case 3600u:
+      return value;
+    default:
+      return 600u;
+  }
+}
+
 String jsonEscape(const String &s) {
   String out;
   out.reserve(s.length() + 8);
@@ -742,6 +755,10 @@ void WifiManager::loadSettings() {
   if (prefs_->isKey("cal_en")) settings_.calendar_enabled = prefs_->getBool("cal_en", false);
   if (prefs_->isKey("cal_layout")) settings_.calendar_layout = prefs_->getString("cal_layout", "landscape_split");
   if (prefs_->isKey("cal_sec")) settings_.calendar_refresh_sec = prefs_->getUInt("cal_sec", 900);
+  if (prefs_->isKey("cal_time_sec")) {
+    settings_.calendar_time_refresh_sec =
+        prefs_->getUInt("cal_time_sec", settings_.calendar_time_refresh_sec);
+  }
   if (prefs_->isKey("cal_url")) settings_.calendar_url = prefs_->getString("cal_url", kDefaultCalendarUrl);
   if (prefs_->isKey("weather_city")) settings_.weather_city = prefs_->getString("weather_city", kDefaultWeatherCity);
   if (prefs_->isKey("weather_lat")) settings_.weather_lat = prefs_->getString("weather_lat", kDefaultWeatherLat);
@@ -757,6 +774,8 @@ void WifiManager::loadSettings() {
   if (!(settings_.ui_language == "zh" || settings_.ui_language == "en" || settings_.ui_language == "fr")) {
     settings_.ui_language = kDefaultUiLanguage;
   }
+  settings_.calendar_time_refresh_sec =
+      normalizeCalendarTimeRefreshSec(settings_.calendar_time_refresh_sec);
   next_calendar_event_id_ =
       static_cast<uint16_t>(prefs_->getUInt("cal_next_id", static_cast<uint32_t>(next_calendar_event_id_)));
   if (next_calendar_event_id_ == 0) {
@@ -785,6 +804,7 @@ void WifiManager::saveSettings() {
   prefs_->putBool("cal_en", settings_.calendar_enabled);
   prefs_->putString("cal_layout", settings_.calendar_layout);
   prefs_->putUInt("cal_sec", settings_.calendar_refresh_sec);
+  prefs_->putUInt("cal_time_sec", settings_.calendar_time_refresh_sec);
   prefs_->putString("cal_url", settings_.calendar_url);
   prefs_->putString("weather_city", settings_.weather_city);
   prefs_->putString("weather_lat", settings_.weather_lat);
@@ -805,6 +825,7 @@ void WifiManager::applyDefaultSettings() {
   settings_.calendar_enabled = false;
   settings_.calendar_layout = "landscape_split";
   settings_.calendar_refresh_sec = 900;
+  settings_.calendar_time_refresh_sec = 600;
   settings_.calendar_url = kDefaultCalendarUrl;
   settings_.weather_city = kDefaultWeatherCity;
   settings_.weather_lat = kDefaultWeatherLat;
@@ -2531,6 +2552,7 @@ void WifiManager::handleSettingsGet() {
   json += settings_.calendar_enabled ? "true," : "false,";
   json += "\"calendar_layout\":\"" + jsonEscape(settings_.calendar_layout) + "\",";
   json += "\"calendar_refresh_sec\":" + String(settings_.calendar_refresh_sec) + ",";
+  json += "\"calendar_time_refresh_sec\":" + String(settings_.calendar_time_refresh_sec) + ",";
   json += "\"calendar_url\":\"" + jsonEscape(settings_.calendar_url) + "\",";
   json += "\"weather_city\":\"" + jsonEscape(settings_.weather_city) + "\",";
   json += "\"weather_lat\":\"" + jsonEscape(settings_.weather_lat) + "\",";
@@ -2563,6 +2585,10 @@ void WifiManager::handleSettingsPost() {
     if (settings_.calendar_refresh_sec < 60) settings_.calendar_refresh_sec = 60;
     if (settings_.calendar_refresh_sec > 86400) settings_.calendar_refresh_sec = 86400;
   }
+  if (server_->hasArg("calendar_time_refresh_sec")) {
+    settings_.calendar_time_refresh_sec = normalizeCalendarTimeRefreshSec(
+        static_cast<uint32_t>(server_->arg("calendar_time_refresh_sec").toInt()));
+  }
   if (server_->hasArg("calendar_url")) settings_.calendar_url = server_->arg("calendar_url");
   if (server_->hasArg("weather_city")) settings_.weather_city = server_->arg("weather_city");
   if (server_->hasArg("weather_lat")) settings_.weather_lat = server_->arg("weather_lat");
@@ -2590,6 +2616,8 @@ void WifiManager::handleSettingsPost() {
   if (!(settings_.calendar_layout == "landscape_split" || settings_.calendar_layout == "portrait_split")) {
     settings_.calendar_layout = "landscape_split";
   }
+  settings_.calendar_time_refresh_sec =
+      normalizeCalendarTimeRefreshSec(settings_.calendar_time_refresh_sec);
   if (settings_.calendar_url.length() == 0) {
     settings_.calendar_url = kDefaultCalendarUrl;
   }
