@@ -72,14 +72,32 @@
 - 轮播间隔期间 MCU 仍处于普通轮询状态
 - 尚未形成按模式分级的整机休眠策略
 
-## 6. 下一步建议
+## 6. 2026-04-17 设计收敛
 
-1. 在 `Normal` 模式引入 MCU 级休眠  
-   - 让照片轮播等待期和日历等待期不再空转
+当前已经完成一版贴合现有代码的 `light sleep` 设计，详见：
 
-2. 明确 `ConfigAP / ConfigSTA` 会话的功耗边界  
-   - 特别是 STA 运行态是否需要恢复空闲超时
+- `docs/LIGHT_SLEEP_DESIGN.md`
 
-3. 把低功耗验收拆成两层  
+当前设计结论：
+
+- 第一版只做 `light sleep`
+- 只在 `Normal` 模式下启用
+- 只覆盖 `Photo` / `Calendar` 的等待期
+- `ConfigWait / ConfigAP / ConfigSTA` 第一版不进入 `light sleep`
+- WiFi/AP/STA/日历同步期间第一版禁止进入 `light sleep`
+
+## 7. 下一步建议
+
+1. 新增 `LightSleepController`  
+   - 负责 RTC 定时唤醒和按键唤醒配置
+
+2. 在 `App` 中新增可睡判定和下一次唤醒 deadline 计算  
+   - 区分 `Photo` 和 `Calendar`
+
+3. 在 `main.cpp` 中把固定 `delay(50)` 改成  
+   - 可睡时进入 `light sleep`
+   - 不可睡时回退短 `delay`
+
+4. 把低功耗验收拆成两层  
    - 面板 / 外设电源收敛
    - MCU 级休眠收敛

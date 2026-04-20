@@ -6,6 +6,10 @@
 #include <WiFi.h>
 #include <math.h>
 
+#include "system/CalendarData.h"
+#include "system/CalendarStore.h"
+#include "system/SettingsStore.h"
+
 class WebServer;
 class Preferences;
 
@@ -13,38 +17,7 @@ namespace appfw {
 
 class WifiManager {
  public:
-  struct CalendarEvent {
-    uint16_t id = 0;
-    String title;
-    String date;       // YYYY-MM-DD for one-time event.
-    String time_hhmm;  // HH:MM
-    String end_time_hhmm;  // Optional HH:MM, reserved for future sync.
-    String color;      // black/white/yellow/red/blue/green
-    String repeat;     // once/daily/weekly
-    int8_t weekday = -1;  // 0-6 (Mon-Sun), used for weekly.
-    String source;  // manual/outlook/google...
-    String external_id;  // Provider-side stable id.
-    String updated_at;   // Optional ISO-8601 or epoch string.
-  };
-
-  static constexpr size_t kMaxCalendarEvents = 24;
-
-  struct Settings {
-    String sta_ssid;
-    String sta_pass;
-    String ui_language;
-    String timezone;
-    uint32_t photo_interval_sec = 3600;
-    bool calendar_enabled = false;
-    String calendar_layout;
-    uint32_t calendar_refresh_sec = 900;
-    uint32_t calendar_time_refresh_sec = 600;
-    String calendar_url;
-    String weather_city;
-    String weather_lat;
-    String weather_lon;
-    String weather_url;
-  };
+  using Settings = WifiSettings;
 
   void begin();
   void update(uint32_t now_ms);
@@ -54,10 +27,15 @@ class WifiManager {
 
   bool consumeAutoExitRequested();
   bool consumeStaConnectFailed();
+  bool isStaConnecting() const;
   bool isStaConnected() const;
+  bool hasStaCredentials() const;
+  bool isCalendarSyncBusy() const;
+  void requestCalendarSyncNow();
   const Settings &settings() const;
   size_t calendarEventCount() const;
   bool calendarEventAt(size_t index, CalendarEvent &event) const;
+  void sampleSensorsNow(bool assume_peripheral_powered = false);
   float temperatureC() const { return temperature_c_; }
   float humidityPct() const { return humidity_pct_; }
   String weatherCity() const { return settings_.weather_city; }
@@ -73,18 +51,8 @@ class WifiManager {
   void loadSettings();
   void saveSettings();
   void applyDefaultSettings();
-  String serializeCalendarEvents() const;
-  void deserializeCalendarEvents(const String &packed);
-  String calendarEventsJson() const;
-  bool normalizeCalendarTime(const String &raw, String &normalized) const;
-  bool normalizeCalendarDate(const String &raw, String &normalized) const;
-  String normalizeCalendarColor(const String &raw) const;
-  String normalizeCalendarRepeat(const String &raw) const;
-  String normalizeCalendarSource(const String &raw) const;
-  String normalizeCalendarExternalId(const String &raw) const;
-  String normalizeCalendarUpdatedAt(const String &raw) const;
-  int findCalendarEventIndexById(uint16_t id) const;
-  int findCalendarEventIndexByExternal(const String &source, const String &external_id) const;
+  void maybeSyncCalendarUrl(uint32_t now_ms);
+  bool syncCalendarFromUrl(String &error_msg);
   void registerWifiEvents();
   void handleWifiEvent(arduino_event_id_t event, arduino_event_info_t info);
   const char *wifiStatusName(int status) const;
@@ -121,6 +89,7 @@ class WifiManager {
   void handleStatus();
   void handleSettingsGet();
   void handleSettingsPost();
+  void handleCalendarSyncNow();
   void handleCalendarEventsGet();
   void handleCalendarEventsPost();
   void handleCalendarEventsDelete();
@@ -137,9 +106,7 @@ class WifiManager {
 
   State state_ = State::Idle;
   Settings settings_{};
-  CalendarEvent calendar_events_[kMaxCalendarEvents];
-  size_t calendar_event_count_ = 0;
-  uint16_t next_calendar_event_id_ = 1;
+  CalendarStore calendar_store_{};
   bool auto_exit_requested_ = false;
   bool sta_connect_failed_ = false;
   bool upload_ok_ = true;
@@ -156,6 +123,14 @@ class WifiManager {
   uint32_t sta_session_start_ms_ = 0;
   uint32_t last_activity_ms_ = 0;
   uint32_t last_sensor_poll_ms_ = 0;
+  uint32_t last_calendar_sync_ms_ = 0;
+  bool calendar_sync_pending_ = false;
+  time_t last_calendar_sync_epoch_ = 0;
+  String last_calendar_sync_status_{"idle"};
+  String last_calendar_sync_error_{};
+  uint16_t last_calendar_sync_imported_ = 0;
+  uint16_t last_calendar_sync_total_ = 0;
+  uint16_t last_calendar_sync_vevents_ = 0;
   int last_sta_wifi_status_ = -1;
 
   WebServer *server_ = nullptr;
@@ -165,17 +140,18 @@ class WifiManager {
   bool sd_spi_started_ = false;
   bool web_fs_ready_ = false;
   bool wifi_events_registered_ = false;
+  static constexpr uint8_t kPeripheralPowerPin = 32;
 
   static constexpr uint8_t kSdCsPin = 5;
   static constexpr uint8_t kSdSckPin = 18;
   static constexpr uint8_t kSdMisoPin = 19;
   static constexpr uint8_t kSdMosiPin = 23;
-  static constexpr uint8_t kPeripheralPowerPin = 32;
 
   static constexpr uint32_t kStaConnectTimeoutMs = 30000;
   static constexpr uint32_t kApIdleTimeoutMs = 300000;
   static constexpr uint32_t kStaSessionTimeoutMs = 0;
   static constexpr uint32_t kSensorPollIntervalMs = 10000;
+  static constexpr uint32_t kCalendarSyncMinIntervalMs = 900000;
 };
 
 }  // namespace appfw

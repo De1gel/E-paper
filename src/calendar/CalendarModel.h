@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "calendar/CalendarTypes.h"
+#include "system/CalendarData.h"
 #include "system/WifiManager.h"
 
 namespace calendar {
@@ -20,18 +21,24 @@ struct VisibleEvent {
   uint16_t id = 0;
   String title;
   String time_hhmm;
+  String end_time_hhmm;
+  uint16_t start_minute = 0;
+  uint16_t end_minute = 0;
+  uint8_t lane = 0;
+  uint8_t lane_count = 1;
   uint8_t color_nibble = 0;
 };
 
 struct ScheduleGroup {
   String time_hhmm;
   uint8_t event_count = 0;
-  uint8_t event_indices[appfw::WifiManager::kMaxCalendarEvents] = {};
+  uint8_t event_indices[appfw::kMaxCalendarEvents] = {};
 };
 
 struct CalendarModel {
   bool time_valid = false;
   LayoutMode layout_mode = LayoutMode::LandscapeSplit;
+  uint16_t current_minute_of_day = 0;
   String ui_language;
   String title;
   String header_date;
@@ -45,10 +52,10 @@ struct CalendarModel {
   uint8_t month_row_count = 6;
 
   size_t visible_event_count = 0;
-  VisibleEvent visible_events[appfw::WifiManager::kMaxCalendarEvents];
+  VisibleEvent visible_events[appfw::kMaxCalendarEvents];
 
   size_t schedule_group_count = 0;
-  ScheduleGroup schedule_groups[appfw::WifiManager::kMaxCalendarEvents];
+  ScheduleGroup schedule_groups[appfw::kMaxCalendarEvents];
 
   DateCell date_cells[42];
 };

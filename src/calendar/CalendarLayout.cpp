@@ -87,25 +87,24 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
                                 ? (layout.schedule_panel.h - schedule_margin * 2)
                                 : layout.schedule_panel.h));
 
-  layout.list_top = static_cast<uint16_t>(layout.schedule_inner.y + 40);
+  layout.list_top = static_cast<uint16_t>(layout.schedule_inner.y + 8);
   const uint16_t schedule_bottom =
       static_cast<uint16_t>(layout.schedule_inner.y + layout.schedule_inner.h);
   layout.list_bottom = (schedule_bottom > layout.list_top + 8)
                            ? static_cast<uint16_t>(schedule_bottom - 8)
                            : layout.list_top;
-  layout.max_rows =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint8_t>(10) : static_cast<uint8_t>(5);
+  layout.max_rows = 28;
   const uint16_t usable_h = (layout.list_bottom > layout.list_top)
                                 ? static_cast<uint16_t>(layout.list_bottom - layout.list_top)
                                 : 0;
   layout.row_h = (layout.max_rows > 0) ? static_cast<uint16_t>(usable_h / layout.max_rows) : usable_h;
-  if (layout.row_h < 18) {
-    layout.row_h = 18;
+  if (layout.row_h < 10) {
+    layout.row_h = 10;
   }
 
   const uint16_t left_margin = 8;
   const uint16_t right_margin = 8;
-  const uint16_t time_col_w = static_cast<uint16_t>(textWidth3x5("23:59", layout.list_scale) + 8);
+  const uint16_t time_col_w = static_cast<uint16_t>(textWidth3x5("22", layout.list_scale) + 16);
   layout.content_x = static_cast<uint16_t>(layout.schedule_inner.x + left_margin);
   layout.items_x = static_cast<uint16_t>(layout.content_x + time_col_w);
   layout.items_w = static_cast<uint16_t>(

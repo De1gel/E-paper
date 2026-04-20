@@ -1,29 +1,11 @@
 #include "display/PartialRefresh.h"
 
 #include "Display_EPD_W21.h"
+#include "display/PartialRefreshGeometry.h"
 
 namespace partial_refresh {
 namespace {
 constexpr uint8_t kCmdPartialWindow = 0x83;
-constexpr uint16_t kPartialXAlignPx = 4u;
-
-void normalizePartialWindow(uint16_t &x, uint16_t &width) {
-  if (width == 0) {
-    return;
-  }
-  const uint16_t aligned_x = static_cast<uint16_t>(x & ~(kPartialXAlignPx - 1u));
-  const uint16_t grow_left = static_cast<uint16_t>(x - aligned_x);
-  x = aligned_x;
-  width = static_cast<uint16_t>(width + grow_left);
-  const uint16_t remainder = static_cast<uint16_t>(width % kPartialXAlignPx);
-  if (remainder != 0u) {
-    width = static_cast<uint16_t>(width + (kPartialXAlignPx - remainder));
-  }
-  if (x + width > EPD_WIDTH) {
-    width = static_cast<uint16_t>(EPD_WIDTH - x);
-    width = static_cast<uint16_t>(width - (width % kPartialXAlignPx));
-  }
-}
 
 void triggerPartialRefresh() {
   EPD_W21_WriteCMD(PON);
@@ -100,7 +82,7 @@ void writeWindowFromBuffer(const uint8_t *packed_buffer, uint16_t buffer_width_p
   if (width == 0 || height == 0) {
     return;
   }
-  normalizePartialWindow(x, width);
+  normalizePartialWindow(EPD_WIDTH, x, width);
   if (width == 0) {
     return;
   }
@@ -155,8 +137,8 @@ void writeWindowFromPacked(const uint8_t *packed_frame, uint16_t frame_width_px,
   if (width == 0 || height == 0) {
     return;
   }
-  normalizePartialWindow(x, width);
-  if (width < kPartialXAlignPx) {
+  normalizePartialWindow(EPD_WIDTH, x, width);
+  if (width < kPartialWindowAlignPx) {
     return;
   }
 

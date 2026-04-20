@@ -13,6 +13,9 @@ constexpr uint8_t kZhMetaPx = 16;
 constexpr uint8_t kZhScheduleTitlePx = 48;
 constexpr uint8_t kHeaderPx = 24;
 constexpr bool kShowAATestPanel = false;
+constexpr uint16_t kScheduleStartMinute = 8u * 60u;
+constexpr uint16_t kScheduleEndMinute = 22u * 60u;
+constexpr uint8_t kScheduleSlotCount = 28u;
 
 uint8_t asciiPixelHeight(uint8_t scale) {
   return static_cast<uint8_t>(kAsciiBasePx * scale);
@@ -202,6 +205,48 @@ void emitAATestPanel(SceneSink &sink, const CalendarLayout &layout) {
   }
 }
 
+uint16_t timelineYForMinute(const CalendarLayout &layout, uint16_t minute_value) {
+  if (minute_value <= kScheduleStartMinute) {
+    return layout.list_top;
+  }
+  if (minute_value >= kScheduleEndMinute) {
+    return layout.list_bottom;
+  }
+  const uint32_t usable_h =
+      (layout.list_bottom > layout.list_top) ? static_cast<uint32_t>(layout.list_bottom - layout.list_top) : 0u;
+  return static_cast<uint16_t>(
+      layout.list_top +
+      ((static_cast<uint32_t>(minute_value - kScheduleStartMinute) * usable_h) /
+       static_cast<uint32_t>(kScheduleEndMinute - kScheduleStartMinute)));
+}
+
+void emitCurrentTimeMarker(SceneSink &sink, const CalendarLayout &layout,
+                           uint16_t current_minute_of_day) {
+  const uint16_t marker_y = timelineYForMinute(layout, current_minute_of_day);
+  const uint16_t tip_x = static_cast<uint16_t>(layout.items_x);
+  const uint16_t marker_w = 7;
+  const uint16_t marker_h = 9;
+  const int mid_y = static_cast<int>(marker_y);
+  for (uint16_t dx = 0; dx < marker_w; ++dx) {
+    const int span = static_cast<int>((dx * marker_h) / marker_w);
+    const int y0 = mid_y - span / 2;
+    const int y1 = mid_y + span / 2;
+    if (y1 < static_cast<int>(layout.list_top) || y0 > static_cast<int>(layout.list_bottom)) {
+      continue;
+    }
+    const uint16_t clamped_y0 =
+        static_cast<uint16_t>(std::max(y0, static_cast<int>(layout.list_top)));
+    const uint16_t clamped_y1 =
+        static_cast<uint16_t>(std::min(y1, static_cast<int>(layout.list_bottom)));
+    if (clamped_y1 < clamped_y0) {
+      continue;
+    }
+    sink.fillRect(makeRect(static_cast<uint16_t>(tip_x - dx), clamped_y0, 1,
+                           static_cast<uint16_t>(clamped_y1 - clamped_y0 + 1)),
+                  black);
+  }
+}
+
 }  // namespace
 
 void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout, SceneSink &sink) {
@@ -211,8 +256,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       zh_ui ? kZhWeekdayPx
             : static_cast<uint8_t>(asciiPixelHeight(layout.weekday_scale) +
                                    (layout.mode == LayoutMode::LandscapeSplit ? 2 : 1));
-  const uint8_t schedule_title_px = zh_ui ? kZhScheduleTitlePx : asciiPixelHeight(2);
-  const uint8_t item_px = zh_ui ? kZhItemPx : asciiPixelHeight(layout.list_scale);
+  const uint8_t item_px = zh_ui ? static_cast<uint8_t>(14) : static_cast<uint8_t>(10);
   const uint8_t meta_px = zh_ui ? kZhMetaPx : kAsciiBasePx;
   const uint8_t header_px = kHeaderPx;
   const uint8_t day_px =
@@ -282,117 +326,111 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   }
 
   sink.strokeRect(layout.schedule_inner, green);
-  const uint16_t schedule_title_x = static_cast<uint16_t>(layout.schedule_inner.x + 8);
-  const uint16_t schedule_title_y = static_cast<uint16_t>(layout.schedule_inner.y + 8);
-  const uint16_t schedule_title_h = textHeightPx(model.schedule_title, schedule_title_px, schedule_font);
-  const TextFont schedule_title_font =
-      preferredTextFont(model.schedule_title, schedule_font, schedule_title_px);
-  sink.text(schedule_title_x, schedule_title_y, model.schedule_title, schedule_title_px, green,
-            schedule_title_font,
-            preferredAsciiAAMode(model.schedule_title, schedule_title_font, schedule_title_px));
 
   if (kShowAATestPanel && layout.mode == LayoutMode::LandscapeSplit) {
     emitAATestPanel(sink, layout);
     return;
   }
 
-  if (!model.time_valid) {
-    const TextFont no_time_font =
-        preferredTextFont(model.no_time_label, schedule_font, schedule_title_px);
-    sink.text(static_cast<uint16_t>(layout.schedule_panel.x + 20),
-              static_cast<uint16_t>(schedule_title_y + schedule_title_h + 8),
-              model.no_time_label, schedule_title_px, red, no_time_font,
-              preferredAsciiAAMode(model.no_time_label, no_time_font, schedule_title_px));
-  }
+  const uint16_t axis_x = static_cast<uint16_t>(layout.schedule_inner.x + 8);
+  const uint16_t timeline_left = static_cast<uint16_t>(layout.items_x + 2);
+  const uint16_t timeline_right =
+      static_cast<uint16_t>(layout.schedule_inner.x + layout.schedule_inner.w - 8);
+  const uint16_t timeline_w =
+      (timeline_right > timeline_left) ? static_cast<uint16_t>(timeline_right - timeline_left) : 0u;
 
-  uint8_t rendered_rows = 0;
-  for (uint8_t row = 0; row < layout.max_rows; ++row) {
-    const uint16_t y = static_cast<uint16_t>(layout.list_top + row * layout.row_h);
-    if (y + layout.row_h > layout.list_bottom) {
-      break;
+  for (uint8_t slot = 0; slot <= kScheduleSlotCount; ++slot) {
+    const uint16_t minute_value = static_cast<uint16_t>(kScheduleStartMinute + slot * 30u);
+    const uint16_t y = timelineYForMinute(layout, minute_value);
+    const bool is_hour_line = ((slot % 2u) == 0u);
+    if (slot < kScheduleSlotCount) {
+      if (is_hour_line) {
+        const String hour_label = String((minute_value / 60u < 10u) ? "0" : "") +
+                                  String(minute_value / 60u);
+        sink.text(axis_x, static_cast<uint16_t>(y + 1), hour_label, asciiPixelHeight(1), blue,
+                  TextFont::AsciiSmooth,
+                  preferredAsciiAAMode(hour_label, TextFont::AsciiSmooth, asciiPixelHeight(1)));
+      }
     }
-    rendered_rows = static_cast<uint8_t>(row + 1);
-    sink.fillRect(makeRect(static_cast<uint16_t>(layout.schedule_inner.x + 6),
-                           static_cast<uint16_t>(y + layout.row_h - 1),
-                           static_cast<uint16_t>(layout.schedule_inner.w - 12), 1),
-                  green);
-    if (row >= model.schedule_group_count) {
+    if (timeline_w == 0) {
       continue;
     }
-
-    const ScheduleGroup &group = model.schedule_groups[row];
-    const TextFont group_time_font =
-        preferredTextFont(group.time_hhmm, TextFont::Auto, asciiPixelHeight(layout.list_scale));
-    sink.text(layout.content_x, static_cast<uint16_t>(y + 4), group.time_hhmm,
-              asciiPixelHeight(layout.list_scale), blue, group_time_font,
-              preferredAsciiAAMode(group.time_hhmm, group_time_font,
-                                   asciiPixelHeight(layout.list_scale)));
-    if (layout.items_w == 0) {
-      continue;
-    }
-
-    for (uint8_t lane = 0; lane < layout.lane_count; ++lane) {
-      const uint16_t lane_x = static_cast<uint16_t>(layout.items_x + lane * layout.lane_w);
-      const uint16_t lane_inner_x = static_cast<uint16_t>(lane_x + 2);
-      const uint16_t lane_inner_w =
-          static_cast<uint16_t>(layout.lane_w > 4 ? (layout.lane_w - 4) : layout.lane_w);
-      if (lane > 0) {
-        sink.fillRect(makeRect(lane_x, static_cast<uint16_t>(y + 2), 1,
-                               static_cast<uint16_t>(layout.row_h > 4 ? (layout.row_h - 4) : layout.row_h)),
-                      green);
-      }
-
-      bool draw_more = false;
-      uint8_t more_count = 0;
-      if (lane == static_cast<uint8_t>(layout.lane_count - 1) &&
-          group.event_count > static_cast<uint8_t>(layout.lane_count)) {
-        draw_more = true;
-        more_count = static_cast<uint8_t>(group.event_count - (layout.lane_count - 1));
-      }
-      if (!draw_more && lane >= group.event_count) {
-        continue;
-      }
-
-      String title;
-      uint8_t event_color = yellow;
-      if (draw_more) {
-        title = "+" + String(more_count);
-      } else {
-        const VisibleEvent &event = model.visible_events[group.event_indices[lane]];
-        title = event.title;
-        event_color = event.color_nibble;
-      }
-
-      const uint16_t chip_h = static_cast<uint16_t>(layout.row_h > 8 ? (layout.row_h - 8) : 8);
-      const Rect chip = makeRect(lane_inner_x, static_cast<uint16_t>(y + 4), 8, chip_h);
-      sink.fillRect(chip, event_color);
-      sink.strokeRect(chip, black);
-
-      const uint16_t text_x = static_cast<uint16_t>(lane_inner_x + 12);
-      const uint16_t text_space =
-          static_cast<uint16_t>(lane_inner_w > 14 ? (lane_inner_w - 14) : 0);
-      const String visible_title = truncateTextToWidth(title, text_space, item_px, item_font);
-      const TextFont title_font = preferredTextFont(visible_title, item_font, item_px);
-      sink.text(text_x, static_cast<uint16_t>(y + 4),
-                visible_title,
-                item_px, black, title_font,
-                preferredAsciiAAMode(visible_title, title_font, item_px));
-    }
+    const uint16_t line_x = is_hour_line ? timeline_left : static_cast<uint16_t>(timeline_left + 8);
+    const uint16_t line_w = is_hour_line ? timeline_w : static_cast<uint16_t>(timeline_w - 8);
+    sink.fillRect(makeRect(line_x, y, line_w, 1), is_hour_line ? green : blue);
   }
 
-  if (model.schedule_group_count > rendered_rows) {
-    const uint16_t schedule_bottom =
-        static_cast<uint16_t>(layout.schedule_inner.y + layout.schedule_inner.h);
-    const uint16_t footer_y = (layout.list_bottom + meta_px + 4u <= schedule_bottom)
-                                  ? static_cast<uint16_t>(layout.list_bottom + 2)
-                                  : static_cast<uint16_t>(schedule_bottom - meta_px - 4);
-    const String footer_text =
-        "+" + String(model.schedule_group_count - rendered_rows) + " " + model.more_label;
-    const TextFont footer_font = preferredTextFont(footer_text, meta_font, meta_px);
-    sink.text(static_cast<uint16_t>(layout.schedule_inner.x + 8), footer_y,
-              footer_text,
-              meta_px, red, footer_font,
-              preferredAsciiAAMode(footer_text, footer_font, meta_px));
+  if (model.time_valid && timeline_w > 0) {
+    emitCurrentTimeMarker(sink, layout, model.current_minute_of_day);
+  }
+
+  for (size_t i = 0; i < model.visible_event_count; ++i) {
+    const VisibleEvent &event = model.visible_events[i];
+    uint16_t start_minute = event.start_minute;
+    uint16_t end_minute = event.end_minute;
+    if (end_minute <= start_minute) {
+      end_minute = static_cast<uint16_t>(start_minute + 30u);
+    }
+    if (end_minute <= kScheduleStartMinute || start_minute >= kScheduleEndMinute) {
+      continue;
+    }
+    if (start_minute < kScheduleStartMinute) {
+      start_minute = kScheduleStartMinute;
+    }
+    if (end_minute > kScheduleEndMinute) {
+      end_minute = kScheduleEndMinute;
+    }
+
+    const uint16_t y0 = timelineYForMinute(layout, start_minute);
+    const uint16_t y1 = timelineYForMinute(layout, end_minute);
+    uint16_t block_h = (y1 > y0) ? static_cast<uint16_t>(y1 - y0) : static_cast<uint16_t>(layout.row_h);
+    if (block_h < 10) {
+      block_h = 10;
+    }
+
+    const uint8_t lane_count = (event.lane_count == 0) ? 1 : event.lane_count;
+    const uint16_t lane_gap = 3;
+    const uint16_t available_w =
+        (timeline_w > static_cast<uint16_t>((lane_count - 1u) * lane_gap))
+            ? static_cast<uint16_t>(timeline_w - (lane_count - 1u) * lane_gap)
+            : timeline_w;
+    const uint16_t lane_w =
+        (lane_count > 0) ? static_cast<uint16_t>(available_w / lane_count) : available_w;
+    const uint16_t block_x = static_cast<uint16_t>(
+        timeline_left + event.lane * static_cast<uint16_t>(lane_w + lane_gap));
+    const uint16_t block_w =
+        (lane_w > 1) ? static_cast<uint16_t>(lane_w - 1) : lane_w;
+    const Rect block = makeRect(block_x, static_cast<uint16_t>(y0 + 1), block_w,
+                                static_cast<uint16_t>(block_h > 2 ? block_h - 2 : block_h));
+    sink.fillRect(block, event.color_nibble);
+    sink.strokeRect(block, black);
+
+    const uint16_t text_pad_x = 3;
+    const uint16_t text_space =
+        (block.w > text_pad_x * 2) ? static_cast<uint16_t>(block.w - text_pad_x * 2) : 0u;
+    if (text_space == 0 || block.h < 8) {
+      continue;
+    }
+    const String visible_title = truncateTextToWidth(event.title, text_space, item_px, item_font);
+    const TextFont title_font = preferredTextFont(visible_title, item_font, item_px);
+    const uint16_t text_y = static_cast<uint16_t>(
+        block.y + ((block.h > textHeightPx(visible_title, item_px, title_font))
+                        ? (block.h - textHeightPx(visible_title, item_px, title_font)) / 2u
+                        : 0u));
+    sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, item_px, black,
+              title_font, preferredAsciiAAMode(visible_title, title_font, item_px));
+  }
+
+  if (model.visible_event_count == 0 && model.no_time_label.length() > 0) {
+    const uint8_t empty_px = zh_ui ? static_cast<uint8_t>(18) : static_cast<uint8_t>(12);
+    const TextFont empty_font = preferredTextFont(model.no_time_label, schedule_font, empty_px);
+    const uint16_t empty_w = textWidthPx(model.no_time_label, empty_px, empty_font);
+    const uint16_t empty_x = static_cast<uint16_t>(
+        layout.schedule_inner.x +
+        ((layout.schedule_inner.w > empty_w) ? (layout.schedule_inner.w - empty_w) / 2u : 8u));
+    const uint16_t empty_y = static_cast<uint16_t>(layout.schedule_inner.y + 12);
+    sink.text(empty_x, empty_y, model.no_time_label, empty_px, red, empty_font,
+              preferredAsciiAAMode(model.no_time_label, empty_font, empty_px));
   }
 
   if (!model.time_valid || !layout.has_grid) {

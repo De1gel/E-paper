@@ -1,6 +1,7 @@
 #include "calendar/CalendarModel.h"
 
 #include "Display_EPD_W21.h"
+#include "calendar/CalendarLogic.h"
 #include "calendar/CalendarText.h"
 
 namespace calendar {
@@ -46,6 +47,25 @@ String formatTimeHm(const struct tm &local_tm) {
   return twoDigits(local_tm.tm_hour) + ":" + twoDigits(local_tm.tm_min);
 }
 
+bool parseHmToMinutes(const String &value, uint16_t &minutes_out) {
+  String normalized = value;
+  normalized.trim();
+  if (normalized.length() != 5 || normalized[2] != ':') {
+    return false;
+  }
+  if (!isDigit(normalized[0]) || !isDigit(normalized[1]) || !isDigit(normalized[3]) ||
+      !isDigit(normalized[4])) {
+    return false;
+  }
+  const int hour = (normalized[0] - '0') * 10 + (normalized[1] - '0');
+  const int minute = (normalized[3] - '0') * 10 + (normalized[4] - '0');
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return false;
+  }
+  minutes_out = static_cast<uint16_t>(hour * 60 + minute);
+  return true;
+}
+
 int32_t dayKeyFromTm(const struct tm &t) {
   return static_cast<int32_t>((t.tm_year + 1900) * 1000 + t.tm_yday);
 }
@@ -62,8 +82,8 @@ String normalizeUiLanguage(const String &raw) {
 
 void fillUiStrings(CalendarModel &model) {
   if (model.ui_language == "fr") {
-    model.schedule_title = "AGENDA";
-    model.no_time_label = "PAS D HEURE";
+    model.schedule_title = "";
+    model.no_time_label = "";
     model.more_label = "PLUS";
     const char *labels[7] = {"DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"};
     for (uint8_t i = 0; i < 7; ++i) {
@@ -73,9 +93,8 @@ void fillUiStrings(CalendarModel &model) {
   }
 
   if (model.ui_language == "zh") {
-    model.schedule_title = fallbackMissingGlyphs(kZhScheduleTitle, TextFont::Cjk24, "AN PAI");
-    model.no_time_label =
-        fallbackMissingGlyphs(kZhNoTimeLabel, TextFont::Cjk24, "WU SHI JIAN");
+    model.schedule_title = "";
+    model.no_time_label = "";
     model.more_label = fallbackMissingGlyphs(kZhMoreLabel, TextFont::Cjk16, "GENG DUO");
     for (uint8_t i = 0; i < 7; ++i) {
       model.weekday_labels[i] =
@@ -84,8 +103,8 @@ void fillUiStrings(CalendarModel &model) {
     return;
   }
 
-  model.schedule_title = "SCHEDULE";
-  model.no_time_label = "NO TIME";
+  model.schedule_title = "";
+  model.no_time_label = "";
   model.more_label = "MORE";
   const char *labels[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
   for (uint8_t i = 0; i < 7; ++i) {
@@ -105,15 +124,25 @@ uint8_t calendarColorToNibble(const String &raw) {
   return blue;
 }
 
-bool calendarEventMatchesToday(const appfw::WifiManager::CalendarEvent &event, const String &today_ymd,
-                               int today_weekday) {
-  if (event.repeat == "daily") {
-    return true;
+constexpr uint16_t kScheduleStartMinute = 8u * 60u;
+constexpr uint16_t kScheduleEndMinute = 22u * 60u;
+
+void assignTimelineLanes(CalendarModel &model) {
+  if (model.visible_event_count == 0) {
+    return;
   }
-  if (event.repeat == "weekly") {
-    return event.weekday == today_weekday;
+  TimelineEventSlot slots[appfw::kMaxCalendarEvents] = {};
+  for (size_t i = 0; i < model.visible_event_count; ++i) {
+    slots[i].start_minute = model.visible_events[i].start_minute;
+    slots[i].end_minute = model.visible_events[i].end_minute;
+    slots[i].lane = model.visible_events[i].lane;
+    slots[i].lane_count = model.visible_events[i].lane_count;
   }
-  return event.date == today_ymd;
+  assignTimelineLanes(slots, model.visible_event_count, appfw::kMaxCalendarEvents);
+  for (size_t i = 0; i < model.visible_event_count; ++i) {
+    model.visible_events[i].lane = slots[i].lane;
+    model.visible_events[i].lane_count = slots[i].lane_count;
+  }
 }
 
 bool isWeekendColumn(int col) {
@@ -128,6 +157,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   model = CalendarModel{};
   model.time_valid = time_valid;
   model.layout_mode = layout_mode;
+  model.current_minute_of_day = static_cast<uint16_t>(local_tm.tm_hour * 60 + local_tm.tm_min);
   model.ui_language = normalizeUiLanguage(ui_language);
   fillUiStrings(model);
   model.title = "-- -- --";
@@ -156,12 +186,14 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   const int today_weekday = time_valid ? ((local_tm.tm_wday + 6) % 7) : -1;
   const String today_ymd = time_valid ? formatDateYmd(local_tm) : "";
   for (size_t i = 0; i < wifi_manager.calendarEventCount(); ++i) {
-    appfw::WifiManager::CalendarEvent event;
+    appfw::CalendarEvent event;
     if (!wifi_manager.calendarEventAt(i, event)) {
       continue;
     }
-    if (!time_valid || calendarEventMatchesToday(event, today_ymd, today_weekday)) {
-      if (model.visible_event_count >= appfw::WifiManager::kMaxCalendarEvents) {
+    if (!time_valid || calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday,
+                                                           event.date.c_str(), today_ymd.c_str(),
+                                                           today_weekday)) {
+      if (model.visible_event_count >= appfw::kMaxCalendarEvents) {
         break;
       }
       VisibleEvent &dst = model.visible_events[model.visible_event_count++];
@@ -176,6 +208,21 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
         dst.title = sanitizeDisplayText(dst.title, "ITEM");
       }
       dst.time_hhmm = event.time_hhmm;
+      dst.end_time_hhmm = event.end_time_hhmm;
+      uint16_t start_minute = 0;
+      if (!parseHmToMinutes(event.time_hhmm, start_minute)) {
+        start_minute = kScheduleStartMinute;
+      }
+      uint16_t end_minute = static_cast<uint16_t>(start_minute + 30u);
+      uint16_t parsed_end = 0;
+      if (parseHmToMinutes(event.end_time_hhmm, parsed_end) && parsed_end > start_minute) {
+        end_minute = parsed_end;
+      }
+      if (end_minute <= start_minute) {
+        end_minute = static_cast<uint16_t>(start_minute + 30u);
+      }
+      dst.start_minute = start_minute;
+      dst.end_minute = end_minute;
       dst.color_nibble = calendarColorToNibble(event.color);
     }
   }
@@ -183,12 +230,15 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   for (size_t i = 0; i + 1 < model.visible_event_count; ++i) {
     for (size_t j = i + 1; j < model.visible_event_count; ++j) {
       bool swap_needed = false;
-      if (model.visible_events[j].time_hhmm < model.visible_events[i].time_hhmm) {
+      if (model.visible_events[j].start_minute < model.visible_events[i].start_minute) {
         swap_needed = true;
-      } else if (model.visible_events[j].time_hhmm == model.visible_events[i].time_hhmm &&
+      } else if (model.visible_events[j].start_minute == model.visible_events[i].start_minute &&
+                 model.visible_events[j].end_minute > model.visible_events[i].end_minute) {
+        swap_needed = true;
+      } else if (model.visible_events[j].start_minute == model.visible_events[i].start_minute &&
                  model.visible_events[j].title < model.visible_events[i].title) {
         swap_needed = true;
-      } else if (model.visible_events[j].time_hhmm == model.visible_events[i].time_hhmm &&
+      } else if (model.visible_events[j].start_minute == model.visible_events[i].start_minute &&
                  model.visible_events[j].title == model.visible_events[i].title &&
                  model.visible_events[j].id < model.visible_events[i].id) {
         swap_needed = true;
@@ -200,23 +250,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
       }
     }
   }
-
-  for (size_t i = 0; i < model.visible_event_count; ++i) {
-    if (model.schedule_group_count == 0 ||
-        model.schedule_groups[model.schedule_group_count - 1].time_hhmm !=
-            model.visible_events[i].time_hhmm) {
-      if (model.schedule_group_count >= appfw::WifiManager::kMaxCalendarEvents) {
-        break;
-      }
-      ScheduleGroup &group = model.schedule_groups[model.schedule_group_count++];
-      group.time_hhmm = model.visible_events[i].time_hhmm;
-      group.event_count = 0;
-    }
-    ScheduleGroup &group = model.schedule_groups[model.schedule_group_count - 1];
-    if (group.event_count < appfw::WifiManager::kMaxCalendarEvents) {
-      group.event_indices[group.event_count++] = static_cast<uint8_t>(i);
-    }
-  }
+  assignTimelineLanes(model);
 
   if (!time_valid) {
     return;

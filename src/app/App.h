@@ -43,6 +43,7 @@ class App {
   void nextPhoto(const char *reason, uint32_t now_ms);
   void prevPhoto(const char *reason, uint32_t now_ms);
   bool willUseCalendarPartialRefresh(uint32_t now_ms) const;
+  bool ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms);
   void beginDisplaySession(bool partial_refresh = false);
   void endDisplaySession();
   void setState(AppState next);
@@ -76,9 +77,19 @@ class App {
   void drawCalendarScene(const struct tm &local_tm, bool time_valid);
   calendar::Rect calendarHeaderTimeRect(const calendar::CalendarModel &model,
                                         const calendar::CalendarLayout &layout) const;
+  calendar::Rect calendarHeaderWeatherRect(const calendar::CalendarModel &model,
+                                           const calendar::CalendarLayout &layout) const;
+  calendar::Rect calendarHeaderSensorsRect(const calendar::CalendarModel &model,
+                                           const calendar::CalendarLayout &layout) const;
   bool redrawCalendarHeaderTime(const calendar::CalendarModel &model,
                                 const calendar::CalendarLayout &layout,
                                 calendar::Rect &physical_area);
+  bool redrawCalendarHeaderWeather(const calendar::CalendarModel &model,
+                                   const calendar::CalendarLayout &layout,
+                                   calendar::Rect &physical_area);
+  bool redrawCalendarHeaderSensors(const calendar::CalendarModel &model,
+                                   const calendar::CalendarLayout &layout,
+                                   calendar::Rect &physical_area);
   void pushCalendarFullRefresh();
   void pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
                                       const calendar::CalendarLayout &layout);
@@ -104,6 +115,8 @@ class App {
   calendar::CalendarLayout calendar_layout_cache_{};
   bool force_calendar_full_refresh_ = true;
   uint16_t calendar_partial_refresh_count_ = 0;
+  bool calendar_pre_refresh_sync_waiting_ = false;
+  bool calendar_pre_refresh_sync_started_session_ = false;
   uint32_t last_calendar_check_ms_ = 0;
   int32_t last_calendar_day_key_ = -1;
   int32_t last_calendar_render_minute_key_ = -1;
