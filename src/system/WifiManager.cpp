@@ -701,6 +701,12 @@ bool WifiManager::isCalendarSyncBusy() const {
           (calendar_sync_pending_ || last_calendar_sync_status_ == "running"));
 }
 
+bool WifiManager::blocksLightSleep() const {
+  return state_ != State::Idle ||
+         calendar_sync_pending_ ||
+         last_calendar_sync_status_ == "running";
+}
+
 void WifiManager::requestCalendarSyncNow() {
   calendar_sync_pending_ = true;
   last_calendar_sync_ms_ = 0;

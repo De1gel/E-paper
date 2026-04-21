@@ -38,14 +38,17 @@ void InputManager::update(uint32_t now_ms) {
     mid_.stable_pressed = mid_.raw_pressed;
     if (mid_.stable_pressed) {
       mid_.pressed_at_ms = now_ms;
+      mid_.long_sent = false;
     } else {
-      const uint32_t press_ms = now_ms - mid_.pressed_at_ms;
-      if (press_ms >= kLongPressMs) {
-        pushEvent(InputEvent::MidLong);
-      } else {
+      if (!mid_.long_sent) {
         pushEvent(InputEvent::MidShort);
       }
     }
+  }
+  if (mid_.stable_pressed && !mid_.long_sent &&
+      (now_ms - mid_.pressed_at_ms) >= kLongPressMs) {
+    mid_.long_sent = true;
+    pushEvent(InputEvent::MidLong);
   }
 }
 
@@ -84,6 +87,7 @@ void InputManager::updateKey(KeyState &key, uint32_t now_ms, InputEvent short_ev
   key.stable_pressed = key.raw_pressed;
   if (key.stable_pressed) {
     key.pressed_at_ms = now_ms;
+    key.long_sent = false;
   } else {
     pushEvent(short_evt);
   }

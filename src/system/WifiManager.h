@@ -31,6 +31,7 @@ class WifiManager {
   bool isStaConnected() const;
   bool hasStaCredentials() const;
   bool isCalendarSyncBusy() const;
+  bool blocksLightSleep() const;
   void requestCalendarSyncNow();
   const Settings &settings() const;
   size_t calendarEventCount() const;

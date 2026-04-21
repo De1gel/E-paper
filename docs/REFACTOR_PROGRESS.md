@@ -1,6 +1,6 @@
 # Refactor Progress
 
-更新时间：2026-04-17
+更新时间：2026-04-21
 
 ## 用途
 
@@ -24,7 +24,7 @@
 - 测试护栏：已建立第一批
 - `WifiManager` 解耦：进行中，已完成前半段
 - 日历脏区化局刷：尚未开始主路径切换
-- MCU 级 `light/deep sleep`：`light sleep` 设计已完成，代码实现未开始
+- MCU 级 `light/deep sleep`：`light sleep` 第一版已实现，`deep sleep` 未开始
 
 ## 已完成
 
@@ -73,37 +73,67 @@
 
 ## 当前正在做
 
-当前焦点是继续缩小 `WifiManager.cpp` 中的 ICS 解析/展开逻辑。
+当前焦点已转到 MCU 级 `light sleep` 落地后的真机验收与后续稳定化。
 
-已经迁出的 ICS helper 包括：
+## 2026-04-21 `light sleep` 真机联调结果
 
-- `parseDigits`
-- `paramsContainDateValue`
-- `icsUnescape`
-- `appendUnfoldedIcsLines`
-- `splitIcsProperty`
-- `parseRruleCore`
-- `parseIcsDateTime`
-- `parseIcsDateField`
-- `weekdayMon0FromTm`
-- `localWeekWindowStart`
-- `localWindowEndOneMonth`
-- `eventOverlapsWindow`
-- `trimDisplayField`
-- `buildImportedTitle`
-- `weekdayMaskBit`
-- `parseByDayToken`
+本轮已完成一轮较完整的板级联调，关键结果如下：
 
-仍在 `WifiManager.cpp` 的主要剩余部分：
+- `light sleep` 进入正常
+- GPIO 唤醒正常：
+  - `Up`
+  - `Mid`
+  - `Down`
+- RTC 唤醒正常：
+  - `Calendar` 时间桶刷新
+  - `Photo` 自动轮播
+- `Calendar` 页时间头局刷在 RTC 唤醒后正常触发
+- `Photo <-> Calendar` 中键短按切页正常
+- `Photo` 页 `Up / Down` 手动切图正常
+- `Photo` 页自动轮播已通过缩短到 `30s` 的 Portal 配置做多轮验证
+- `ConfigWait / ConfigAP / ConfigSTA` 三段模式链路已通过：
+  - `Normal -> ConfigWait`
+  - `ConfigWait -> ConfigAP`
+  - `ConfigAP -> Normal`
+  - `ConfigWait -> ConfigSTA`
+  - `ConfigSTA -> Normal`
+- AP Portal 已验证：
+  - 手机可连接 `PhotoFrame_Config`
+  - `/`
+  - `/api/status`
+  - `/api/settings`
+  正常返回
+- `ConfigWait -> MidShort -> white screen -> Normal` 已验证
 
-- `ParsedIcsEvent` / `IcsOccurrenceKey` / `IcsOverride` / `ImportedCalendarEvent`
-- `parseIcsEventFromLines`
-- recurrence 展开与 override 合并
-- `parseIcsBodyIntoEvents`
-- `collectOverrideMetadata`
-- `expandSingleEvent`
-- `expandRecurringEvent`
-- `appendOverrideEvents`
+本轮联调中还修掉了两处真实问题：
+
+1. `MidLong` 原本在松手时才发出  
+这会导致从 `light sleep` 唤醒后，长按 `Mid` 有时会先唤醒再重新睡回去，长按动作不稳定。  
+现已改为：
+- 按住超过 `600ms` 立即发出 `MidLong`
+- 松手后不再补发 `MidShort`
+
+2. `ConfigWait` 下 `MidShort` 原本会被重复消费  
+现象是：
+- 先正确触发白屏并回 `Normal`
+- 同一个 `MidShort` 又被 `Normal` 模式当成“页面切换”再处理一次
+
+现已修正为：
+- 只有“事件进入前就在 `Normal`”时，才会执行 `Photo / Calendar` 普通按键逻辑
+- 配置模式切回 `Normal` 的那个事件，不会再串用到普通模式
+
+关于 `GPIO0(Up)`：
+
+- 已真机验证：按住 `Up` 再按 `RESET`，设备会进入 UART 下载模式
+- 这不是新 bug，而是 `GPIO0` 的启动绑定位特性
+- 当前产品决策是接受这个行为，不因为它移除 `Up` 的唤醒能力
+
+本轮尚未做的项目：
+
+- 长时间 soak
+- `Calendar` 跨天
+- 传感器按需采样的专门验收
+- `calendar_time_refresh_sec = 1200 / 1800 / 3600 / 0` 的组合验证
 
 ## 2026-04-16 当日新增进展
 
@@ -161,6 +191,30 @@
   - `App` 的可睡判定与 deadline 计算
   - `WifiManager` 的 sleep block 判定
   - `main.cpp` 主循环改造
+
+## 2026-04-20 `light sleep` 第一版实现
+
+- 新增 `src/system/LightSleepController.*`
+- `main.cpp` 已从固定 `delay(50)` 改成：
+  - 可睡时进入 `light sleep`
+  - 不可睡时回退短延时
+- `App` 已新增：
+  - `canEnterLightSleep()`
+  - `nextWakeDeadlineMs()`
+  - `onWakeFromLightSleep()`
+- `WifiManager` 已新增 `blocksLightSleep()`
+- 第一版当前行为为：
+  - `Normal + Photo / Calendar` 可进入 `light sleep`
+  - `ConfigWait / ConfigAP / ConfigSTA` 不进入 `light sleep`
+  - WiFi/AP/STA/日历同步期间不进入 `light sleep`
+  - `Up / Mid / Down + RTC` 作为唤醒源
+  - 按键唤醒后会有短暂保持唤醒窗口，避免立刻再次睡回去
+
+## 当前最新验证
+
+- `./test/run_logic_tests.sh`：通过
+- `pio run -e esp32dev`：通过
+- 当前编译体积：RAM `17.7%`，Flash `33.9%`
 
 ## 2026-04-17 当日新增进展
 
@@ -243,8 +297,8 @@
 
 ## 下一步
 
-按当前计划，下一阶段继续做：
+按当前计划，下一阶段应先做：
 
-1. 继续把 ICS 解析和 recurrence 展开 helper 从 `WifiManager.cpp` 往 `CalendarIcsCore` 收拢
-2. 保持宿主机测试和 `esp32dev` 编译持续通过
-3. ICS 链路收束到足够程度后，再进入日历脏区化重构
+1. `light sleep` 真机验收
+2. 根据真机结果修正唤醒与调度边界
+3. 再决定是否继续推进日历脏区化或 `deep sleep`

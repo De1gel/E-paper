@@ -26,6 +26,11 @@ class App {
   void begin();
   void update(uint32_t now_ms);
   void render();
+  bool canEnterLightSleep(uint32_t now_ms) const;
+  uint32_t nextWakeDeadlineMs(uint32_t now_ms) const;
+  void onEnterLightSleep(uint32_t deadline_ms);
+  void cancelLightSleepEntry(const char *reason);
+  void onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio);
 
  private:
   enum class CalendarLayout : uint8_t {
@@ -96,6 +101,7 @@ class App {
   void pushCalendarPartialRefresh(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void renderWhiteScreen();
   void waitEpdReadyWithLed();
+  bool isAnyWakeKeyPressed() const;
 
   AppState state_ = AppState::Photo;
   uint32_t last_photo_switch_ms_ = 0;
@@ -123,6 +129,7 @@ class App {
   bool clock_valid_ = false;
   time_t clock_anchor_epoch_ = 0;
   uint32_t clock_anchor_ms_ = 0;
+  uint32_t sleep_inhibit_until_ms_ = 0;
   String calendar_layout_cfg_cache_;
   SPIClass photo_sd_spi_{HSPI};
   bool photo_sd_ready_ = false;
@@ -132,6 +139,8 @@ class App {
   appfw::ModeManager mode_manager_;
   appfw::LedManager led_manager_;
   appfw::WifiManager wifi_manager_;
+
+  static constexpr uint32_t kLightSleepWakeInhibitMs = 1200u;
 
   friend class CalendarFrameSink;
 };

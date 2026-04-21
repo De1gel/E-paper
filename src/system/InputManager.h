@@ -24,6 +24,7 @@ class InputManager {
     uint8_t pin = 0;
     bool raw_pressed = false;
     bool stable_pressed = false;
+    bool long_sent = false;
     uint32_t last_raw_change_ms = 0;
     uint32_t pressed_at_ms = 0;
   };

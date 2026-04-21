@@ -330,6 +330,11 @@ bool calendarBodyEquivalentForHeaderRefresh(const calendar::CalendarModel &previ
   return true;
 }
 
+uint32_t saturatingAddMs(uint32_t base_ms, uint32_t delta_ms) {
+  const uint64_t sum = static_cast<uint64_t>(base_ms) + delta_ms;
+  return (sum > 0xFFFFFFFFULL) ? 0xFFFFFFFFu : static_cast<uint32_t>(sum);
+}
+
 }  // namespace
 
 void App::begin() {
@@ -347,6 +352,7 @@ void App::begin() {
   clock_valid_ = false;
   clock_anchor_epoch_ = 0;
   clock_anchor_ms_ = 0;
+  sleep_inhibit_until_ms_ = saturatingAddMs(last_photo_switch_ms_, kLightSleepWakeInhibitMs);
   ensureCalendarFrameBuffer("boot");
   clearCalendarFrame(white);
 
@@ -638,11 +644,18 @@ void App::update(uint32_t now_ms) {
 
 void App::handleInputEvent(appfw::InputEvent event, uint32_t now_ms) {
   Serial.printf("[INPUT] event=%s\n", eventName(event));
+  sleep_inhibit_until_ms_ = saturatingAddMs(now_ms, kLightSleepWakeInhibitMs);
+  const appfw::OperationMode previous_mode = mode_manager_.mode();
   mode_manager_.onInputEvent(event, now_ms);
+  const appfw::OperationMode current_mode = mode_manager_.mode();
+  if (current_mode != previous_mode) {
+    led_manager_.triggerDoubleBlink("mode_change");
+  }
 
-  if (mode_manager_.mode() == appfw::OperationMode::Normal) {
+  if (previous_mode == appfw::OperationMode::Normal &&
+      current_mode == appfw::OperationMode::Normal) {
     if (event == appfw::InputEvent::MidShort) {
-      led_manager_.triggerDoubleBlink();
+      led_manager_.triggerDoubleBlink("page_switch");
       const AppState next_state =
           (state_ == AppState::Photo) ? AppState::Calendar : AppState::Photo;
       setState(next_state);
@@ -667,8 +680,12 @@ void App::render() {
       !ensureCalendarSyncBeforeFullRefresh(now_ms)) {
     return;
   }
+  led_manager_.startBreath(state_ == AppState::Photo ? "photo_render" : "calendar_render");
 
-  Serial.println("[APP] render begin");
+  Serial.printf("[APP] render begin state=%s partial=%s led=%s\n",
+                state_ == AppState::Photo ? "Photo" : "Calendar",
+                partial_refresh ? "true" : "false",
+                led_manager_.currentStateName());
   beginDisplaySession(partial_refresh);
   if (!partial_refresh) {
     wifi_manager_.sampleSensorsNow(true);
@@ -683,12 +700,124 @@ void App::render() {
   }
 
   endDisplaySession();
-  Serial.println("[APP] render done, epd sleep");
+  led_manager_.stopEffects("render_done");
+  Serial.printf("[APP] render done, epd sleep led=%s\n", led_manager_.currentStateName());
   needs_render_ = false;
-  if (state_ == AppState::Photo) {
-    led_manager_.stopEffects();
-    led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
+  led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
+}
+
+bool App::isAnyWakeKeyPressed() const {
+  return digitalRead(kKeyUpPin) == LOW ||
+         digitalRead(kKeyMidPin) == LOW ||
+         digitalRead(kKeyDownPin) == LOW;
+}
+
+bool App::canEnterLightSleep(uint32_t now_ms) const {
+  if (mode_manager_.mode() != appfw::OperationMode::Normal) {
+    return false;
   }
+  if (needs_render_ || peripheral_power_on_) {
+    return false;
+  }
+  if (calendar_pre_refresh_sync_waiting_ || calendar_pre_refresh_sync_started_session_) {
+    return false;
+  }
+  if (wifi_manager_.blocksLightSleep()) {
+    return false;
+  }
+  if (now_ms < sleep_inhibit_until_ms_) {
+    return false;
+  }
+  if (isAnyWakeKeyPressed()) {
+    return false;
+  }
+  return state_ == AppState::Photo || state_ == AppState::Calendar;
+}
+
+uint32_t App::nextWakeDeadlineMs(uint32_t now_ms) const {
+  uint32_t deadline_ms = saturatingAddMs(now_ms, 1000u);
+  if (state_ == AppState::Photo) {
+    return saturatingAddMs(last_photo_switch_ms_, photo_interval_ms_);
+  }
+  if (state_ != AppState::Calendar) {
+    return deadline_ms;
+  }
+
+  uint32_t check_interval_ms = wifi_manager_.settings().calendar_refresh_sec * 1000UL;
+  if (check_interval_ms < 60000UL) {
+    check_interval_ms = 60000UL;
+  }
+  deadline_ms =
+      (last_calendar_check_ms_ == 0u) ? saturatingAddMs(now_ms, check_interval_ms)
+                                      : saturatingAddMs(last_calendar_check_ms_, check_interval_ms);
+
+  struct tm local_tm {};
+  time_t local_epoch = 0;
+  if (!getLocalTimeSnapshot(now_ms, local_tm, local_epoch)) {
+    return deadline_ms;
+  }
+
+  const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
+  if (time_refresh_sec != 0u) {
+    const time_t next_time_bucket =
+        ((local_epoch / static_cast<time_t>(time_refresh_sec)) + 1) *
+        static_cast<time_t>(time_refresh_sec);
+    if (next_time_bucket > local_epoch) {
+      const uint32_t delta_ms =
+          static_cast<uint32_t>((next_time_bucket - local_epoch) * 1000ULL);
+      const uint32_t time_deadline = saturatingAddMs(now_ms, delta_ms);
+      if (time_deadline < deadline_ms) {
+        deadline_ms = time_deadline;
+      }
+    }
+  }
+
+  struct tm next_midnight_tm = local_tm;
+  next_midnight_tm.tm_sec = 0;
+  next_midnight_tm.tm_min = 0;
+  next_midnight_tm.tm_hour = 0;
+  next_midnight_tm.tm_mday += 1;
+  const time_t next_midnight_epoch = mktime(&next_midnight_tm);
+  if (next_midnight_epoch > local_epoch) {
+    const uint32_t delta_ms =
+        static_cast<uint32_t>((next_midnight_epoch - local_epoch) * 1000ULL);
+    const uint32_t midnight_deadline = saturatingAddMs(now_ms, delta_ms);
+    if (midnight_deadline < deadline_ms) {
+      deadline_ms = midnight_deadline;
+    }
+  }
+
+  return deadline_ms;
+}
+
+void App::onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio) {
+  const uint32_t now_ms = millis();
+  led_manager_.setSleeping(false, "wake");
+  led_manager_.update(mode_manager_.mode(), now_ms, wifi_manager_.isStaConnected());
+  if (woke_from_gpio) {
+    sleep_inhibit_until_ms_ = saturatingAddMs(now_ms, kLightSleepWakeInhibitMs);
+  }
+  Serial.printf("[SLEEP] wake source=%s slept=%lums led=%s\n",
+                woke_from_gpio ? "gpio" : "timer_or_other",
+                static_cast<unsigned long>(slept_us / 1000ULL),
+                led_manager_.currentStateName());
+}
+
+void App::onEnterLightSleep(uint32_t deadline_ms) {
+  const uint32_t now_ms = millis();
+  led_manager_.setSleeping(true, "light_sleep_enter");
+  Serial.printf("[SLEEP] enter deadline_in=%lums led=%s\n",
+                static_cast<unsigned long>(deadline_ms - now_ms),
+                led_manager_.currentStateName());
+  Serial.flush();
+}
+
+void App::cancelLightSleepEntry(const char *reason) {
+  led_manager_.setSleeping(false, reason ? reason : "sleep_cancel");
+  led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
+  Serial.printf("[SLEEP] cancel reason=%s led=%s\n",
+                reason ? reason : "sleep_cancel",
+                led_manager_.currentStateName());
 }
 
 void App::updatePhotoCarousel(uint32_t now_ms) {
@@ -704,8 +833,6 @@ void App::nextPhoto(const char *reason, uint32_t now_ms) {
   if (total == 0) {
     return;
   }
-  led_manager_.startBreath();
-  led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
   photo_index_ = static_cast<uint16_t>((photo_index_ + 1) % total);
   last_photo_switch_ms_ = now_ms;
   needs_render_ = true;
@@ -719,8 +846,6 @@ void App::prevPhoto(const char *reason, uint32_t now_ms) {
   if (total == 0) {
     return;
   }
-  led_manager_.startBreath();
-  led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
   if (photo_index_ == 0) {
     photo_index_ = static_cast<uint16_t>(total - 1);
   } else {
@@ -830,6 +955,7 @@ void App::setState(AppState next) {
     last_calendar_check_ms_ = 0;
     ensureCalendarFrameBuffer("switch_to_calendar");
   }
+  sleep_inhibit_until_ms_ = saturatingAddMs(millis(), kLightSleepWakeInhibitMs);
   needs_render_ = true;
 }
 
@@ -1720,7 +1846,7 @@ void App::renderCalendarPage(uint32_t now_ms) {
 
 void App::renderWhiteScreen() {
   Serial.println("[CONFIG] white screen action begin");
-  led_manager_.triggerBreath(2);
+  led_manager_.triggerBreath(2, "white_screen");
   beginDisplaySession();
   EPD_W21_WriteCMD(0x10);
   for (uint16_t y = 0; y < 480; ++y) {
