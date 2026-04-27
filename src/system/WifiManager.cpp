@@ -579,7 +579,7 @@ void WifiManager::update(uint32_t now_ms) {
       }
       calendar_sync_pending_ = true;
       last_calendar_sync_ms_ = 0;
-    } else if ((now_ms - sta_connect_start_ms_) >= kStaConnectTimeoutMs) {
+    } else if ((now_ms - sta_connect_start_ms_) >= sta_connect_timeout_ms_) {
       Serial.printf("[WIFI] STA connect timeout -> stop (last_status=%s/%d)\n",
                     wifiStatusName(status), status);
       sta_connect_failed_ = true;
@@ -627,6 +627,14 @@ void WifiManager::startAP() {
 }
 
 void WifiManager::startSTA() {
+  startSTAWithTimeout(kStaConnectTimeoutManualMs, "manual");
+}
+
+void WifiManager::startStaAutoSync() {
+  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "auto_sync");
+}
+
+void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag) {
   stop("switch_to_sta");
   digitalWrite(kPeripheralPowerPin, HIGH);
   delay(3);
@@ -635,12 +643,14 @@ void WifiManager::startSTA() {
   logStaScanResults();
   WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
   sta_connect_start_ms_ = millis();
+  sta_connect_timeout_ms_ = connect_timeout_ms;
   state_ = State::StaConnecting;
   last_sta_wifi_status_ = WiFi.status();
-  Serial.printf("[WIFI] STA connecting ssid=%s pass_len=%u timeout=%lus initial_status=%s/%d\n",
+  Serial.printf("[WIFI] STA connecting reason=%s ssid=%s pass_len=%u timeout=%lus initial_status=%s/%d\n",
+                reason_tag ? reason_tag : "unknown",
                 settings_.sta_ssid.c_str(),
                 static_cast<unsigned>(settings_.sta_pass.length()),
-                static_cast<unsigned long>(kStaConnectTimeoutMs / 1000),
+                static_cast<unsigned long>(sta_connect_timeout_ms_ / 1000),
                 wifiStatusName(last_sta_wifi_status_),
                 last_sta_wifi_status_);
 }
@@ -664,6 +674,7 @@ void WifiManager::stop(const char *reason) {
   digitalWrite(kPeripheralPowerPin, LOW);
   state_ = State::Idle;
   sta_connect_start_ms_ = 0;
+  sta_connect_timeout_ms_ = 0;
   sta_session_start_ms_ = 0;
   last_activity_ms_ = 0;
   last_calendar_sync_ms_ = 0;
@@ -764,6 +775,12 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
   resolved_timezone = extractJsonStringField(body, "timezone");
   int32_t utc_offset_seconds = 0;
   const bool has_utc_offset = extractJsonIntField(body, "utc_offset_seconds", utc_offset_seconds);
+  int32_t weather_code = -1;
+  if (extractJsonIntField(body, "weather_code", weather_code)) {
+    weather_code_ = static_cast<int>(weather_code);
+  } else {
+    weather_code_ = -1;
+  }
   if (resolved_timezone.length() == 0) {
     resolved_timezone = settings_.timezone;
   }
@@ -2442,9 +2459,9 @@ void WifiManager::handleStatus() {
     json += String(remain);
   } else if (state_ == State::StaConnecting) {
     const uint32_t remain =
-        (millis() - sta_connect_start_ms_ >= kStaConnectTimeoutMs)
+        (millis() - sta_connect_start_ms_ >= sta_connect_timeout_ms_)
             ? 0
-            : (kStaConnectTimeoutMs - (millis() - sta_connect_start_ms_));
+            : (sta_connect_timeout_ms_ - (millis() - sta_connect_start_ms_));
     json += ",\"connect_remaining_ms\":";
     json += String(remain);
   } else if (state_ == State::StaRunning) {

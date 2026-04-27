@@ -19,6 +19,8 @@ class SceneSink {
                     TextAAMode aa_mode = TextAAMode::Threshold) = 0;
 };
 
+void emitCalendarWeatherHeader(const CalendarModel &model, const CalendarLayout &layout,
+                               SceneSink &sink);
 void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout, SceneSink &sink);
 
 }  // namespace calendar

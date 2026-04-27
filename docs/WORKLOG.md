@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-04-27
+- Consolidated the current calendar-focused iteration into a commit candidate after repeated on-device tuning across layout, rendering, weather display, and connectivity behavior.
+- Calendar page now uses the editorial-style header card, larger fixed today highlight, per-day event summaries, refined schedule cards, and layered vector weather icons with partial-refresh-aware header redraw paths.
+- Startup behavior keeps the short automatic STA pre-sync timeout (`8s`) so a missing AP no longer blocks the first local calendar render for ~30 seconds.
+- Geocode behavior was explicitly restored to the pre-experiment version: weather location display remains the resolved single city string rather than a composed province/city/district label.
+- Build/verification result before commit: `./test/run_logic_tests.sh` passed, `esp32dev` build passed, RAM `20.0%` (`65448 / 327680`), Flash `34.0%` (`2494737 / 7340032`), firmware uploaded to `/dev/ttyUSB1`, boot render completed and then entered `light sleep` normally.
+
 ## 2026-04-12
 - Built `esp32dev` successfully after removing quote support from the calendar path and collapsing text AA to `Threshold` plus `Burkes` only.
 - Calendar schedule area no longer reserves quote/footer space for `格言`; the landscape AA panel now shows only the `Burkes` sample row.

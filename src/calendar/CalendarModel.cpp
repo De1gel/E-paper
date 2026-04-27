@@ -1,5 +1,8 @@
 #include "calendar/CalendarModel.h"
 
+#include <algorithm>
+#include <string.h>
+
 #include "Display_EPD_W21.h"
 #include "calendar/CalendarLogic.h"
 #include "calendar/CalendarText.h"
@@ -45,6 +48,82 @@ String formatDateYmd(const struct tm &local_tm) {
 
 String formatTimeHm(const struct tm &local_tm) {
   return twoDigits(local_tm.tm_hour) + ":" + twoDigits(local_tm.tm_min);
+}
+
+String formatYmd(int year, int month, int day) {
+  return String(year) + "-" + twoDigits(month) + "-" + twoDigits(day);
+}
+
+bool isAsciiOnlyText(const String &text) {
+  for (size_t i = 0; i < text.length(); ++i) {
+    if (static_cast<uint8_t>(text.charAt(i)) >= 0x80u) {
+      return false;
+    }
+  }
+  return true;
+}
+
+size_t utf8PrefixBytes(const String &text, size_t codepoint_limit) {
+  size_t byte_index = 0;
+  size_t count = 0;
+  while (byte_index < text.length() && count < codepoint_limit) {
+    const uint8_t first = static_cast<uint8_t>(text[byte_index]);
+    size_t advance = 1;
+    if ((first & 0x80u) == 0u) {
+      advance = 1;
+    } else if ((first & 0xE0u) == 0xC0u) {
+      advance = 2;
+    } else if ((first & 0xF0u) == 0xE0u) {
+      advance = 3;
+    } else if ((first & 0xF8u) == 0xF0u) {
+      advance = 4;
+    }
+    if (byte_index + advance > text.length()) {
+      break;
+    }
+    byte_index += advance;
+    ++count;
+  }
+  return byte_index;
+}
+
+String summarizeAsciiTitle(const String &title) {
+  String normalized = sanitizeDisplayText(title, "ITEM");
+  normalized.trim();
+  if (normalized.length() == 0) {
+    return "ITEM";
+  }
+
+  size_t start = 0;
+  while (start < normalized.length() && normalized.charAt(start) == ' ') {
+    ++start;
+  }
+  size_t end = start;
+  while (end < normalized.length() && normalized.charAt(end) != ' ') {
+    ++end;
+  }
+  String first_word = normalized.substring(start, end);
+  first_word.trim();
+  if (first_word.length() == 0) {
+    first_word = normalized;
+  }
+  if (first_word.length() <= 5) {
+    return first_word;
+  }
+  return first_word.substring(0, 5);
+}
+
+String summarizeCjkTitle(const String &title) {
+  String normalized = fallbackMissingGlyphs(title, TextFont::Cjk16, "ITEM");
+  normalized.trim();
+  if (normalized.length() == 0) {
+    return "ITEM";
+  }
+  return normalized.substring(0, utf8PrefixBytes(normalized, 3));
+}
+
+String summarizeEventTitle(const String &title) {
+  return isAsciiOnlyText(title) ? summarizeAsciiTitle(title) : summarizeCjkTitle(title);
 }
 
 bool parseHmToMinutes(const String &value, uint16_t &minutes_out) {
@@ -124,6 +203,26 @@ uint8_t calendarColorToNibble(const String &raw) {
   return blue;
 }
 
+uint8_t dayIndicatorColorNibble(const String &raw) {
+  const uint8_t nibble = calendarColorToNibble(raw);
+  return (nibble == white) ? black : nibble;
+}
+
+void appendDaySummaryItem(DaySummary &summary, uint8_t color_nibble, const String &label) {
+  if (summary.item_count < DaySummary::kMaxItems) {
+    DaySummary::Item &item = summary.items[summary.item_count++];
+    item.color_nibble = color_nibble;
+    memset(item.label, 0, sizeof(item.label));
+    const size_t copy_len =
+        std::min(static_cast<size_t>(label.length()), sizeof(item.label) - 1u);
+    for (size_t i = 0; i < copy_len; ++i) {
+      item.label[i] = label.charAt(i);
+    }
+    return;
+  }
+  ++summary.hidden_count;
+}
+
 constexpr uint16_t kScheduleStartMinute = 8u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
 
@@ -174,6 +273,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     weather_label = fallbackMissingGlyphs(weather_label, TextFont::Cjk16, "TIAN QI");
   }
   model.header_weather = weather_label;
+  model.header_weather_code = static_cast<int16_t>(wifi_manager.weatherCode());
 
   const float temperature_c = wifi_manager.temperatureC();
   const float humidity_pct = wifi_manager.humidityPct();
@@ -290,10 +390,80 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     cell.is_today = cell.in_current && (cell.day == today);
     cell.text_color = cell.in_current ? black : blue;
     if (isWeekendColumn(col)) {
-      cell.text_color = red;
+      cell.text_color = blue;
     }
     if (cell.is_today) {
       cell.text_color = white;
+    }
+  }
+
+  for (int index = 0; index < 42; ++index) {
+    DateCell &cell = model.date_cells[index];
+    if (!cell.in_current) {
+      continue;
+    }
+    const int day = cell.day;
+    const String day_ymd = formatYmd(year, month, day);
+    struct tm day_tm = local_tm;
+    day_tm.tm_mday = day;
+    day_tm.tm_hour = 12;
+    day_tm.tm_min = 0;
+    day_tm.tm_sec = 0;
+    mktime(&day_tm);
+    const int day_weekday = (day_tm.tm_wday + 6) % 7;
+    DaySummary &summary = model.day_summaries[index];
+    struct SummaryCandidate {
+      uint16_t start_minute = 0;
+      uint8_t color_nibble = black;
+      String label;
+    };
+    SummaryCandidate candidates[DaySummary::kMaxItems] = {};
+    uint8_t candidate_count = 0;
+    uint8_t total_matches = 0;
+    for (size_t event_index = 0; event_index < wifi_manager.calendarEventCount(); ++event_index) {
+      appfw::CalendarEvent event;
+      if (!wifi_manager.calendarEventAt(event_index, event)) {
+        continue;
+      }
+      if (!calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday, event.date.c_str(),
+                                               day_ymd.c_str(), day_weekday)) {
+        continue;
+      }
+      ++total_matches;
+      uint16_t start_minute = 24u * 60u;
+      parseHmToMinutes(event.time_hhmm, start_minute);
+      SummaryCandidate candidate;
+      candidate.start_minute = start_minute;
+      candidate.color_nibble = dayIndicatorColorNibble(event.color);
+      candidate.label = summarizeEventTitle(event.title);
+
+      uint8_t insert_at = candidate_count;
+      for (uint8_t i = 0; i < candidate_count; ++i) {
+        if (candidate.start_minute < candidates[i].start_minute ||
+            (candidate.start_minute == candidates[i].start_minute &&
+             candidate.label < candidates[i].label)) {
+          insert_at = i;
+          break;
+        }
+      }
+      if (insert_at < DaySummary::kMaxItems) {
+        const uint8_t limit =
+            (candidate_count < DaySummary::kMaxItems) ? static_cast<uint8_t>(candidate_count + 1u)
+                                                      : DaySummary::kMaxItems;
+        for (uint8_t move = limit; move > insert_at + 1u; --move) {
+          candidates[move - 1u] = candidates[move - 2u];
+        }
+        candidates[insert_at] = candidate;
+        if (candidate_count < DaySummary::kMaxItems) {
+          ++candidate_count;
+        }
+      }
+    }
+    for (uint8_t i = 0; i < candidate_count; ++i) {
+      appendDaySummaryItem(summary, candidates[i].color_nibble, candidates[i].label);
+    }
+    if (total_matches > summary.item_count) {
+      summary.hidden_count = static_cast<uint8_t>(total_matches - summary.item_count);
     }
   }
 }

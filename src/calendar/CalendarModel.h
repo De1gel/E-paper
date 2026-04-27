@@ -17,6 +17,19 @@ struct DateCell {
   uint8_t text_color = 0;
 };
 
+struct DaySummary {
+  static constexpr uint8_t kMaxItems = 3;
+
+  struct Item {
+    uint8_t color_nibble = 0;
+    char label[16] = {};
+  };
+
+  uint8_t item_count = 0;
+  uint8_t hidden_count = 0;
+  Item items[kMaxItems] = {};
+};
+
 struct VisibleEvent {
   uint16_t id = 0;
   String title;
@@ -45,6 +58,7 @@ struct CalendarModel {
   String header_time;
   String header_weather;
   String header_sensors;
+  int16_t header_weather_code = -1;
   String schedule_title;
   String no_time_label;
   String more_label;
@@ -58,6 +72,7 @@ struct CalendarModel {
   ScheduleGroup schedule_groups[appfw::kMaxCalendarEvents];
 
   DateCell date_cells[42];
+  DaySummary day_summaries[42];
 };
 
 void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool time_valid,

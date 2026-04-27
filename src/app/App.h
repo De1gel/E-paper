@@ -118,6 +118,7 @@ class App {
   render::StripeBuffer calendar_window_buffer_;
   CalendarLayout calendar_layout_ = CalendarLayout::LandscapeSplit;
   calendar::CalendarModel calendar_model_cache_{};
+  calendar::CalendarModel previous_calendar_model_cache_{};
   calendar::CalendarLayout calendar_layout_cache_{};
   bool force_calendar_full_refresh_ = true;
   uint16_t calendar_partial_refresh_count_ = 0;

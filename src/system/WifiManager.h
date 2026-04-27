@@ -23,6 +23,7 @@ class WifiManager {
   void update(uint32_t now_ms);
   void startAP();
   void startSTA();
+  void startStaAutoSync();
   void stop(const char *reason);
 
   bool consumeAutoExitRequested();
@@ -40,6 +41,7 @@ class WifiManager {
   float temperatureC() const { return temperature_c_; }
   float humidityPct() const { return humidity_pct_; }
   String weatherCity() const { return settings_.weather_city; }
+  int weatherCode() const { return weather_code_; }
 
  private:
   enum class State : uint8_t {
@@ -60,6 +62,7 @@ class WifiManager {
   const char *wifiEventName(arduino_event_id_t event) const;
   const char *disconnectReasonName(uint8_t reason) const;
   void logStaScanResults();
+  void startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag);
 
   void startServer();
   void stopServer();
@@ -117,10 +120,12 @@ class WifiManager {
   bool aht_ready_ = false;
   float temperature_c_ = NAN;
   float humidity_pct_ = NAN;
+  int weather_code_ = -1;
   int battery_adc_pin_ = -1;
   int battery_mv_ = -1;
 
   uint32_t sta_connect_start_ms_ = 0;
+  uint32_t sta_connect_timeout_ms_ = 0;
   uint32_t sta_session_start_ms_ = 0;
   uint32_t last_activity_ms_ = 0;
   uint32_t last_sensor_poll_ms_ = 0;
@@ -148,7 +153,8 @@ class WifiManager {
   static constexpr uint8_t kSdMisoPin = 19;
   static constexpr uint8_t kSdMosiPin = 23;
 
-  static constexpr uint32_t kStaConnectTimeoutMs = 30000;
+  static constexpr uint32_t kStaConnectTimeoutManualMs = 30000;
+  static constexpr uint32_t kStaConnectTimeoutAutoSyncMs = 8000;
   static constexpr uint32_t kApIdleTimeoutMs = 300000;
   static constexpr uint32_t kStaSessionTimeoutMs = 0;
   static constexpr uint32_t kSensorPollIntervalMs = 10000;

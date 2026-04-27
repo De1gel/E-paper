@@ -16,7 +16,7 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   layout.grid_rows =
       static_cast<uint8_t>(month_row_count < 4 ? 4 : (month_row_count > 6 ? 6 : month_row_count));
   layout.header_h =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(65) : static_cast<uint16_t>(57);
+      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(78) : static_cast<uint16_t>(68);
   if (mode == LayoutMode::LandscapeSplit) {
     layout.calendar_panel =
         makeRect(0, 0, static_cast<uint16_t>(logical_width / 2), logical_height);
@@ -45,7 +45,7 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   layout.title_bar_w = layout.header_bar.w;
   layout.weekday_y = static_cast<uint16_t>(layout.header_y + layout.header_h + 4);
   layout.weekday_h =
-      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(32) : static_cast<uint16_t>(28);
+      (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(28) : static_cast<uint16_t>(24);
   const uint16_t grid_top = static_cast<uint16_t>(layout.weekday_y + layout.weekday_h + 2);
   const uint16_t grid_left_base = static_cast<uint16_t>(layout.calendar_panel.x + margin);
   const uint16_t grid_right =
@@ -67,9 +67,9 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
     layout.cell_h = static_cast<uint16_t>(grid_h / layout.grid_rows);
     grid_w = static_cast<uint16_t>(layout.cell_w * 7u);
     grid_h = static_cast<uint16_t>(layout.cell_h * layout.grid_rows);
-    layout.cell_pad_y = (layout.grid_rows <= 4) ? static_cast<uint8_t>(6)
-                        : (layout.grid_rows == 5) ? static_cast<uint8_t>(4)
-                                                  : static_cast<uint8_t>(2);
+    layout.cell_pad_y = (layout.grid_rows <= 4) ? static_cast<uint8_t>(7)
+                        : (layout.grid_rows == 5) ? static_cast<uint8_t>(5)
+                                                  : static_cast<uint8_t>(3);
     const uint16_t grid_left = static_cast<uint16_t>(
         grid_left_base + ((grid_right - grid_left_base - grid_w) / 2u));
     layout.grid = makeRect(grid_left, grid_top, grid_w, grid_h);
