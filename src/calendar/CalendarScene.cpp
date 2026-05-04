@@ -597,7 +597,7 @@ void emitCurrentTimeMarker(SceneSink &sink, const CalendarLayout &layout,
 void emitCalendarWeatherHeader(const CalendarModel &model, const CalendarLayout &layout, SceneSink &sink) {
   const bool zh_ui = (model.ui_language == "zh");
   const uint8_t header_weather_px = kHeaderWeatherPx;
-  const TextFont header_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
+  const TextFont header_font = zh_ui ? TextFont::Cjk30 : TextFont::Auto;
   const TextFont header_date_font = preferredTextFont(model.header_date, header_font, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(layout, model, header_date_font);
   const TextFont header_weather_font =
@@ -617,7 +617,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       zh_ui ? kZhWeekdayPx
             : static_cast<uint8_t>(asciiPixelHeight(layout.weekday_scale) +
                                    (layout.mode == LayoutMode::LandscapeSplit ? 2 : 1));
-  const uint8_t item_px = zh_ui ? static_cast<uint8_t>(14) : static_cast<uint8_t>(10);
+  const uint8_t item_px = zh_ui ? static_cast<uint8_t>(16) : static_cast<uint8_t>(10);
   const uint8_t header_date_px = kHeaderDatePx;
   const uint8_t header_time_px = kHeaderTimePx;
   const uint8_t header_weather_px = kHeaderWeatherPx;
@@ -625,9 +625,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   const uint8_t day_px =
       (layout.mode == LayoutMode::LandscapeSplit) ? static_cast<uint8_t>(18)
                                                   : static_cast<uint8_t>(16);
-  const TextFont weekday_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
-  const TextFont item_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
-  const TextFont header_font = zh_ui ? TextFont::CjkAuto : TextFont::Auto;
+  const TextFont weekday_font = zh_ui ? TextFont::Cjk26 : TextFont::Auto;
+  const TextFont item_font = zh_ui ? TextFont::Cjk16 : TextFont::Auto;
+  const TextFont header_font = zh_ui ? TextFont::Cjk30 : TextFont::Auto;
   const TextFont header_date_font =
       preferredTextFont(model.header_date, header_font, header_date_px);
   const TextFont header_time_font =
@@ -681,19 +681,19 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       static_cast<uint16_t>(layout.schedule_inner.x + layout.schedule_inner.w - 8);
   const uint16_t timeline_w =
       (timeline_right > timeline_left) ? static_cast<uint16_t>(timeline_right - timeline_left) : 0u;
+  const uint16_t axis_label_h = textHeightPx("22", 10, TextFont::AsciiSmooth);
 
   for (uint8_t slot = 0; slot <= kScheduleSlotCount; ++slot) {
     const uint16_t minute_value = static_cast<uint16_t>(kScheduleStartMinute + slot * 30u);
     const uint16_t y = timelineYForMinute(layout, minute_value);
     const bool is_hour_line = ((slot % 2u) == 0u);
-    if (slot < kScheduleSlotCount) {
-      if (is_hour_line) {
-        const String hour_label = String((minute_value / 60u < 10u) ? "0" : "") +
-                                  String(minute_value / 60u);
-        sink.text(axis_x, static_cast<uint16_t>(y + 1), hour_label, asciiPixelHeight(1), black,
-                  TextFont::AsciiSmooth,
-                  preferredAsciiAAMode(hour_label, TextFont::AsciiSmooth, asciiPixelHeight(1)));
-      }
+    if (is_hour_line) {
+      const String hour_label =
+          String((minute_value / 60u < 10u) ? "0" : "") + String(minute_value / 60u);
+      const uint16_t label_y =
+          (y > (axis_label_h / 2u)) ? static_cast<uint16_t>(y - axis_label_h / 2u) : 0u;
+      sink.text(axis_x, label_y, hour_label, 10, black, TextFont::AsciiSmooth,
+                preferredAsciiAAMode(hour_label, TextFont::AsciiSmooth, 10));
     }
     if (timeline_w == 0) {
       continue;
@@ -759,14 +759,18 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (text_space == 0 || block.h < 8) {
       continue;
     }
-    const String visible_title = truncateTextToWidth(event.title, text_space, item_px, item_font);
-    const TextFont title_font = preferredTextFont(visible_title, item_font, item_px);
+    const uint8_t title_px = (zh_ui && block.h < 22u) ? static_cast<uint8_t>(10) : item_px;
+    const TextFont title_base_font =
+        zh_ui ? ((title_px <= 10u) ? TextFont::Cjk10 : TextFont::Cjk16) : item_font;
+    const String visible_title =
+        truncateTextToWidth(event.title, text_space, title_px, title_base_font);
+    const TextFont title_font = preferredTextFont(visible_title, title_base_font, title_px);
     const uint16_t text_y = static_cast<uint16_t>(
-        block.y + ((block.h > textHeightPx(visible_title, item_px, title_font))
-                        ? (block.h - textHeightPx(visible_title, item_px, title_font)) / 2u
+        block.y + ((block.h > textHeightPx(visible_title, title_px, title_font))
+                        ? (block.h - textHeightPx(visible_title, title_px, title_font)) / 2u
                         : 0u));
-    sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, item_px, black,
-              title_font, preferredAsciiAAMode(visible_title, title_font, item_px));
+    sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, title_px, black,
+              title_font, preferredAsciiAAMode(visible_title, title_font, title_px));
   }
 
   if (model.visible_event_count == 0 && model.no_time_label.length() > 0) {
@@ -845,9 +849,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
           1u, item.color_nibble);
       const String summary_label(item.label);
       sink.text(static_cast<uint16_t>(summary_x + text_offset_x), summary_y, summary_label, summary_px,
-                black, zh_ui ? TextFont::CjkAuto : TextFont::AsciiSmooth,
+                black, zh_ui ? TextFont::Cjk10 : TextFont::AsciiSmooth,
                 preferredAsciiAAMode(summary_label,
-                                     zh_ui ? TextFont::CjkAuto : TextFont::AsciiSmooth, summary_px));
+                                     zh_ui ? TextFont::Cjk10 : TextFont::AsciiSmooth, summary_px));
       summary_y = static_cast<uint16_t>(summary_y + summary_row_h);
     }
     const uint8_t hidden_total =

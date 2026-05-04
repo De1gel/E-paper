@@ -185,6 +185,24 @@
       font-size:12px;
       line-height:1.5;
     }
+    .advanced-toggle {
+      grid-column:1 / -1;
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+      font-size:13px;
+    }
+    .advanced-toggle input { width:auto; }
+    .advanced-panel {
+      grid-column:1 / -1;
+      display:none;
+      padding:12px;
+      border:1px dashed #c9d7e6;
+      border-radius:12px;
+      background:#f8fbff;
+    }
+    .advanced-panel.show { display:block; }
     .schedule-table td { vertical-align:middle; }
     .swatch {
       display:inline-block;
@@ -259,12 +277,44 @@
             <input id="pass" type="password" data-i18n-placeholder="cfg.network.pass_ph" placeholder="输入 WiFi 密码">
           </div>
           <div class="field">
+            <label data-i18n="cfg.network.user">账号 / 身份</label>
+            <input id="staUser" autocomplete="username" data-i18n-placeholder="cfg.network.user_ph" placeholder="校园网或企业 WiFi 才需要">
+          </div>
+          <div class="field">
             <label data-i18n="cfg.network.language">页面语言</label>
             <select id="uiLanguage">
               <option value="zh" data-i18n="cfg.network.lang_zh">中文</option>
               <option value="en" data-i18n="cfg.network.lang_en">English</option>
               <option value="fr" data-i18n="cfg.network.lang_fr">Francais</option>
             </select>
+          </div>
+          <div class="status-item" style="grid-column:1 / -1;">
+            <div class="k" data-i18n="cfg.network.sta_status">STA 状态</div>
+            <div class="v" id="cfgStaStatus">--</div>
+            <div class="small" id="cfgStaDetail" style="margin-top:4px">--</div>
+          </div>
+          <label class="advanced-toggle">
+            <input id="manualAuthToggle" type="checkbox">
+            <span data-i18n="cfg.network.manual">手动高级配置</span>
+          </label>
+          <div id="networkAdvanced" class="advanced-panel">
+            <div class="grid2">
+              <div class="field">
+                <label data-i18n="cfg.network.auth_mode">连接类型</label>
+                <select id="staAuthMode">
+                  <option value="auto" data-i18n="cfg.network.auth_auto">自动</option>
+                  <option value="personal" data-i18n="cfg.network.auth_personal">普通密码 WiFi</option>
+                  <option value="enterprise" data-i18n="cfg.network.auth_enterprise">企业/校园网 802.1X</option>
+                  <option value="open" data-i18n="cfg.network.auth_open">开放网络</option>
+                  <option value="portal" data-i18n="cfg.network.auth_portal">网页登录认证</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-i18n="cfg.network.portal_url">网页登录地址</label>
+                <input id="portalLoginUrl" inputmode="url" data-i18n-placeholder="cfg.network.portal_url_ph" placeholder="例如 http://10.0.0.1/login">
+              </div>
+            </div>
+            <div class="mode-note" data-i18n="cfg.network.advanced_note">自动模式会按账号和密码推断：有账号优先企业认证，只有密码使用普通 WiFi，无密码使用开放网络。</div>
           </div>
         </div>
       </div>

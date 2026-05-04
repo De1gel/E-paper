@@ -114,7 +114,7 @@ String summarizeAsciiTitle(const String &title) {
 }
 
 String summarizeCjkTitle(const String &title) {
-  String normalized = fallbackMissingGlyphs(title, TextFont::Cjk16, "ITEM");
+  String normalized = fallbackMissingGlyphs(title, TextFont::Cjk10, "ITEM");
   normalized.trim();
   if (normalized.length() == 0) {
     return "ITEM";
@@ -177,7 +177,7 @@ void fillUiStrings(CalendarModel &model) {
     model.more_label = fallbackMissingGlyphs(kZhMoreLabel, TextFont::Cjk16, "GENG DUO");
     for (uint8_t i = 0; i < 7; ++i) {
       model.weekday_labels[i] =
-          fallbackMissingGlyphs(kZhWeekdayLabels[i], TextFont::Cjk16, kZhWeekdayFallbacks[i]);
+          fallbackMissingGlyphs(kZhWeekdayLabels[i], TextFont::Cjk26, kZhWeekdayFallbacks[i]);
     }
     return;
   }
@@ -270,7 +270,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   if (weather_label.length() == 0) {
     weather_label = (model.ui_language == "zh") ? "TIAN QI" : "WEATHER";
   } else if (model.ui_language == "zh") {
-    weather_label = fallbackMissingGlyphs(weather_label, TextFont::Cjk16, "TIAN QI");
+    weather_label = fallbackMissingGlyphs(weather_label, TextFont::Cjk30, "TIAN QI");
   }
   model.header_weather = weather_label;
   model.header_weather_code = static_cast<int16_t>(wifi_manager.weatherCode());

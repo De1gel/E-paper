@@ -28,12 +28,18 @@ FontBoxMetrics fontBoxMetrics(TextFont font) {
   switch (font) {
     case TextFont::AsciiSmooth:
       return FontBoxMetrics{0, 0, 0, fonts::kAsciiSmoothFontPx};
-    case TextFont::Cjk24:
-      return FontBoxMetrics{fonts::kZhFont24BoxLeft, fonts::kZhFont24BoxTop,
-                            fonts::kZhFont24BoxWidth, fonts::kZhFont24BoxHeight};
+    case TextFont::Cjk30:
+      return FontBoxMetrics{fonts::kZhFont30BoxLeft, fonts::kZhFont30BoxTop,
+                            fonts::kZhFont30BoxWidth, fonts::kZhFont30BoxHeight};
+    case TextFont::Cjk26:
+      return FontBoxMetrics{fonts::kZhFont26BoxLeft, fonts::kZhFont26BoxTop,
+                            fonts::kZhFont26BoxWidth, fonts::kZhFont26BoxHeight};
     case TextFont::Cjk16:
       return FontBoxMetrics{fonts::kZhFont16BoxLeft, fonts::kZhFont16BoxTop,
                             fonts::kZhFont16BoxWidth, fonts::kZhFont16BoxHeight};
+    case TextFont::Cjk10:
+      return FontBoxMetrics{fonts::kZhFont10BoxLeft, fonts::kZhFont10BoxTop,
+                            fonts::kZhFont10BoxWidth, fonts::kZhFont10BoxHeight};
     default:
       return FontBoxMetrics{0, 0, kAsciiGlyphWidth, kAsciiGlyphHeight};
   }
@@ -85,7 +91,17 @@ bool decodeNextUtf8Codepoint(const String &text, size_t &byte_index, uint32_t &c
 }
 
 uint8_t requestedCjkPx(TextFont font) {
-  return (font == TextFont::Cjk24) ? fonts::kZhFontPx24 : fonts::kZhFontPx16;
+  switch (font) {
+    case TextFont::Cjk30:
+      return fonts::kZhFontPx30;
+    case TextFont::Cjk26:
+      return fonts::kZhFontPx26;
+    case TextFont::Cjk16:
+      return fonts::kZhFontPx16;
+    case TextFont::Cjk10:
+    default:
+      return fonts::kZhFontPx10;
+  }
 }
 
 uint8_t textBaseHeight(TextFont font) {
@@ -103,11 +119,16 @@ GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle 
 }
 
 uint8_t resolveCjkFontForPixelHeight(uint8_t pixel_height) {
-  const FontBoxMetrics box16 = fontBoxMetrics(TextFont::Cjk16);
-  const FontBoxMetrics box24 = fontBoxMetrics(TextFont::Cjk24);
-  const int dist16 = abs(static_cast<int>(pixel_height) - static_cast<int>(box16.height));
-  const int dist24 = abs(static_cast<int>(pixel_height) - static_cast<int>(box24.height));
-  return (dist16 <= dist24) ? fonts::kZhFontPx16 : fonts::kZhFontPx24;
+  if (pixel_height >= 28u) {
+    return fonts::kZhFontPx30;
+  }
+  if (pixel_height >= 21u) {
+    return fonts::kZhFontPx26;
+  }
+  if (pixel_height >= 13u) {
+    return fonts::kZhFontPx16;
+  }
+  return fonts::kZhFontPx10;
 }
 
 uint8_t scaledDimension(uint8_t source_dim, const TextStyle &style) {
@@ -231,7 +252,20 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
     style.font = TextFont::AsciiSmooth;
   } else if (font == TextFont::CjkAuto) {
     const uint8_t resolved_px = resolveCjkFontForPixelHeight(pixel_height);
-    style.font = (resolved_px >= fonts::kZhFontPx24) ? TextFont::Cjk24 : TextFont::Cjk16;
+    switch (resolved_px) {
+      case fonts::kZhFontPx30:
+        style.font = TextFont::Cjk30;
+        break;
+      case fonts::kZhFontPx26:
+        style.font = TextFont::Cjk26;
+        break;
+      case fonts::kZhFontPx16:
+        style.font = TextFont::Cjk16;
+        break;
+      default:
+        style.font = TextFont::Cjk10;
+        break;
+    }
   } else {
     style.font = font;
   }

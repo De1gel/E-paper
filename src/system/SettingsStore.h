@@ -10,7 +10,10 @@ namespace appfw {
 
 struct WifiSettings {
   String sta_ssid;
+  String sta_user;
   String sta_pass;
+  String sta_auth_mode;
+  String portal_login_url;
   String ui_language;
   String timezone;
   uint32_t photo_interval_sec = 3600;

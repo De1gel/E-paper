@@ -9,8 +9,10 @@ enum class TextFont : uint8_t {
   Auto = 0,
   CjkAuto = 1,
   AsciiSmooth = 2,
+  Cjk10 = 10,
   Cjk16 = 16,
-  Cjk24 = 24,
+  Cjk26 = 26,
+  Cjk30 = 30,
 };
 
 enum class TextAAMode : uint8_t {

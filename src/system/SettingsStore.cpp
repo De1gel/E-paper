@@ -6,7 +6,10 @@ namespace appfw {
 namespace {
 
 constexpr const char *kDefaultStaSsid = "DESKTOP-09PTMRM 4607";
+constexpr const char *kDefaultStaUser = "";
 constexpr const char *kDefaultStaPass = "67O9b1-2";
+constexpr const char *kDefaultStaAuthMode = "auto";
+constexpr const char *kDefaultPortalLoginUrl = "";
 constexpr const char *kDefaultUiLanguage = "zh";
 constexpr const char *kDefaultTimezone = "Asia/Shanghai";
 constexpr const char *kDefaultCalendarUrl = "";
@@ -21,7 +24,10 @@ constexpr const char *kDefaultWeatherUrl =
 void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event_count,
                                   uint16_t &next_calendar_event_id) {
   settings.sta_ssid = kDefaultStaSsid;
+  settings.sta_user = kDefaultStaUser;
   settings.sta_pass = kDefaultStaPass;
+  settings.sta_auth_mode = kDefaultStaAuthMode;
+  settings.portal_login_url = kDefaultPortalLoginUrl;
   settings.ui_language = kDefaultUiLanguage;
   settings.timezone = kDefaultTimezone;
   settings.photo_interval_sec = 3600;
@@ -40,6 +46,15 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
 
 void SettingsStore::normalize(WifiSettings &settings) {
   settings.sta_ssid.trim();
+  settings.sta_user.trim();
+  settings.sta_auth_mode.trim();
+  settings.sta_auth_mode.toLowerCase();
+  if (!(settings.sta_auth_mode == "auto" || settings.sta_auth_mode == "open" ||
+        settings.sta_auth_mode == "personal" || settings.sta_auth_mode == "enterprise" ||
+        settings.sta_auth_mode == "portal")) {
+    settings.sta_auth_mode = kDefaultStaAuthMode;
+  }
+  settings.portal_login_url.trim();
   settings.calendar_url.trim();
   settings.weather_city.trim();
   settings.weather_lat.trim();
@@ -92,7 +107,12 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   }
 
   if (prefs.isKey("sta_ssid")) settings.sta_ssid = prefs.getString("sta_ssid", kDefaultStaSsid);
+  if (prefs.isKey("sta_user")) settings.sta_user = prefs.getString("sta_user", kDefaultStaUser);
   if (prefs.isKey("sta_pass")) settings.sta_pass = prefs.getString("sta_pass", kDefaultStaPass);
+  if (prefs.isKey("sta_auth")) settings.sta_auth_mode = prefs.getString("sta_auth", kDefaultStaAuthMode);
+  if (prefs.isKey("portal_url")) {
+    settings.portal_login_url = prefs.getString("portal_url", kDefaultPortalLoginUrl);
+  }
   if (prefs.isKey("ui_lang")) settings.ui_language = prefs.getString("ui_lang", kDefaultUiLanguage);
   if (prefs.isKey("timezone")) settings.timezone = prefs.getString("timezone", kDefaultTimezone);
   if (prefs.isKey("photo_sec")) settings.photo_interval_sec = prefs.getUInt("photo_sec", 3600);
@@ -128,7 +148,10 @@ bool SettingsStore::save(Preferences &prefs, const WifiSettings &settings,
     return false;
   }
   prefs.putString("sta_ssid", settings.sta_ssid);
+  prefs.putString("sta_user", settings.sta_user);
   prefs.putString("sta_pass", settings.sta_pass);
+  prefs.putString("sta_auth", settings.sta_auth_mode);
+  prefs.putString("portal_url", settings.portal_login_url);
   prefs.putString("ui_lang", settings.ui_language);
   prefs.putString("timezone", settings.timezone);
   prefs.putUInt("photo_sec", settings.photo_interval_sec);

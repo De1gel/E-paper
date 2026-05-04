@@ -185,6 +185,24 @@
       font-size:12px;
       line-height:1.5;
     }
+    .advanced-toggle {
+      grid-column:1 / -1;
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+      font-size:13px;
+    }
+    .advanced-toggle input { width:auto; }
+    .advanced-panel {
+      grid-column:1 / -1;
+      display:none;
+      padding:12px;
+      border:1px dashed #c9d7e6;
+      border-radius:12px;
+      background:#f8fbff;
+    }
+    .advanced-panel.show { display:block; }
     .schedule-table td { vertical-align:middle; }
     .swatch {
       display:inline-block;
@@ -252,6 +270,25 @@
         <div class="grid2">
           <div class="field"><label>STA SSID</label><input id="ssid" placeholder="连接到现有 WiFi"></div>
           <div class="field"><label>STA 密码</label><input id="pass" type="password" placeholder="输入 WiFi 密码"></div>
+          <div class="field"><label>账号 / 身份</label><input id="staUser" autocomplete="username" placeholder="校园网或企业 WiFi 才需要"></div>
+          <div class="status-item" style="grid-column:1 / -1;"><div class="k">STA 状态</div><div class="v" id="cfgStaStatus">--</div><div class="small" id="cfgStaDetail" style="margin-top:4px">--</div></div>
+          <label class="advanced-toggle"><input id="manualAuthToggle" type="checkbox"><span>手动高级配置</span></label>
+          <div id="networkAdvanced" class="advanced-panel">
+            <div class="grid2">
+              <div class="field">
+                <label>连接类型</label>
+                <select id="staAuthMode">
+                  <option value="auto">自动</option>
+                  <option value="personal">普通密码 WiFi</option>
+                  <option value="enterprise">企业/校园网 802.1X</option>
+                  <option value="open">开放网络</option>
+                  <option value="portal">网页登录认证</option>
+                </select>
+              </div>
+              <div class="field"><label>网页登录地址</label><input id="portalLoginUrl" inputmode="url" placeholder="例如 http://10.0.0.1/login"></div>
+            </div>
+            <div class="mode-note">自动模式会按账号和密码推断：有账号优先企业认证，只有密码使用普通 WiFi，无密码使用开放网络。</div>
+          </div>
         </div>
       </div>
 

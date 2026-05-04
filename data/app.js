@@ -21,7 +21,14 @@ const gammaHint = document.getElementById("gammaHint");
 const modeNote = document.getElementById("modeNote");
 
 const ssid = document.getElementById("ssid");
+const staUser = document.getElementById("staUser");
 const pass = document.getElementById("pass");
+const manualAuthToggle = document.getElementById("manualAuthToggle");
+const networkAdvanced = document.getElementById("networkAdvanced");
+const staAuthMode = document.getElementById("staAuthMode");
+const portalLoginUrl = document.getElementById("portalLoginUrl");
+const cfgStaStatus = document.getElementById("cfgStaStatus");
+const cfgStaDetail = document.getElementById("cfgStaDetail");
 const sec = document.getElementById("sec");
 const calendarSec = document.getElementById("calendarSec");
 const calendarTimeRefreshSec = document.getElementById("calendarTimeRefreshSec");
@@ -87,6 +94,25 @@ const I18N = {
     "cfg.network.ssid_ph": "连接到现有 WiFi",
     "cfg.network.pass": "STA 密码",
     "cfg.network.pass_ph": "输入 WiFi 密码",
+    "cfg.network.user": "账号 / 身份",
+    "cfg.network.user_ph": "校园网或企业 WiFi 才需要",
+    "cfg.network.manual": "手动高级配置",
+    "cfg.network.auth_mode": "连接类型",
+    "cfg.network.auth_auto": "自动",
+    "cfg.network.auth_personal": "普通密码 WiFi",
+    "cfg.network.auth_enterprise": "企业/校园网 802.1X",
+    "cfg.network.auth_open": "开放网络",
+    "cfg.network.auth_portal": "网页登录认证",
+    "cfg.network.portal_url": "网页登录地址",
+    "cfg.network.portal_url_ph": "例如 http://10.0.0.1/login",
+    "cfg.network.advanced_note": "自动模式会按账号和密码推断：有账号优先企业认证，只有密码使用普通 WiFi，无密码使用开放网络。",
+    "cfg.network.sta_status": "STA 状态",
+    "cfg.network.sta_connected": "已连接",
+    "cfg.network.sta_connecting": "连接中",
+    "cfg.network.sta_idle": "未连接",
+    "cfg.network.sta_detail_fmt": "STA IP: {ip}；AP: {ap}",
+    "cfg.network.ap_on": "已开启",
+    "cfg.network.ap_off": "未开启",
     "cfg.network.language": "页面语言",
     "cfg.network.lang_zh": "中文",
     "cfg.network.lang_en": "English",
@@ -271,6 +297,25 @@ const I18N = {
     "cfg.network.ssid_ph": "Connect to existing WiFi",
     "cfg.network.pass": "STA Password",
     "cfg.network.pass_ph": "Enter WiFi password",
+    "cfg.network.user": "Account / identity",
+    "cfg.network.user_ph": "Only needed for campus or enterprise WiFi",
+    "cfg.network.manual": "Manual advanced config",
+    "cfg.network.auth_mode": "Connection type",
+    "cfg.network.auth_auto": "Auto",
+    "cfg.network.auth_personal": "Password WiFi",
+    "cfg.network.auth_enterprise": "Enterprise/campus 802.1X",
+    "cfg.network.auth_open": "Open network",
+    "cfg.network.auth_portal": "Web portal login",
+    "cfg.network.portal_url": "Portal login URL",
+    "cfg.network.portal_url_ph": "e.g. http://10.0.0.1/login",
+    "cfg.network.advanced_note": "Auto mode infers from account and password: account uses enterprise, password-only uses normal WiFi, no password uses open WiFi.",
+    "cfg.network.sta_status": "STA Status",
+    "cfg.network.sta_connected": "Connected",
+    "cfg.network.sta_connecting": "Connecting",
+    "cfg.network.sta_idle": "Disconnected",
+    "cfg.network.sta_detail_fmt": "STA IP: {ip}; AP: {ap}",
+    "cfg.network.ap_on": "on",
+    "cfg.network.ap_off": "off",
     "cfg.network.language": "UI Language",
     "cfg.network.lang_zh": "Chinese",
     "cfg.network.lang_en": "English",
@@ -455,6 +500,25 @@ const I18N = {
     "cfg.network.ssid_ph": "Se connecter au WiFi existant",
     "cfg.network.pass": "Mot de passe STA",
     "cfg.network.pass_ph": "Entrer le mot de passe WiFi",
+    "cfg.network.user": "Compte / identite",
+    "cfg.network.user_ph": "Seulement pour WiFi campus ou entreprise",
+    "cfg.network.manual": "Configuration avancee manuelle",
+    "cfg.network.auth_mode": "Type de connexion",
+    "cfg.network.auth_auto": "Auto",
+    "cfg.network.auth_personal": "WiFi avec mot de passe",
+    "cfg.network.auth_enterprise": "Entreprise/campus 802.1X",
+    "cfg.network.auth_open": "Reseau ouvert",
+    "cfg.network.auth_portal": "Portail web",
+    "cfg.network.portal_url": "URL du portail",
+    "cfg.network.portal_url_ph": "ex. http://10.0.0.1/login",
+    "cfg.network.advanced_note": "Le mode auto deduit le type avec compte et mot de passe : compte = entreprise, mot de passe seul = WiFi normal, aucun mot de passe = ouvert.",
+    "cfg.network.sta_status": "Etat STA",
+    "cfg.network.sta_connected": "Connecte",
+    "cfg.network.sta_connecting": "Connexion",
+    "cfg.network.sta_idle": "Deconnecte",
+    "cfg.network.sta_detail_fmt": "IP STA : {ip} ; AP : {ap}",
+    "cfg.network.ap_on": "actif",
+    "cfg.network.ap_off": "inactif",
     "cfg.network.language": "Langue UI",
     "cfg.network.lang_zh": "Chinois",
     "cfg.network.lang_en": "Anglais",
@@ -670,6 +734,9 @@ function applyI18n(lang) {
   if (lastFileItems.length > 0) {
     fileSummary.textContent = fmt("common.current_dir_fmt", { dir: currentDir, count: lastFileItems.length });
   }
+  if (cfgStaStatus && cfgStaDetail) {
+    void loadStatus();
+  }
 }
 
 function weekdayLabel(index) {
@@ -699,6 +766,38 @@ function setNotice(text) {
   }
   statusNote.style.display = "block";
   statusNote.textContent = text;
+}
+
+function normalizeAuthMode(value) {
+  const mode = String(value || "auto").trim().toLowerCase();
+  if (["auto", "open", "personal", "enterprise", "portal"].includes(mode)) {
+    return mode;
+  }
+  return "auto";
+}
+
+function syncNetworkAdvanced() {
+  if (!networkAdvanced || !manualAuthToggle || !staAuthMode) return;
+  const manual = !!manualAuthToggle.checked;
+  networkAdvanced.classList.toggle("show", manual);
+  staAuthMode.disabled = !manual;
+  if (portalLoginUrl) {
+    portalLoginUrl.disabled = !manual;
+  }
+}
+
+function renderStaStatus(status) {
+  if (!cfgStaStatus || !cfgStaDetail) return;
+  const staIp = status && status.sta_ip ? status.sta_ip : "--";
+  const apText = status && status.ap_active ? t("cfg.network.ap_on") : t("cfg.network.ap_off");
+  if (status && status.sta_connected) {
+    cfgStaStatus.textContent = t("cfg.network.sta_connected");
+  } else if (status && status.sta_connecting) {
+    cfgStaStatus.textContent = t("cfg.network.sta_connecting");
+  } else {
+    cfgStaStatus.textContent = t("cfg.network.sta_idle");
+  }
+  cfgStaDetail.textContent = fmt("cfg.network.sta_detail_fmt", { ip: staIp, ap: apText });
 }
 
 function normalizeDir(path) {
@@ -808,6 +907,10 @@ if (uiLanguage) {
     applyI18n(uiLanguage.value);
   });
 }
+if (manualAuthToggle) {
+  manualAuthToggle.addEventListener("change", syncNetworkAdvanced);
+}
+syncNetworkAdvanced();
 
 function syncScheduleRepeatFields() {
   if (!scheduleRepeat || !scheduleDate || !scheduleWeekday) return;
@@ -896,6 +999,7 @@ async function loadStatus() {
     try {
       const j = JSON.parse(txt);
       latestStatusState = j.state || "";
+      renderStaStatus(j);
       document.getElementById("st_mode").textContent = stateLabel(j.state || "");
       document.getElementById("st_ip").textContent = j.ip || "--";
       document.getElementById("st_apip").textContent = j.ap_ip || "--";
@@ -944,7 +1048,15 @@ async function loadCfg() {
   const r = await fetch("/api/settings");
   const j = await r.json();
   ssid.value = j.sta_ssid || "";
+  if (staUser) staUser.value = j.sta_user || "";
   pass.value = j.sta_pass || "";
+  const authMode = normalizeAuthMode(j.sta_auth_mode);
+  if (staAuthMode) staAuthMode.value = authMode;
+  if (portalLoginUrl) portalLoginUrl.value = j.portal_login_url || "";
+  if (manualAuthToggle) {
+    manualAuthToggle.checked = authMode !== "auto" || !!(j.portal_login_url || "");
+    syncNetworkAdvanced();
+  }
   if (uiLanguage) {
     uiLanguage.value = normalizeLang(j.ui_language || "zh");
     applyI18n(uiLanguage.value);
@@ -993,7 +1105,13 @@ async function saveCfg() {
       ? normalizeCalendarTimeRefreshSec(calendarTimeRefreshSec.value)
       : 600;
     const langValue = uiLanguage ? normalizeLang(uiLanguage.value) : "zh";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
+      ? normalizeAuthMode(staAuthMode.value)
+      : "auto";
+    const portalUrl = manualAuthToggle && manualAuthToggle.checked && portalLoginUrl
+      ? portalLoginUrl.value
+      : "";
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&portal_login_url=${encodeURIComponent(portalUrl)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",

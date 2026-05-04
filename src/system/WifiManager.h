@@ -63,6 +63,14 @@ class WifiManager {
   const char *disconnectReasonName(uint8_t reason) const;
   void logStaScanResults();
   void startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag);
+  String effectiveStaAuthMode() const;
+  bool beginStaConnection();
+  bool systemClockTrusted() const;
+  void restoreClockFromRtc();
+  void writeClockToRtc(const char *reason);
+  bool isApSessionActive() const;
+  bool isStaActive() const;
+  void stopStaOnly(const char *reason);
 
   void startServer();
   void stopServer();
@@ -138,6 +146,7 @@ class WifiManager {
   uint16_t last_calendar_sync_total_ = 0;
   uint16_t last_calendar_sync_vevents_ = 0;
   int last_sta_wifi_status_ = -1;
+  bool ap_active_ = false;
 
   WebServer *server_ = nullptr;
   Preferences *prefs_ = nullptr;
@@ -146,6 +155,7 @@ class WifiManager {
   bool sd_spi_started_ = false;
   bool web_fs_ready_ = false;
   bool wifi_events_registered_ = false;
+  bool rtc_time_trusted_ = false;
   static constexpr uint8_t kPeripheralPowerPin = 32;
 
   static constexpr uint8_t kSdCsPin = 5;

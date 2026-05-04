@@ -9,11 +9,13 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <sys/time.h>
 #include <time.h>
 #include <algorithm>
 #include <vector>
 #include <esp_adc_cal.h>
 #include <esp_wifi.h>
+#include <esp_wpa2.h>
 
 #include "system/CalendarSettings.h"
 #include "system/CalendarEventNormalize.h"
@@ -31,6 +33,8 @@ constexpr uint16_t kHttpPort = 80;
 constexpr uint8_t kI2cSdaPin = 21;
 constexpr uint8_t kI2cSclPin = 22;
 constexpr uint8_t kAht20Address = 0x38;
+constexpr uint8_t kRx8025Address = 0x32;
+constexpr time_t kMinTrustedEpoch = 1704067200;  // 2024-01-01 00:00:00 UTC.
 
 int32_t dayIdFromTm(const struct tm &tm_value) {
   return static_cast<int32_t>((tm_value.tm_year + 1900) * 10000 + (tm_value.tm_mon + 1) * 100 +
@@ -59,6 +63,95 @@ String formatDateTimeYmdHm(time_t epoch_value) {
   snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d", tm_value.tm_year + 1900,
            tm_value.tm_mon + 1, tm_value.tm_mday, tm_value.tm_hour, tm_value.tm_min);
   return String(buf);
+}
+
+uint8_t bcdToDec(uint8_t value) {
+  return static_cast<uint8_t>(((value >> 4) * 10u) + (value & 0x0Fu));
+}
+
+uint8_t decToBcd(uint8_t value) {
+  return static_cast<uint8_t>(((value / 10u) << 4) | (value % 10u));
+}
+
+int64_t daysFromCivil(int year, unsigned month, unsigned day) {
+  year -= month <= 2;
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(year - era * 400);
+  const unsigned doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+time_t epochFromUtcTm(const struct tm &tm_value) {
+  const int year = tm_value.tm_year + 1900;
+  const unsigned month = static_cast<unsigned>(tm_value.tm_mon + 1);
+  const unsigned day = static_cast<unsigned>(tm_value.tm_mday);
+  const int64_t days = daysFromCivil(year, month, day);
+  const int64_t seconds = days * 86400LL +
+                          static_cast<int64_t>(tm_value.tm_hour) * 3600LL +
+                          static_cast<int64_t>(tm_value.tm_min) * 60LL +
+                          static_cast<int64_t>(tm_value.tm_sec);
+  return static_cast<time_t>(seconds);
+}
+
+bool isTrustedEpoch(time_t epoch_value) {
+  return epoch_value >= kMinTrustedEpoch;
+}
+
+bool readRx8025Utc(time_t &epoch_value) {
+  epoch_value = 0;
+  Wire.beginTransmission(kRx8025Address);
+  Wire.write(0x00);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  const int len = Wire.requestFrom(static_cast<int>(kRx8025Address), 7);
+  if (len != 7) {
+    return false;
+  }
+  uint8_t data[7] = {};
+  for (uint8_t i = 0; i < 7; ++i) {
+    if (!Wire.available()) {
+      return false;
+    }
+    data[i] = static_cast<uint8_t>(Wire.read());
+  }
+
+  struct tm tm_utc {};
+  tm_utc.tm_sec = bcdToDec(data[0] & 0x7F);
+  tm_utc.tm_min = bcdToDec(data[1] & 0x7F);
+  tm_utc.tm_hour = bcdToDec(data[2] & 0x3F);
+  tm_utc.tm_mday = bcdToDec(data[4] & 0x3F);
+  tm_utc.tm_mon = bcdToDec(data[5] & 0x1F) - 1;
+  tm_utc.tm_year = bcdToDec(data[6]) + 100;
+  if (tm_utc.tm_sec > 59 || tm_utc.tm_min > 59 || tm_utc.tm_hour > 23 ||
+      tm_utc.tm_mday < 1 || tm_utc.tm_mday > 31 || tm_utc.tm_mon < 0 ||
+      tm_utc.tm_mon > 11) {
+    return false;
+  }
+  epoch_value = epochFromUtcTm(tm_utc);
+  return isTrustedEpoch(epoch_value);
+}
+
+bool writeRx8025Utc(time_t epoch_value) {
+  if (!isTrustedEpoch(epoch_value)) {
+    return false;
+  }
+  struct tm tm_utc {};
+  if (gmtime_r(&epoch_value, &tm_utc) == nullptr) {
+    return false;
+  }
+
+  Wire.beginTransmission(kRx8025Address);
+  Wire.write(0x00);
+  Wire.write(decToBcd(static_cast<uint8_t>(tm_utc.tm_sec)));
+  Wire.write(decToBcd(static_cast<uint8_t>(tm_utc.tm_min)));
+  Wire.write(decToBcd(static_cast<uint8_t>(tm_utc.tm_hour)));
+  Wire.write(static_cast<uint8_t>(1u << tm_utc.tm_wday));
+  Wire.write(decToBcd(static_cast<uint8_t>(tm_utc.tm_mday)));
+  Wire.write(decToBcd(static_cast<uint8_t>(tm_utc.tm_mon + 1)));
+  Wire.write(decToBcd(static_cast<uint8_t>((tm_utc.tm_year + 1900) % 100)));
+  return Wire.endTransmission() == 0;
 }
 
 String jsonEscape(const String &s) {
@@ -531,7 +624,7 @@ void WifiManager::begin() {
 void WifiManager::update(uint32_t now_ms) {
   updateSensors(now_ms);
 
-  if (server_ != nullptr && (state_ == State::ApRunning || state_ == State::StaRunning)) {
+  if (server_ != nullptr && (isApSessionActive() || state_ == State::StaRunning)) {
     server_->handleClient();
   }
 
@@ -567,11 +660,13 @@ void WifiManager::update(uint32_t now_ms) {
                                http_status, request_error)) {
         Serial.printf("[TIME] synced tz=%s local=%s\n",
                       resolved_timezone.c_str(), local_time.c_str());
+        writeClockToRtc("weather_sync");
       } else {
         const String effective_tz = timezoneForEsp(settings_.timezone, false, 0);
         if (syncClockWithTimezone(effective_tz, local_time, sync_error)) {
           Serial.printf("[TIME] fallback synced tz=%s local=%s\n",
                         effective_tz.c_str(), local_time.c_str());
+          writeClockToRtc("fallback_ntp");
         } else {
           Serial.printf("[TIME] sync failed weather_err=%s tz=%s err=%s\n",
                         request_error.c_str(), effective_tz.c_str(), sync_error.c_str());
@@ -583,8 +678,12 @@ void WifiManager::update(uint32_t now_ms) {
       Serial.printf("[WIFI] STA connect timeout -> stop (last_status=%s/%d)\n",
                     wifiStatusName(status), status);
       sta_connect_failed_ = true;
-      stop("sta_connect_timeout");
-      auto_exit_requested_ = true;
+      if (isApSessionActive()) {
+        stopStaOnly("sta_connect_timeout_keep_ap");
+      } else {
+        stop("sta_connect_timeout");
+        auto_exit_requested_ = true;
+      }
     }
     return;
   }
@@ -592,8 +691,12 @@ void WifiManager::update(uint32_t now_ms) {
   if (state_ == State::StaRunning && WiFi.status() != WL_CONNECTED) {
     Serial.println("[WIFI] STA lost connection -> stop");
     sta_connect_failed_ = true;
-    stop("sta_lost_connection");
-    auto_exit_requested_ = true;
+    if (isApSessionActive()) {
+      stopStaOnly("sta_lost_connection_keep_ap");
+    } else {
+      stop("sta_lost_connection");
+      auto_exit_requested_ = true;
+    }
     return;
   }
 
@@ -608,14 +711,17 @@ void WifiManager::startAP() {
   stop("switch_to_ap");
   digitalWrite(kPeripheralPowerPin, HIGH);
   delay(3);
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setHostname(kDefaultHostname);
   const bool ok = WiFi.softAP(kDefaultApSsid, kDefaultApPass);
   if (!ok) {
     Serial.println("[WIFI] AP start failed");
     state_ = State::Idle;
+    ap_active_ = false;
     return;
   }
 
+  ap_active_ = true;
   state_ = State::ApRunning;
   markActivity(millis());
   startServer();
@@ -624,6 +730,11 @@ void WifiManager::startAP() {
                 WiFi.softAPIP().toString().c_str(),
                 static_cast<unsigned long>(kApIdleTimeoutMs / 1000));
   Serial.println("[WIFI] portal url: http://192.168.4.1/");
+  if (hasStaCredentials()) {
+    startSTAWithTimeout(kStaConnectTimeoutManualMs, "ap_config_background");
+  } else {
+    Serial.println("[WIFI] AP config mode: no STA credentials saved");
+  }
 }
 
 void WifiManager::startSTA() {
@@ -634,21 +745,144 @@ void WifiManager::startStaAutoSync() {
   startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "auto_sync");
 }
 
+String WifiManager::effectiveStaAuthMode() const {
+  String mode = settings_.sta_auth_mode;
+  mode.trim();
+  mode.toLowerCase();
+  if (mode != "auto") {
+    return mode;
+  }
+  if (settings_.sta_user.length() > 0) {
+    return "enterprise";
+  }
+  if (settings_.sta_pass.length() > 0) {
+    return "personal";
+  }
+  return "open";
+}
+
+bool WifiManager::beginStaConnection() {
+  const String mode = effectiveStaAuthMode();
+  if (mode == "enterprise") {
+    if (settings_.sta_user.length() == 0 || settings_.sta_pass.length() == 0) {
+      Serial.println("[WIFI] enterprise auth requires account and password");
+      return false;
+    }
+    const unsigned char *identity =
+        reinterpret_cast<const unsigned char *>(settings_.sta_user.c_str());
+    const unsigned char *password =
+        reinterpret_cast<const unsigned char *>(settings_.sta_pass.c_str());
+    esp_wifi_sta_wpa2_ent_clear_identity();
+    esp_wifi_sta_wpa2_ent_clear_username();
+    esp_wifi_sta_wpa2_ent_clear_password();
+    esp_wifi_sta_wpa2_ent_set_identity(identity, settings_.sta_user.length());
+    esp_wifi_sta_wpa2_ent_set_username(identity, settings_.sta_user.length());
+    esp_wifi_sta_wpa2_ent_set_password(password, settings_.sta_pass.length());
+    const bool trusted_clock = systemClockTrusted();
+    esp_wifi_sta_wpa2_ent_set_disable_time_check(!trusted_clock);
+    Serial.printf("[WIFI] enterprise cert time check=%s\n",
+                  trusted_clock ? "enabled" : "disabled_until_time_sync");
+    const esp_err_t err = esp_wifi_sta_wpa2_ent_enable();
+    if (err != ESP_OK) {
+      Serial.printf("[WIFI] enterprise enable failed err=%d\n", static_cast<int>(err));
+      return false;
+    }
+    WiFi.begin(settings_.sta_ssid.c_str());
+    Serial.printf("[WIFI] STA enterprise begin user=%s\n", settings_.sta_user.c_str());
+    return true;
+  }
+
+  esp_wifi_sta_wpa2_ent_disable();
+  if (mode == "open") {
+    WiFi.begin(settings_.sta_ssid.c_str());
+    Serial.println("[WIFI] STA open begin");
+    return true;
+  }
+  if (mode == "portal") {
+    if (settings_.sta_pass.length() > 0) {
+      WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
+    } else {
+      WiFi.begin(settings_.sta_ssid.c_str());
+    }
+    Serial.printf("[WIFI] STA portal begin login_url=%s\n", settings_.portal_login_url.c_str());
+    return true;
+  }
+  WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
+  Serial.println("[WIFI] STA personal begin");
+  return true;
+}
+
+bool WifiManager::systemClockTrusted() const {
+  return rtc_time_trusted_ || isTrustedEpoch(time(nullptr));
+}
+
+void WifiManager::restoreClockFromRtc() {
+  time_t rtc_epoch = 0;
+  if (!readRx8025Utc(rtc_epoch)) {
+    rtc_time_trusted_ = false;
+    Serial.println("[RTC] RX8025 read failed or time not trusted");
+    return;
+  }
+  timeval tv {};
+  tv.tv_sec = rtc_epoch;
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    rtc_time_trusted_ = false;
+    Serial.println("[RTC] settimeofday failed");
+    return;
+  }
+  rtc_time_trusted_ = true;
+  Serial.printf("[RTC] restored UTC epoch=%lu\n", static_cast<unsigned long>(rtc_epoch));
+}
+
+void WifiManager::writeClockToRtc(const char *reason) {
+  const time_t now_epoch = time(nullptr);
+  if (!isTrustedEpoch(now_epoch)) {
+    Serial.printf("[RTC] skip write reason=%s untrusted_epoch=%ld\n",
+                  reason ? reason : "unknown", static_cast<long>(now_epoch));
+    return;
+  }
+  if (writeRx8025Utc(now_epoch)) {
+    rtc_time_trusted_ = true;
+    Serial.printf("[RTC] wrote UTC epoch=%lu reason=%s\n",
+                  static_cast<unsigned long>(now_epoch),
+                  reason ? reason : "unknown");
+  } else {
+    Serial.printf("[RTC] write failed reason=%s\n", reason ? reason : "unknown");
+  }
+}
+
 void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag) {
-  stop("switch_to_sta");
+  const bool keep_ap = isApSessionActive();
+  if (!keep_ap) {
+    stop("switch_to_sta");
+  } else if (isStaActive()) {
+    stopStaOnly("restart_sta_keep_ap");
+  }
   digitalWrite(kPeripheralPowerPin, HIGH);
   delay(3);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(keep_ap ? WIFI_AP_STA : WIFI_STA);
   WiFi.setHostname(kDefaultHostname);
   logStaScanResults();
-  WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
+  if (!beginStaConnection()) {
+    sta_connect_failed_ = true;
+    if (keep_ap) {
+      stopStaOnly("sta_auth_config_invalid_keep_ap");
+    } else {
+      stop("sta_auth_config_invalid");
+      auto_exit_requested_ = true;
+    }
+    return;
+  }
   sta_connect_start_ms_ = millis();
   sta_connect_timeout_ms_ = connect_timeout_ms;
   state_ = State::StaConnecting;
   last_sta_wifi_status_ = WiFi.status();
-  Serial.printf("[WIFI] STA connecting reason=%s ssid=%s pass_len=%u timeout=%lus initial_status=%s/%d\n",
+  Serial.printf("[WIFI] STA connecting reason=%s ssid=%s auth=%s user_len=%u pass_len=%u timeout=%lus initial_status=%s/%d\n",
                 reason_tag ? reason_tag : "unknown",
                 settings_.sta_ssid.c_str(),
+                effectiveStaAuthMode().c_str(),
+                static_cast<unsigned>(settings_.sta_user.length()),
                 static_cast<unsigned>(settings_.sta_pass.length()),
                 static_cast<unsigned long>(sta_connect_timeout_ms_ / 1000),
                 wifiStatusName(last_sta_wifi_status_),
@@ -668,11 +902,16 @@ void WifiManager::stop(const char *reason) {
       WiFi.disconnect(false, false);
       delay(60);
     }
+    esp_wifi_sta_wpa2_ent_disable();
+    esp_wifi_sta_wpa2_ent_clear_identity();
+    esp_wifi_sta_wpa2_ent_clear_username();
+    esp_wifi_sta_wpa2_ent_clear_password();
     WiFi.mode(WIFI_OFF);
     delay(60);
   }
   digitalWrite(kPeripheralPowerPin, LOW);
   state_ = State::Idle;
+  ap_active_ = false;
   sta_connect_start_ms_ = 0;
   sta_connect_timeout_ms_ = 0;
   sta_session_start_ms_ = 0;
@@ -680,6 +919,37 @@ void WifiManager::stop(const char *reason) {
   last_calendar_sync_ms_ = 0;
   calendar_sync_pending_ = false;
   last_sta_wifi_status_ = WL_IDLE_STATUS;
+}
+
+bool WifiManager::isApSessionActive() const {
+  return ap_active_;
+}
+
+bool WifiManager::isStaActive() const {
+  return state_ == State::StaConnecting || state_ == State::StaRunning;
+}
+
+void WifiManager::stopStaOnly(const char *reason) {
+  if (!isStaActive()) {
+    return;
+  }
+  Serial.printf("[WIFI] stop STA reason=%s\n", reason ? reason : "none");
+  WiFi.disconnect(false, false);
+  delay(60);
+  esp_wifi_sta_wpa2_ent_disable();
+  esp_wifi_sta_wpa2_ent_clear_identity();
+  esp_wifi_sta_wpa2_ent_clear_username();
+  esp_wifi_sta_wpa2_ent_clear_password();
+  state_ = ap_active_ ? State::ApRunning : State::Idle;
+  sta_connect_start_ms_ = 0;
+  sta_connect_timeout_ms_ = 0;
+  sta_session_start_ms_ = 0;
+  calendar_sync_pending_ = false;
+  last_calendar_sync_ms_ = 0;
+  last_sta_wifi_status_ = WL_IDLE_STATUS;
+  if (!ap_active_) {
+    stop("sta_only_stop_no_ap");
+  }
 }
 
 bool WifiManager::consumeAutoExitRequested() {
@@ -703,7 +973,20 @@ bool WifiManager::isStaConnected() const {
 }
 
 bool WifiManager::hasStaCredentials() const {
-  return settings_.sta_ssid.length() > 0 && settings_.sta_pass.length() > 0;
+  if (settings_.sta_ssid.length() == 0) {
+    return false;
+  }
+  const String mode = effectiveStaAuthMode();
+  if (mode == "open") {
+    return true;
+  }
+  if (mode == "enterprise") {
+    return settings_.sta_user.length() > 0 && settings_.sta_pass.length() > 0;
+  }
+  if (mode == "portal") {
+    return true;
+  }
+  return settings_.sta_pass.length() > 0;
 }
 
 bool WifiManager::isCalendarSyncBusy() const {
@@ -1114,7 +1397,7 @@ void WifiManager::stopServer() {
 }
 
 void WifiManager::updateTimeout(uint32_t now_ms) {
-  if (state_ == State::ApRunning) {
+  if (isApSessionActive()) {
     if (last_activity_ms_ == 0) {
       markActivity(now_ms);
       return;
@@ -1314,7 +1597,10 @@ String WifiManager::currentIp() const {
 }
 
 void WifiManager::initSensors() {
+  digitalWrite(kPeripheralPowerPin, HIGH);
+  delay(3);
   Wire.begin(kI2cSdaPin, kI2cSclPin);
+  restoreClockFromRtc();
   battery_adc_pin_ = 39;  // User-requested trial pin.
   pinMode(battery_adc_pin_, INPUT);
   analogSetPinAttenuation(static_cast<uint8_t>(battery_adc_pin_), ADC_11db);
@@ -1761,6 +2047,9 @@ void WifiManager::handleRoot() {
         <div class='grid2'>
           <div class='field'><label>STA SSID</label><input id='ssid'></div>
           <div class='field'><label>STA 密码</label><input id='pass' type='password'></div>
+          <div class='field'><label>账号 / 身份</label><input id='staUser'></div>
+          <div class='field'><label>连接类型</label><select id='staAuthMode'><option value='auto'>自动</option><option value='personal'>普通密码 WiFi</option><option value='enterprise'>企业/校园网 802.1X</option><option value='open'>开放网络</option><option value='portal'>网页登录认证</option></select></div>
+          <div class='field' style='grid-column:1/3'><label>网页登录地址</label><input id='portalLoginUrl' placeholder='例如 http://10.0.0.1/login'></div>
           <div class='field'><label>轮播间隔（秒）</label><input id='sec' type='number' min='30'></div>
           <div class='field' style='grid-column:1/3'><label>天气接口 URL</label><input id='wurl'></div>
         </div>
@@ -2022,13 +2311,16 @@ void WifiManager::handleRoot() {
       const r = await fetch('/api/settings');
       const j = await r.json();
       ssid.value = j.sta_ssid || '';
+      staUser.value = j.sta_user || '';
       pass.value = j.sta_pass || '';
+      staAuthMode.value = j.sta_auth_mode || 'auto';
+      portalLoginUrl.value = j.portal_login_url || '';
       sec.value = j.photo_interval_sec || 300;
       wurl.value = j.weather_url || '';
     }
 
     async function saveCfg() {
-      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_pass=${encodeURIComponent(pass.value)}&photo_interval_sec=${encodeURIComponent(sec.value)}&weather_url=${encodeURIComponent(wurl.value)}`;
+      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser.value)}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(staAuthMode.value)}&portal_login_url=${encodeURIComponent(portalLoginUrl.value)}&photo_interval_sec=${encodeURIComponent(sec.value)}&weather_url=${encodeURIComponent(wurl.value)}`;
       const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
       document.getElementById('cfgBox').textContent = await r.text();
     }
@@ -2401,6 +2693,14 @@ void WifiManager::handleStatus() {
   String json = "{";
   json += "\"state\":\"";
   json += state_str;
+  json += "\",\"ap_active\":";
+  json += ap_active_ ? "true" : "false";
+  json += ",\"sta_connecting\":";
+  json += (state_ == State::StaConnecting) ? "true" : "false";
+  json += ",\"sta_connected\":";
+  json += (state_ == State::StaRunning && WiFi.status() == WL_CONNECTED) ? "true" : "false";
+  json += ",\"sta_ip\":\"";
+  json += jsonEscape(WiFi.localIP().toString());
   json += "\",\"ip\":\"";
   json += jsonEscape(WiFi.localIP().toString());
   json += "\",\"ap_ip\":\"";
@@ -2413,6 +2713,12 @@ void WifiManager::handleStatus() {
   json += String(sd_ready_ ? static_cast<uint32_t>(SD.usedBytes()) : 0);
   json += ",\"uptime_ms\":";
   json += String(millis());
+  json += ",\"clock_trusted\":";
+  json += systemClockTrusted() ? "true" : "false";
+  json += ",\"rtc_time_trusted\":";
+  json += rtc_time_trusted_ ? "true" : "false";
+  json += ",\"epoch\":";
+  json += String(static_cast<unsigned long>(time(nullptr)));
   json += ",\"temperature_c\":";
   if (isnan(temperature_c_)) {
     json += "-1000";
@@ -2482,7 +2788,10 @@ void WifiManager::handleSettingsGet() {
                 server_->client().remoteIP().toString().c_str());
   String json = "{";
   json += "\"sta_ssid\":\"" + jsonEscape(settings_.sta_ssid) + "\",";
+  json += "\"sta_user\":\"" + jsonEscape(settings_.sta_user) + "\",";
   json += "\"sta_pass\":\"" + jsonEscape(settings_.sta_pass) + "\",";
+  json += "\"sta_auth_mode\":\"" + jsonEscape(settings_.sta_auth_mode) + "\",";
+  json += "\"portal_login_url\":\"" + jsonEscape(settings_.portal_login_url) + "\",";
   json += "\"ui_language\":\"" + jsonEscape(settings_.ui_language) + "\",";
   json += "\"timezone\":\"" + jsonEscape(settings_.timezone) + "\",";
   json += "\"photo_interval_sec\":" + String(settings_.photo_interval_sec) + ",";
@@ -2508,7 +2817,12 @@ void WifiManager::handleSettingsPost() {
   const String previous_calendar_url = settings_.calendar_url;
   const uint32_t previous_calendar_refresh_sec = settings_.calendar_refresh_sec;
   if (server_->hasArg("sta_ssid")) settings_.sta_ssid = server_->arg("sta_ssid");
+  if (server_->hasArg("sta_user")) settings_.sta_user = server_->arg("sta_user");
   if (server_->hasArg("sta_pass")) settings_.sta_pass = server_->arg("sta_pass");
+  if (server_->hasArg("sta_auth_mode")) settings_.sta_auth_mode = server_->arg("sta_auth_mode");
+  if (server_->hasArg("portal_login_url")) {
+    settings_.portal_login_url = server_->arg("portal_login_url");
+  }
   if (server_->hasArg("ui_language")) settings_.ui_language = server_->arg("ui_language");
   if (server_->hasArg("photo_interval_sec")) {
     settings_.photo_interval_sec = static_cast<uint32_t>(server_->arg("photo_interval_sec").toInt());
@@ -2552,6 +2866,14 @@ void WifiManager::handleSettingsPost() {
   }
 
   saveSettings();
+  if (isApSessionActive()) {
+    if (hasStaCredentials()) {
+      Serial.println("[WIFI] settings saved during AP session -> restart STA background");
+      startSTAWithTimeout(kStaConnectTimeoutManualMs, "settings_saved_background");
+    } else if (isStaActive()) {
+      stopStaOnly("settings_saved_no_sta_credentials");
+    }
+  }
   server_->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -2889,6 +3211,7 @@ void WifiManager::handleWeatherTest() {
   if (time_sync_ok) {
     Serial.printf("[TIME] weather sync ok tz=%s local=%s\n",
                   resolved_timezone.c_str(), local_time.c_str());
+    writeClockToRtc("weather_test");
   } else {
     Serial.printf("[TIME] weather sync failed tz=%s err=%s\n",
                   resolved_timezone.c_str(), time_sync_error.c_str());
