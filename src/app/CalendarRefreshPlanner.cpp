@@ -93,8 +93,8 @@ CalendarRefreshPlan planCalendarRefresh(const CalendarRefreshInputs &inputs) {
     return plan;
   }
 
-  plan.mode = CalendarRefreshMode::Partial;
-  plan.reason = CalendarRefreshReason::PartialCompatibilityPath;
+  plan.mode = CalendarRefreshMode::Full;
+  plan.reason = CalendarRefreshReason::HeaderFieldsChanged;
   setSingleDirtyRect(plan.dirty, inputs.full_screen_rect, true,
                      CalendarDirtyRegionKind::FullScreen);
   return plan;

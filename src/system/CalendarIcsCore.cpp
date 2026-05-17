@@ -219,7 +219,6 @@ bool importOccurrence(const ParsedIcsEvent &source_event, time_t occurrence_star
   if (out_items.size() >= static_cast<size_t>(kMaxCalendarEvents * 4)) {
     return false;
   }
-
   struct tm start_tm {};
   struct tm end_tm {};
   if (localtime_r(&occurrence_start, &start_tm) == nullptr ||

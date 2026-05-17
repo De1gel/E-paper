@@ -37,8 +37,9 @@ CalendarSyncMergeStats CalendarSyncService::mergeImportedEvents(
     CalendarStore &store, const std::vector<CalendarEvent> &imported) {
   CalendarSyncMergeStats stats;
 
+  const size_t existing_count =
+      std::min(store.count(), static_cast<size_t>(kMaxCalendarEvents));
   CalendarEvent existing_events[kMaxCalendarEvents];
-  const size_t existing_count = store.count();
   for (size_t i = 0; i < existing_count; ++i) {
     existing_events[i] = store.data()[i];
   }
@@ -49,7 +50,7 @@ CalendarSyncMergeStats CalendarSyncService::mergeImportedEvents(
   for (size_t i = 0; i < existing_count; ++i) {
     const CalendarEvent &event = existing_events[i];
     if (event.source != "ics") {
-      if (merged_events.size() >= kMaxCalendarEvents) {
+      if (merged_events.size() >= static_cast<size_t>(kMaxCalendarEvents)) {
         break;
       }
       merged_events.push_back(event);
@@ -58,7 +59,7 @@ CalendarSyncMergeStats CalendarSyncService::mergeImportedEvents(
   }
 
   for (const CalendarEvent &raw_event : imported) {
-    if (merged_events.size() >= kMaxCalendarEvents) {
+    if (merged_events.size() >= static_cast<size_t>(kMaxCalendarEvents)) {
       break;
     }
     CalendarEvent event = raw_event;

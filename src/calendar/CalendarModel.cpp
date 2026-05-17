@@ -87,6 +87,50 @@ size_t utf8PrefixBytes(const String &text, size_t codepoint_limit) {
   return byte_index;
 }
 
+bool decodeNextUtf8CodepointLocal(const String &text, size_t &byte_index, uint32_t &codepoint) {
+  if (byte_index >= text.length()) {
+    return false;
+  }
+  const uint8_t first = static_cast<uint8_t>(text[byte_index++]);
+  if ((first & 0x80u) == 0u) {
+    codepoint = first;
+    return true;
+  }
+
+  uint8_t remaining = 0;
+  uint32_t value = 0;
+  if ((first & 0xE0u) == 0xC0u) {
+    remaining = 1;
+    value = static_cast<uint32_t>(first & 0x1Fu);
+  } else if ((first & 0xF0u) == 0xE0u) {
+    remaining = 2;
+    value = static_cast<uint32_t>(first & 0x0Fu);
+  } else if ((first & 0xF8u) == 0xF0u) {
+    remaining = 3;
+    value = static_cast<uint32_t>(first & 0x07u);
+  } else {
+    codepoint = '?';
+    return true;
+  }
+
+  for (uint8_t i = 0; i < remaining; ++i) {
+    if (byte_index >= text.length()) {
+      codepoint = '?';
+      return true;
+    }
+    const uint8_t next = static_cast<uint8_t>(text[byte_index]);
+    if ((next & 0xC0u) != 0x80u) {
+      codepoint = '?';
+      return true;
+    }
+    ++byte_index;
+    value = static_cast<uint32_t>((value << 6) | (next & 0x3Fu));
+  }
+
+  codepoint = value;
+  return true;
+}
+
 String summarizeAsciiTitle(const String &title) {
   String normalized = sanitizeDisplayText(title, "ITEM");
   normalized.trim();
@@ -114,16 +158,42 @@ String summarizeAsciiTitle(const String &title) {
 }
 
 String summarizeCjkTitle(const String &title) {
-  String normalized = fallbackMissingGlyphs(title, TextFont::Cjk10, "ITEM");
-  normalized.trim();
-  if (normalized.length() == 0) {
-    return "ITEM";
+  String out;
+  out.reserve(16);
+  size_t byte_index = 0;
+  size_t count = 0;
+  while (byte_index < title.length() && count < 3u) {
+    const size_t start = byte_index;
+    uint32_t codepoint = 0;
+    if (!decodeNextUtf8CodepointLocal(title, byte_index, codepoint)) {
+      break;
+    }
+    if (codepoint < 0x80u) {
+      continue;
+    }
+    GlyphBitmap glyph;
+    size_t probe_index = start;
+    if (!nextTextGlyph(title, probe_index, glyph, TextFont::Cjk10) || glyph.rows == glyph3x5('?')) {
+      continue;
+    }
+    out += title.substring(start, byte_index);
+    ++count;
   }
-  return normalized.substring(0, utf8PrefixBytes(normalized, 3));
+  out.trim();
+  if (out.length() > 0) {
+    return out;
+  }
+  return summarizeAsciiTitle(title);
 }
 
 String summarizeEventTitle(const String &title) {
   return isAsciiOnlyText(title) ? summarizeAsciiTitle(title) : summarizeCjkTitle(title);
+}
+
+String normalizeDynamicDisplayText(const String &text, TextFont cjk_font,
+                                   const char *ascii_fallback) {
+  return isAsciiOnlyText(text) ? sanitizeDisplayText(text, ascii_fallback)
+                               : fallbackMissingGlyphs(text, cjk_font, ascii_fallback);
 }
 
 bool parseHmToMinutes(const String &value, uint16_t &minutes_out) {
@@ -269,11 +339,16 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   weather_label.trim();
   if (weather_label.length() == 0) {
     weather_label = (model.ui_language == "zh") ? "TIAN QI" : "WEATHER";
-  } else if (model.ui_language == "zh") {
-    weather_label = fallbackMissingGlyphs(weather_label, TextFont::Cjk30, "TIAN QI");
+  } else {
+    weather_label = normalizeDynamicDisplayText(weather_label, TextFont::Cjk30, "WEATHER");
   }
   model.header_weather = weather_label;
   model.header_weather_code = static_cast<int16_t>(wifi_manager.weatherCode());
+  model.header_wifi_connected = wifi_manager.isStaConnected();
+  const float battery_pct = wifi_manager.batteryPercent();
+  model.header_battery_pct =
+      isnan(battery_pct) ? static_cast<int16_t>(-1)
+                         : static_cast<int16_t>(battery_pct + 0.5f);
 
   const float temperature_c = wifi_manager.temperatureC();
   const float humidity_pct = wifi_manager.humidityPct();
@@ -302,10 +377,8 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
       dst.title.trim();
       if (dst.title.length() == 0) {
         dst.title = "ITEM";
-      } else if (model.ui_language == "zh") {
-        dst.title = fallbackMissingGlyphs(dst.title, TextFont::Cjk16, "ITEM");
       } else {
-        dst.title = sanitizeDisplayText(dst.title, "ITEM");
+        dst.title = normalizeDynamicDisplayText(dst.title, TextFont::Cjk16, "ITEM");
       }
       dst.time_hhmm = event.time_hhmm;
       dst.end_time_hhmm = event.end_time_hhmm;

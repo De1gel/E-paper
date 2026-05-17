@@ -66,25 +66,25 @@ bool CalendarStore::removeAt(size_t index) {
   for (size_t i = index; i + 1 < count_; ++i) {
     events_[i] = events_[i + 1];
   }
-  if (count_ > 0) {
-    --count_;
-  }
+  --count_;
   return true;
 }
 
 bool CalendarStore::push(const CalendarEvent &event) {
-  if (count_ >= kMaxCalendarEvents) {
+  if (count_ >= static_cast<size_t>(kMaxCalendarEvents)) {
     return false;
   }
-  events_[count_++] = event;
+  events_[count_] = event;
+  ++count_;
   return true;
 }
 
 void CalendarStore::replaceAll(const CalendarEvent *events, size_t count) {
-  count_ = (count > kMaxCalendarEvents) ? kMaxCalendarEvents : count;
-  for (size_t i = 0; i < count_; ++i) {
+  const size_t clipped_count = std::min(count, static_cast<size_t>(kMaxCalendarEvents));
+  for (size_t i = 0; i < clipped_count; ++i) {
     events_[i] = events[i];
   }
+  count_ = clipped_count;
 }
 
 String CalendarStore::serialize() const {
@@ -269,7 +269,7 @@ String CalendarStore::jsonEscape(const String &s) {
   String out;
   out.reserve(s.length() + 8);
   for (size_t i = 0; i < s.length(); ++i) {
-    const char c = s[i];
+    const unsigned char c = static_cast<unsigned char>(s[i]);
     switch (c) {
       case '\\':
         out += "\\\\";
@@ -286,7 +286,13 @@ String CalendarStore::jsonEscape(const String &s) {
         out += "\\t";
         break;
       default:
-        out += c;
+        if (c < 0x20u) {
+          char escaped[7] = {0};
+          snprintf(escaped, sizeof(escaped), "\\u%04X", static_cast<unsigned>(c));
+          out += escaped;
+        } else {
+          out += static_cast<char>(c);
+        }
         break;
     }
   }

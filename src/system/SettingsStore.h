@@ -17,10 +17,14 @@ struct WifiSettings {
   String ui_language;
   String timezone;
   uint32_t photo_interval_sec = 3600;
+  bool app_auto_switch_enabled = false;
+  uint32_t app_switch_interval_sec = 3600;
   bool calendar_enabled = false;
   String calendar_layout;
   uint32_t calendar_refresh_sec = 900;
   uint32_t calendar_time_refresh_sec = 600;
+  uint16_t sleep_start_minute = 22 * 60;
+  uint16_t sleep_end_minute = 8 * 60;
   String calendar_url;
   String weather_city;
   String weather_lat;

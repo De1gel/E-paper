@@ -6,6 +6,7 @@
 namespace appfw {
 
 uint32_t normalizeCalendarTimeRefreshSec(uint32_t value);
+uint16_t normalizeSleepWindowMinute(uint32_t value, uint16_t fallback);
 
 }  // namespace appfw
 

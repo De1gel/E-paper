@@ -30,8 +30,13 @@ const portalLoginUrl = document.getElementById("portalLoginUrl");
 const cfgStaStatus = document.getElementById("cfgStaStatus");
 const cfgStaDetail = document.getElementById("cfgStaDetail");
 const sec = document.getElementById("sec");
+const appAutoSwitch = document.getElementById("appAutoSwitch");
+const appSwitchSec = document.getElementById("appSwitchSec");
+const appSwitchSecField = document.getElementById("appSwitchSecField");
 const calendarSec = document.getElementById("calendarSec");
 const calendarTimeRefreshSec = document.getElementById("calendarTimeRefreshSec");
+const sleepStart = document.getElementById("sleepStart");
+const sleepEnd = document.getElementById("sleepEnd");
 const calendarUrl = document.getElementById("calendarUrl");
 const calendarLayout = document.getElementById("calendarLayout");
 const weatherLocation = document.getElementById("weatherLocation");
@@ -60,6 +65,7 @@ let filesLoadedOnce = false;
 let schedulesLoadedOnce = false;
 let statusPollTimer = null;
 let statusPollInFlight = false;
+let loadedWeatherCity = "";
 
 const STATUS_POLL_MS_ACTIVE = 8000;
 const STATUS_POLL_MS_IDLE = 30000;
@@ -119,6 +125,8 @@ const I18N = {
     "cfg.network.lang_fr": "Francais",
     "cfg.photo.title": "图片轮播",
     "cfg.photo.interval": "轮播间隔（秒）",
+    "cfg.photo.auto_switch": "相册日历自动切换",
+    "cfg.photo.switch_interval": "页面切换间隔（秒）",
     "cfg.calendar.title": "日历事件",
     "cfg.calendar.layout": "日历布局",
     "cfg.calendar.layout_landscape": "横屏半屏（左日历 / 右日程）",
@@ -130,10 +138,12 @@ const I18N = {
     "cfg.calendar.time_refresh_30": "30 分钟",
     "cfg.calendar.time_refresh_60": "60 分钟",
     "cfg.calendar.time_refresh_follow": "与日历页同时刷新",
+    "cfg.calendar.sleep_start": "休眠开始",
+    "cfg.calendar.sleep_end": "休眠结束",
     "cfg.calendar.url": "日历数据 URL（预留）",
     "cfg.calendar.url_ph": "保留字段，当前离线日历不依赖该 URL",
-    "cfg.calendar.note": "离线日历仅依赖设备本地时间；联网后会自动校时。",
-    "cfg.schedule.title": "手动日程",
+    "cfg.calendar.note": "默认 22:00-08:00 休眠；休眠期间日历和相册都停止定时刷新，只保留按键唤醒。",
+    "cfg.schedule.title": "日程管理",
     "cfg.schedule.name": "日程标题",
     "cfg.schedule.name_ph": "例如：团队周会",
     "cfg.schedule.time": "时间",
@@ -206,6 +216,7 @@ const I18N = {
     "common.loading": "正在加载...",
     "common.request_failed": "请求失败",
     "common.delete": "删除",
+    "common.readonly": "只读",
     "common.open": "打开",
     "common.download": "下载",
     "common.folder": "目录",
@@ -229,7 +240,7 @@ const I18N = {
     "common.weather_tz_updated": "（已自动更新）",
     "common.weather_sync_ok_fmt": "成功，设备时间 {time}",
     "common.weather_sync_fail_fmt": "失败（{err}）",
-    "common.weather_report": "天气服务测试成功\nHTTP 状态: {http}\n设备 IP: {ip}\n请求地址: {url}\n识别时区: {tz}\n联网校时: {sync}\n响应预览: {preview}",
+    "common.weather_report": "天气服务测试成功\nHTTP 状态: {http}\n天气代码: {code}\n设备 IP: {ip}\n请求地址: {url}\n识别时区: {tz}\n联网校时: {sync}\n响应预览: {preview}",
     "common.stop_sent": "停止请求已发送。",
     "common.portal_closing": "门户即将关闭。",
     "common.request_done": "请求已完成。",
@@ -322,6 +333,8 @@ const I18N = {
     "cfg.network.lang_fr": "French",
     "cfg.photo.title": "Photo Slideshow",
     "cfg.photo.interval": "Interval (seconds)",
+    "cfg.photo.auto_switch": "Auto switch photo/calendar",
+    "cfg.photo.switch_interval": "Page switch interval (seconds)",
     "cfg.calendar.title": "Calendar",
     "cfg.calendar.layout": "Layout",
     "cfg.calendar.layout_landscape": "Landscape Split (calendar left / schedule right)",
@@ -333,10 +346,12 @@ const I18N = {
     "cfg.calendar.time_refresh_30": "30 minutes",
     "cfg.calendar.time_refresh_60": "60 minutes",
     "cfg.calendar.time_refresh_follow": "Follow calendar page refresh",
+    "cfg.calendar.sleep_start": "Sleep starts",
+    "cfg.calendar.sleep_end": "Sleep ends",
     "cfg.calendar.url": "Calendar URL (reserved)",
     "cfg.calendar.url_ph": "Reserved field; offline calendar does not use this URL now",
-    "cfg.calendar.note": "Offline calendar uses local time only; network sync updates clock automatically.",
-    "cfg.schedule.title": "Manual Schedule",
+    "cfg.calendar.note": "Default sleep window is 22:00-08:00. Calendar and photo timer refreshes stop during sleep; button wake remains available.",
+    "cfg.schedule.title": "Schedule",
     "cfg.schedule.name": "Title",
     "cfg.schedule.name_ph": "Example: Team Weekly Meeting",
     "cfg.schedule.time": "Time",
@@ -409,6 +424,7 @@ const I18N = {
     "common.loading": "Loading...",
     "common.request_failed": "Request failed",
     "common.delete": "Delete",
+    "common.readonly": "Read-only",
     "common.open": "Open",
     "common.download": "Download",
     "common.folder": "Folder",
@@ -432,7 +448,7 @@ const I18N = {
     "common.weather_tz_updated": " (auto-updated)",
     "common.weather_sync_ok_fmt": "OK, device time {time}",
     "common.weather_sync_fail_fmt": "Failed ({err})",
-    "common.weather_report": "Weather test successful\nHTTP: {http}\nDevice IP: {ip}\nURL: {url}\nTimezone: {tz}\nClock sync: {sync}\nPreview: {preview}",
+    "common.weather_report": "Weather test successful\nHTTP: {http}\nWeather code: {code}\nDevice IP: {ip}\nURL: {url}\nTimezone: {tz}\nClock sync: {sync}\nPreview: {preview}",
     "common.stop_sent": "Stop request sent.",
     "common.portal_closing": "Portal is closing soon.",
     "common.request_done": "Request completed.",
@@ -525,6 +541,8 @@ const I18N = {
     "cfg.network.lang_fr": "Francais",
     "cfg.photo.title": "Diaporama",
     "cfg.photo.interval": "Intervalle (secondes)",
+    "cfg.photo.auto_switch": "Alterner photo/calendrier",
+    "cfg.photo.switch_interval": "Intervalle de changement de page (secondes)",
     "cfg.calendar.title": "Calendrier",
     "cfg.calendar.layout": "Disposition",
     "cfg.calendar.layout_landscape": "Partage paysage (calendrier gauche / planning droite)",
@@ -536,10 +554,12 @@ const I18N = {
     "cfg.calendar.time_refresh_30": "30 minutes",
     "cfg.calendar.time_refresh_60": "60 minutes",
     "cfg.calendar.time_refresh_follow": "Suivre le rafraichissement du calendrier",
+    "cfg.calendar.sleep_start": "Debut veille",
+    "cfg.calendar.sleep_end": "Fin veille",
     "cfg.calendar.url": "URL calendrier (reserve)",
     "cfg.calendar.url_ph": "Champ reserve ; le mode hors ligne ne l utilise pas",
-    "cfg.calendar.note": "Le calendrier hors ligne utilise l heure locale ; la connexion reseau synchronise l horloge.",
-    "cfg.schedule.title": "Planning manuel",
+    "cfg.calendar.note": "Veille par defaut 22:00-08:00. Les actualisations minutees du calendrier et des photos s arretent pendant la veille; les boutons restent actifs.",
+    "cfg.schedule.title": "Planning",
     "cfg.schedule.name": "Titre",
     "cfg.schedule.name_ph": "Exemple : reunion hebdo equipe",
     "cfg.schedule.time": "Heure",
@@ -612,6 +632,7 @@ const I18N = {
     "common.loading": "Chargement...",
     "common.request_failed": "Echec de requete",
     "common.delete": "Supprimer",
+    "common.readonly": "Lecture seule",
     "common.open": "Ouvrir",
     "common.download": "Telecharger",
     "common.folder": "Dossier",
@@ -635,7 +656,7 @@ const I18N = {
     "common.weather_tz_updated": " (mise a jour auto)",
     "common.weather_sync_ok_fmt": "OK, heure appareil {time}",
     "common.weather_sync_fail_fmt": "Echec ({err})",
-    "common.weather_report": "Test meteo reussi\nHTTP: {http}\nIP appareil: {ip}\nURL: {url}\nFuseau: {tz}\nSync horloge: {sync}\nApercu: {preview}",
+    "common.weather_report": "Test meteo reussi\nHTTP: {http}\nCode meteo: {code}\nIP appareil: {ip}\nURL: {url}\nFuseau: {tz}\nSync horloge: {sync}\nApercu: {preview}",
     "common.stop_sent": "Requete d arret envoyee.",
     "common.portal_closing": "Le portail va se fermer.",
     "common.request_done": "Requete terminee.",
@@ -837,7 +858,7 @@ function fmtMs(ms) {
 function buildOpenMeteoUrl(lat, lon) {
   const latText = Number(lat).toFixed(4);
   const lonText = Number(lon).toFixed(4);
-  return `https://api.open-meteo.com/v1/forecast?latitude=${latText}&longitude=${lonText}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`;
+  return `http://api.open-meteo.com/v1/forecast?latitude=${latText}&longitude=${lonText}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`;
 }
 
 async function resolveCity() {
@@ -911,6 +932,17 @@ if (manualAuthToggle) {
   manualAuthToggle.addEventListener("change", syncNetworkAdvanced);
 }
 syncNetworkAdvanced();
+
+function syncAppAutoSwitchFields() {
+  const enabled = !!(appAutoSwitch && appAutoSwitch.checked);
+  if (appSwitchSecField) appSwitchSecField.classList.toggle("show", enabled);
+  if (appSwitchSec) appSwitchSec.disabled = !enabled;
+}
+
+if (appAutoSwitch) {
+  appAutoSwitch.addEventListener("change", syncAppAutoSwitchFields);
+}
+syncAppAutoSwitchFields();
 
 function syncScheduleRepeatFields() {
   if (!scheduleRepeat || !scheduleDate || !scheduleWeekday) return;
@@ -1064,6 +1096,9 @@ async function loadCfg() {
     applyI18n("zh");
   }
   sec.value = j.photo_interval_sec || 300;
+  if (appAutoSwitch) appAutoSwitch.checked = !!j.app_auto_switch_enabled;
+  if (appSwitchSec) appSwitchSec.value = j.app_switch_interval_sec || 3600;
+  syncAppAutoSwitchFields();
   if (calendarLayout) {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
@@ -1071,8 +1106,11 @@ async function loadCfg() {
   if (calendarTimeRefreshSec) {
     calendarTimeRefreshSec.value = String(normalizeCalendarTimeRefreshSec(j.calendar_time_refresh_sec));
   }
+  if (sleepStart) sleepStart.value = j.sleep_start || "22:00";
+  if (sleepEnd) sleepEnd.value = j.sleep_end || "08:00";
   calendarUrl.value = j.calendar_url || "";
   weatherLocation.value = j.weather_city || "";
+  loadedWeatherCity = (j.weather_city || "").trim();
   weatherLat.value = j.weather_lat || "";
   weatherLon.value = j.weather_lon || "";
   wurl.value = j.weather_url || "";
@@ -1086,7 +1124,17 @@ async function saveCfg() {
     let lon = (weatherLon.value || "").trim();
     let weatherUrl = (wurl.value || "").trim();
 
-    if (city && (!lat || !lon)) {
+    const cityChanged = city && city !== loadedWeatherCity;
+    if (cityChanged) {
+      weatherLat.value = "";
+      weatherLon.value = "";
+      wurl.value = "";
+      lat = "";
+      lon = "";
+      weatherUrl = "";
+    }
+
+    if (city && (!lat || !lon || !weatherUrl)) {
       const ok = await resolveCity();
       if (!ok) return;
       city = (weatherLocation.value || "").trim();
@@ -1104,6 +1152,10 @@ async function saveCfg() {
     const calendarTimeRefreshValue = calendarTimeRefreshSec
       ? normalizeCalendarTimeRefreshSec(calendarTimeRefreshSec.value)
       : 600;
+    const sleepStartValue = sleepStart ? sleepStart.value : "22:00";
+    const sleepEndValue = sleepEnd ? sleepEnd.value : "08:00";
+    const appSwitchEnabled = appAutoSwitch && appAutoSwitch.checked ? "1" : "0";
+    const appSwitchInterval = appSwitchSec ? appSwitchSec.value : "3600";
     const langValue = uiLanguage ? normalizeLang(uiLanguage.value) : "zh";
     const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
       ? normalizeAuthMode(staAuthMode.value)
@@ -1111,7 +1163,7 @@ async function saveCfg() {
     const portalUrl = manualAuthToggle && manualAuthToggle.checked && portalLoginUrl
       ? portalLoginUrl.value
       : "";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&portal_login_url=${encodeURIComponent(portalUrl)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&portal_login_url=${encodeURIComponent(portalUrl)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",
@@ -1121,7 +1173,16 @@ async function saveCfg() {
     const txt = await r.text();
     let j = null;
     try { j = JSON.parse(txt); } catch {}
-    cfgBox.textContent = (j && j.ok) ? t("common.saved") : (txt || t("common.request_failed"));
+    if (j && j.ok) {
+      loadedWeatherCity = city;
+      cfgBox.textContent = t("common.saved");
+      window.alert(t("common.saved"));
+      if (scheduleRows && scheduleSummary) {
+        await loadSchedules();
+      }
+    } else {
+      cfgBox.textContent = txt || t("common.request_failed");
+    }
   } catch {
     cfgBox.textContent = t("common.save_failed");
   }
@@ -1149,6 +1210,7 @@ async function testWeather() {
     : fmt("common.weather_sync_fail_fmt", { err: j.time_sync_error || "unknown" });
   cfgBox.textContent = fmt("common.weather_report", {
     http: j.http_status ?? "--",
+    code: j.weather_code ?? "--",
     ip: j.ip || "--",
     url: j.url || "--",
     tz: tzMsg,
@@ -1256,31 +1318,68 @@ function renderScheduleRows(items) {
       <td><span class="swatch" style="background:${swatchColor}"></span>${colorName}</td>
       <td></td>
     `;
-    const del = document.createElement("button");
-    del.className = "btn warn";
-    del.textContent = t("common.delete");
-    del.onclick = () => deleteSchedule(event.id);
-    tr.children[4].appendChild(del);
+    if (String(event.source || "manual").toLowerCase() === "ics") {
+      const readonly = document.createElement("span");
+      readonly.className = "small";
+      readonly.textContent = t("common.readonly");
+      tr.children[4].appendChild(readonly);
+    } else {
+      const del = document.createElement("button");
+      del.className = "btn warn";
+      del.textContent = t("common.delete");
+      del.onclick = () => deleteSchedule(event.id);
+      tr.children[4].appendChild(del);
+    }
     scheduleRows.appendChild(tr);
   });
 
   scheduleSummary.textContent = fmt("common.schedule_loaded_fmt", { count: sorted.length });
 }
 
+function scheduleItemsFromResponse(j) {
+  if (Array.isArray(j)) return j;
+  if (!j || typeof j !== "object") return null;
+  if (Array.isArray(j.items)) return j.items;
+  if (Array.isArray(j.events)) return j.events;
+  if (j.data && Array.isArray(j.data.items)) return j.data.items;
+  return null;
+}
+
+function responseErrorText(j, fallback, status) {
+  const parts = [fallback];
+  if (j && typeof j === "object") {
+    const detail = j.msg || j.message || j.error;
+    if (detail) parts.push(String(detail));
+  } else if (status && status >= 400) {
+    parts.push(`HTTP ${status}`);
+  }
+  return parts.length > 1 ? `${parts[0]}: ${parts.slice(1).join(" / ")}` : parts[0];
+}
+
 async function loadSchedules() {
   if (!scheduleRows || !scheduleSummary) return;
   scheduleRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.loading")}</td></tr>`;
+  scheduleSummary.textContent = t("common.loading");
   try {
-    const r = await fetch("/api/calendar/events");
+    const r = await fetch(`/api/calendar/events?_=${Date.now()}`, { cache: "no-store" });
     const txt = await r.text();
     let j = null;
-    try { j = JSON.parse(txt); } catch {}
-    if (!j || !j.ok || !Array.isArray(j.items)) {
+    let parseError = "";
+    try {
+      j = JSON.parse(txt);
+    } catch (err) {
+      parseError = err && err.message ? String(err.message) : "JSON parse failed";
+    }
+    const items = scheduleItemsFromResponse(j);
+    if (!r.ok || !items || (j && j.ok === false)) {
       scheduleRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.schedule_read_failed")}</td></tr>`;
-      scheduleSummary.textContent = txt || t("common.schedule_read_failed");
+      const raw = txt ? txt.slice(0, 120).replace(/\s+/g, " ") : "";
+      const detail = parseError ? `${parseError}${raw ? ` / ${raw}` : ""}` : "";
+      scheduleSummary.textContent =
+        detail || responseErrorText(j, t("common.schedule_read_failed"), r.status);
       return;
     }
-    renderScheduleRows(j.items);
+    renderScheduleRows(items);
     schedulesLoadedOnce = true;
   } catch {
     scheduleRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.schedule_read_failed")}</td></tr>`;
@@ -1327,7 +1426,7 @@ async function addSchedule() {
     let j = null;
     try { j = JSON.parse(txt); } catch {}
     if (!j || !j.ok) {
-      scheduleSummary.textContent = txt || t("common.add_failed");
+      scheduleSummary.textContent = responseErrorText(j, t("common.add_failed"), r.status);
       return;
     }
     if (scheduleTitle) scheduleTitle.value = "";
@@ -1350,7 +1449,7 @@ async function deleteSchedule(id) {
     let j = null;
     try { j = JSON.parse(txt); } catch {}
     if (!j || !j.ok) {
-      scheduleSummary.textContent = txt || t("common.delete_failed");
+      scheduleSummary.textContent = responseErrorText(j, t("common.delete_failed"), r.status);
       return;
     }
     await loadSchedules();

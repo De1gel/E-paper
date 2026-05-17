@@ -18,10 +18,17 @@ constexpr uint16_t kHeaderWeatherIconSize = 24u;
 constexpr uint16_t kHeaderWeatherIconGap = 6u;
 constexpr uint16_t kHeaderWeatherIconOffsetX = 12u;
 constexpr uint16_t kHeaderWeatherIconOffsetY = 2u;
+constexpr uint16_t kHeaderStatusIconSize = 16u;
+constexpr uint16_t kHeaderBatteryIconW = 22u;
+constexpr uint16_t kHeaderBatteryIconH = 12u;
+constexpr uint16_t kHeaderStatusIconGap = 5u;
+constexpr uint16_t kHeaderMetaBlockLandscapeW = 168u;
+constexpr uint16_t kHeaderMetaBlockPortraitW = 136u;
 constexpr bool kShowAATestPanel = false;
 constexpr uint16_t kScheduleStartMinute = 8u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
 constexpr uint8_t kScheduleSlotCount = 28u;
+constexpr uint16_t kMonthSummaryCircleGap = 3u;
 
 struct HeaderMetrics {
   uint16_t card_x = 0;
@@ -33,6 +40,7 @@ struct HeaderMetrics {
   uint16_t time_x = 0;
   uint16_t time_y = 0;
   uint16_t meta_x = 0;
+  uint16_t meta_w = 0;
   uint16_t weather_y = 0;
   uint16_t sensors_y = 0;
 };
@@ -59,6 +67,11 @@ TextFont preferredTextFont(const String &text, TextFont fallback_font, uint8_t p
     return TextFont::AsciiSmooth;
   }
   return fallback_font;
+}
+
+TextFont dynamicTextFont(const String &text, TextFont cjk_font, TextFont ascii_font,
+                         uint8_t pixel_height) {
+  return isAsciiOnlyText(text) ? preferredTextFont(text, ascii_font, pixel_height) : cjk_font;
 }
 
 TextAAMode preferredAsciiAAMode(const String &text, TextFont font, uint8_t pixel_height) {
@@ -104,6 +117,8 @@ void emitVerticalSpan(SceneSink &sink, int x, int y0, int y1, uint8_t color_nibb
 
 void emitFilledCircle(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
                       uint8_t color_nibble);
+String truncateTextToWidth(const String &text, uint16_t max_width_px, uint8_t pixel_height,
+                           TextFont font);
 
 void emitLine(SceneSink &sink, int x0, int y0, int x1, int y1, uint8_t color_nibble) {
   int dx = abs(x1 - x0);
@@ -182,6 +197,61 @@ void emitRoundedOutline(SceneSink &sink, const Rect &rect, uint16_t radius, uint
   emitFilledRoundedRect(sink, inner, inner_radius, background_nibble);
 }
 
+void emitCheckerRect(SceneSink &sink, const Rect &rect, uint8_t color_a, uint8_t color_b) {
+  for (uint16_t y = rect.y; y < static_cast<uint16_t>(rect.y + rect.h); ++y) {
+    for (uint16_t x = rect.x; x < static_cast<uint16_t>(rect.x + rect.w); ++x) {
+      sink.fillRect(makeRect(x, y, 1, 1), ((x + y) & 0x01u) ? color_a : color_b);
+    }
+  }
+}
+
+void emitCheckerOverlay(SceneSink &sink, const Rect &rect, uint8_t color_nibble) {
+  for (uint16_t y = rect.y; y < static_cast<uint16_t>(rect.y + rect.h); ++y) {
+    for (uint16_t x = rect.x; x < static_cast<uint16_t>(rect.x + rect.w); ++x) {
+      if (((x + y) & 0x01u) == 0u) {
+        sink.fillRect(makeRect(x, y, 1, 1), color_nibble);
+      }
+    }
+  }
+}
+
+void emitDitheredRoundedOutline(SceneSink &sink, const Rect &rect, uint16_t radius,
+                                uint8_t color_nibble, uint8_t background_nibble,
+                                uint16_t thickness = 1u) {
+  if (rect.w == 0 || rect.h == 0) {
+    return;
+  }
+  emitFilledRoundedRect(sink, rect, radius, color_nibble);
+  emitCheckerOverlay(sink, rect, background_nibble);
+  if (rect.w <= thickness * 2u || rect.h <= thickness * 2u) {
+    return;
+  }
+  const Rect inner = makeRect(static_cast<uint16_t>(rect.x + thickness),
+                              static_cast<uint16_t>(rect.y + thickness),
+                              static_cast<uint16_t>(rect.w - thickness * 2u),
+                              static_cast<uint16_t>(rect.h - thickness * 2u));
+  const uint16_t inner_radius = (radius > thickness) ? static_cast<uint16_t>(radius - thickness) : 0u;
+  emitFilledRoundedRect(sink, inner, inner_radius, background_nibble);
+}
+
+void emitDitheredText(SceneSink &sink, uint16_t x, uint16_t y, const String &text,
+                      uint8_t pixel_height, uint8_t color_nibble, TextFont font) {
+  TextCoverageMap map;
+  if (!buildTextCoverageMap(text, pixel_height, font, map)) {
+    return;
+  }
+  for (uint16_t yy = 0; yy < map.height; ++yy) {
+    for (uint16_t xx = 0; xx < map.width; ++xx) {
+      const uint8_t alpha = map.alpha[static_cast<uint32_t>(yy) * map.width + xx];
+      if (alpha >= 2u && (((x + xx + y + yy) & 0x01u) == 0u)) {
+        sink.fillRect(makeRect(static_cast<uint16_t>(x + xx), static_cast<uint16_t>(y + yy), 1, 1),
+                      color_nibble);
+      }
+    }
+  }
+  freeTextCoverageMap(map);
+}
+
 void emitCircleOutline(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
                        uint8_t color_nibble) {
   if (radius == 0) {
@@ -249,11 +319,17 @@ HeaderMetrics computeHeaderMetrics(const CalendarLayout &layout, const CalendarM
   metrics.time_y = static_cast<uint16_t>(
       metrics.date_y + textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
 
-  const uint16_t meta_block_w = (layout.mode == LayoutMode::LandscapeSplit) ? 168u : 136u;
+  const uint16_t meta_block_w = (layout.mode == LayoutMode::LandscapeSplit)
+                                    ? kHeaderMetaBlockLandscapeW
+                                    : kHeaderMetaBlockPortraitW;
   metrics.meta_x =
       (metrics.card_w > meta_block_w + right_pad)
           ? static_cast<uint16_t>(metrics.card_x + metrics.card_w - meta_block_w - right_pad)
           : metrics.date_x;
+  metrics.meta_w =
+      static_cast<uint16_t>(metrics.card_x + metrics.card_w > metrics.meta_x + right_pad
+                                ? (metrics.card_x + metrics.card_w - metrics.meta_x - right_pad)
+                                : 0u);
   metrics.weather_y = (metrics.date_y > 2u) ? static_cast<uint16_t>(metrics.date_y - 2u) : metrics.date_y;
   metrics.sensors_y = static_cast<uint16_t>(metrics.weather_y + kHeaderWeatherPx + 6u);
   return metrics;
@@ -310,18 +386,123 @@ WeatherIconKind weatherIconKindForCode(int weather_code) {
     default:
       break;
   }
-  return WeatherIconKind::Sun;
+  return WeatherIconKind::None;
 }
 
 uint16_t weatherHeaderIconX(const HeaderMetrics &header, const String &weather_text,
                             TextFont weather_font) {
-  return static_cast<uint16_t>(header.meta_x +
-                               textWidthPx(weather_text, kHeaderWeatherPx, weather_font) +
-                               kHeaderWeatherIconGap + kHeaderWeatherIconOffsetX);
+  (void)weather_text;
+  (void)weather_font;
+  const uint16_t status_group_w =
+      static_cast<uint16_t>(kHeaderWeatherIconSize + kHeaderStatusIconGap +
+                            kHeaderStatusIconSize + kHeaderStatusIconGap +
+                            kHeaderBatteryIconW + 2u);
+  const uint16_t row_right = static_cast<uint16_t>(header.meta_x + header.meta_w);
+  return (row_right > status_group_w)
+             ? static_cast<uint16_t>(row_right - status_group_w)
+             : header.meta_x;
 }
 
 uint16_t weatherHeaderIconY(const HeaderMetrics &header) {
   return static_cast<uint16_t>(header.weather_y + kHeaderWeatherIconOffsetY);
+}
+
+uint16_t batteryHeaderIconX(const HeaderMetrics &header, const String &weather_text,
+                            TextFont weather_font) {
+  const uint16_t weather_x = weatherHeaderIconX(header, weather_text, weather_font);
+  const uint16_t wifi_x =
+      static_cast<uint16_t>(weather_x + kHeaderWeatherIconSize + kHeaderStatusIconGap);
+  return static_cast<uint16_t>(wifi_x + kHeaderStatusIconSize + kHeaderStatusIconGap);
+}
+
+uint16_t wifiHeaderIconX(const HeaderMetrics &header, const String &weather_text,
+                         TextFont weather_font) {
+  const uint16_t weather_x = weatherHeaderIconX(header, weather_text, weather_font);
+  return static_cast<uint16_t>(weather_x + kHeaderWeatherIconSize + kHeaderStatusIconGap);
+}
+
+uint16_t statusHeaderIconY(const HeaderMetrics &header) {
+  return static_cast<uint16_t>(weatherHeaderIconY(header) +
+                               ((kHeaderWeatherIconSize > kHeaderStatusIconSize)
+                                    ? (kHeaderWeatherIconSize - kHeaderStatusIconSize) / 2u
+                                    : 0u));
+}
+
+struct HeaderWeatherTextLayout {
+  String text;
+  uint8_t px = kHeaderWeatherPx;
+  TextFont font = TextFont::Auto;
+  TextAAMode aa = TextAAMode::Threshold;
+  uint16_t x = 0;
+};
+
+struct HeaderSensorTextParts {
+  String temperature;
+  String humidity;
+};
+
+HeaderSensorTextParts splitHeaderSensors(const String &text) {
+  HeaderSensorTextParts parts;
+  const int split = text.indexOf(' ');
+  if (split < 0) {
+    parts.temperature = text;
+    return parts;
+  }
+  parts.temperature = text.substring(0, split);
+  parts.humidity = text.substring(split + 1);
+  parts.temperature.trim();
+  parts.humidity.trim();
+  return parts;
+}
+
+void emitHeaderSensors(SceneSink &sink, uint16_t x, uint16_t y, const String &text,
+                       uint8_t px, TextFont font, TextAAMode aa) {
+  const HeaderSensorTextParts parts = splitHeaderSensors(text);
+  if (parts.humidity.length() == 0) {
+    sink.text(x, y, parts.temperature, px, red, font, aa);
+    return;
+  }
+  const String temperature_with_space = parts.temperature + " ";
+  sink.text(x, y, parts.temperature, px, red, font, aa);
+  sink.text(static_cast<uint16_t>(x + textWidthPx(temperature_with_space, px, font)), y,
+            parts.humidity, px, blue, font, aa);
+}
+
+HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
+                                                const HeaderMetrics &header,
+                                                TextFont header_font,
+                                                TextFont header_date_font) {
+  HeaderWeatherTextLayout out;
+  out.text = model.header_weather;
+  const uint16_t date_right = static_cast<uint16_t>(
+      header.date_x + textWidthPx(model.header_date, kHeaderDatePx, header_date_font));
+  const uint16_t left_limit = static_cast<uint16_t>(date_right + 8u);
+  const uint16_t icon_x = weatherHeaderIconX(header, model.header_weather, header_font);
+  const uint16_t right_limit =
+      (icon_x > kHeaderWeatherIconGap) ? static_cast<uint16_t>(icon_x - kHeaderWeatherIconGap)
+                                       : icon_x;
+  const uint16_t available_w =
+      (right_limit > left_limit) ? static_cast<uint16_t>(right_limit - left_limit) : 0u;
+  static const uint8_t kCandidatePx[] = {30u, 28u, 26u, 24u, 22u, 20u, 18u, 16u};
+  for (const uint8_t px : kCandidatePx) {
+    const TextFont font = preferredTextFont(model.header_weather, header_font, px);
+    const uint16_t text_w = textWidthPx(model.header_weather, px, font);
+    if (text_w <= available_w) {
+      out.px = px;
+      out.font = font;
+      out.aa = preferredAsciiAAMode(model.header_weather, font, px);
+      out.x = static_cast<uint16_t>(right_limit - text_w);
+      return out;
+    }
+  }
+
+  out.px = kCandidatePx[sizeof(kCandidatePx) / sizeof(kCandidatePx[0]) - 1u];
+  out.font = preferredTextFont(model.header_weather, header_font, out.px);
+  out.aa = preferredAsciiAAMode(model.header_weather, out.font, out.px);
+  out.text = truncateTextToWidth(model.header_weather, available_w, out.px, out.font);
+  const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
+  out.x = (right_limit > text_w) ? static_cast<uint16_t>(right_limit - text_w) : left_limit;
+  return out;
 }
 
 void emitWeatherCloud(SceneSink &sink, uint16_t x, uint16_t y, uint16_t size, uint8_t color_nibble) {
@@ -468,6 +649,51 @@ void emitWeatherIcon(SceneSink &sink, uint16_t x, uint16_t y, uint16_t size, int
   }
 }
 
+void emitWifiIcon(SceneSink &sink, uint16_t x, uint16_t y, bool connected) {
+  const uint8_t color = connected ? black : blue;
+  const uint16_t base_y = static_cast<uint16_t>(y + kHeaderStatusIconSize - 2u);
+  for (uint8_t i = 0; i < 4u; ++i) {
+    const uint16_t bar_h = static_cast<uint16_t>(4u + i * 3u);
+    const uint16_t bar_x = static_cast<uint16_t>(x + 1u + i * 4u);
+    sink.fillRect(makeRect(bar_x, static_cast<uint16_t>(base_y - bar_h), 3u, bar_h), color);
+  }
+  if (!connected) {
+    emitLine(sink, static_cast<int>(x + 1u), static_cast<int>(y + 1u),
+             static_cast<int>(x + kHeaderStatusIconSize - 2u),
+             static_cast<int>(y + kHeaderStatusIconSize - 2u), red);
+  }
+}
+
+void emitBatteryIcon(SceneSink &sink, uint16_t x, uint16_t y, int16_t battery_pct) {
+  const uint16_t body_y = static_cast<uint16_t>(y + 2u);
+  sink.fillRect(makeRect(x, body_y, kHeaderBatteryIconW, 1u), black);
+  sink.fillRect(makeRect(x, static_cast<uint16_t>(body_y + kHeaderBatteryIconH - 1u),
+                         kHeaderBatteryIconW, 1u),
+                black);
+  sink.fillRect(makeRect(x, body_y, 1u, kHeaderBatteryIconH), black);
+  sink.fillRect(makeRect(static_cast<uint16_t>(x + kHeaderBatteryIconW - 1u), body_y, 1u,
+                         kHeaderBatteryIconH),
+                black);
+  sink.fillRect(makeRect(static_cast<uint16_t>(x + kHeaderBatteryIconW),
+                         static_cast<uint16_t>(body_y + 4u), 2u, 4u),
+                black);
+
+  if (battery_pct < 0) {
+    emitLine(sink, static_cast<int>(x + 3u), static_cast<int>(body_y + kHeaderBatteryIconH - 3u),
+             static_cast<int>(x + kHeaderBatteryIconW - 4u), static_cast<int>(body_y + 2u), blue);
+    return;
+  }
+
+  const uint16_t pct = static_cast<uint16_t>(std::min<int16_t>(100, battery_pct));
+  const uint16_t fill_w = static_cast<uint16_t>((kHeaderBatteryIconW - 4u) * pct / 100u);
+  if (fill_w > 0u) {
+    const uint8_t fill_color = (pct <= 20u) ? red : green;
+    sink.fillRect(makeRect(static_cast<uint16_t>(x + 2u), static_cast<uint16_t>(body_y + 2u),
+                           fill_w, static_cast<uint16_t>(kHeaderBatteryIconH - 4u)),
+                  fill_color);
+  }
+}
+
 String truncateWithTilde(const String &text, size_t max_chars) {
   if (max_chars < 1) {
     return "~";
@@ -595,19 +821,23 @@ void emitCurrentTimeMarker(SceneSink &sink, const CalendarLayout &layout,
 }  // namespace
 
 void emitCalendarWeatherHeader(const CalendarModel &model, const CalendarLayout &layout, SceneSink &sink) {
-  const bool zh_ui = (model.ui_language == "zh");
   const uint8_t header_weather_px = kHeaderWeatherPx;
-  const TextFont header_font = zh_ui ? TextFont::Cjk30 : TextFont::Auto;
-  const TextFont header_date_font = preferredTextFont(model.header_date, header_font, kHeaderDatePx);
+  const TextFont header_font =
+      dynamicTextFont(model.header_weather, TextFont::Cjk30, TextFont::Auto, header_weather_px);
+  const TextFont header_date_font =
+      preferredTextFont(model.header_date, TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(layout, model, header_date_font);
-  const TextFont header_weather_font =
-      preferredTextFont(model.header_weather, header_font, header_weather_px);
-  const TextAAMode header_weather_aa =
-      preferredAsciiAAMode(model.header_weather, header_weather_font, header_weather_px);
-  const uint16_t icon_x = weatherHeaderIconX(header, model.header_weather, header_weather_font);
+  const HeaderWeatherTextLayout weather_text =
+      layoutHeaderWeatherText(model, header, header_font, header_date_font);
+  const uint16_t icon_x = weatherHeaderIconX(header, model.header_weather, weather_text.font);
   const uint16_t icon_y = weatherHeaderIconY(header);
-  sink.text(header.meta_x, header.weather_y, model.header_weather, header_weather_px, blue,
-            header_weather_font, header_weather_aa);
+  const uint16_t wifi_x = wifiHeaderIconX(header, model.header_weather, weather_text.font);
+  const uint16_t battery_x = batteryHeaderIconX(header, model.header_weather, weather_text.font);
+  const uint16_t status_y = statusHeaderIconY(header);
+  sink.text(weather_text.x, header.weather_y, weather_text.text, weather_text.px, green,
+            weather_text.font, weather_text.aa);
+  emitWifiIcon(sink, wifi_x, status_y, model.header_wifi_connected);
+  emitBatteryIcon(sink, battery_x, status_y, model.header_battery_pct);
   emitWeatherIcon(sink, icon_x, icon_y, kHeaderWeatherIconSize, model.header_weather_code);
 }
 
@@ -617,17 +847,16 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       zh_ui ? kZhWeekdayPx
             : static_cast<uint8_t>(asciiPixelHeight(layout.weekday_scale) +
                                    (layout.mode == LayoutMode::LandscapeSplit ? 2 : 1));
-  const uint8_t item_px = zh_ui ? static_cast<uint8_t>(16) : static_cast<uint8_t>(10);
   const uint8_t header_date_px = kHeaderDatePx;
   const uint8_t header_time_px = kHeaderTimePx;
   const uint8_t header_weather_px = kHeaderWeatherPx;
   const uint8_t header_sensors_px = kHeaderSensorsPx;
   const uint8_t day_px =
-      (layout.mode == LayoutMode::LandscapeSplit) ? static_cast<uint8_t>(18)
-                                                  : static_cast<uint8_t>(16);
+      (layout.mode == LayoutMode::LandscapeSplit) ? static_cast<uint8_t>(16)
+                                                  : static_cast<uint8_t>(14);
   const TextFont weekday_font = zh_ui ? TextFont::Cjk26 : TextFont::Auto;
-  const TextFont item_font = zh_ui ? TextFont::Cjk16 : TextFont::Auto;
-  const TextFont header_font = zh_ui ? TextFont::Cjk30 : TextFont::Auto;
+  const TextFont header_font =
+      dynamicTextFont(model.header_weather, TextFont::Cjk30, TextFont::Auto, header_weather_px);
   const TextFont header_date_font =
       preferredTextFont(model.header_date, header_font, header_date_px);
   const TextFont header_time_font =
@@ -652,8 +881,13 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   sink.text(header.time_x, header.time_y, model.header_time, header_time_px, black, header_time_font,
             header_time_aa);
   emitCalendarWeatherHeader(model, layout, sink);
-  sink.text(header.meta_x, header.sensors_y, model.header_sensors, header_sensors_px, green,
-            header_sensors_font, header_sensors_aa);
+  const uint16_t sensors_w = textWidthPx(model.header_sensors, header_sensors_px, header_sensors_font);
+  const uint16_t sensors_x =
+      (header.meta_w > sensors_w)
+          ? static_cast<uint16_t>(header.meta_x + header.meta_w - sensors_w)
+          : header.meta_x;
+  emitHeaderSensors(sink, sensors_x, header.sensors_y, model.header_sensors, header_sensors_px,
+                    header_sensors_font, header_sensors_aa);
 
   emitRoundedOutline(sink, layout.schedule_inner, 10u, black, white, 1u);
 
@@ -715,6 +949,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (end_minute <= start_minute) {
       end_minute = static_cast<uint16_t>(start_minute + 30u);
     }
+    const bool event_elapsed = model.time_valid && end_minute <= model.current_minute_of_day;
     if (end_minute <= kScheduleStartMinute || start_minute >= kScheduleEndMinute) {
       continue;
     }
@@ -746,12 +981,20 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
         (lane_w > 1) ? static_cast<uint16_t>(lane_w - 1) : lane_w;
     const Rect block = makeRect(block_x, static_cast<uint16_t>(y0 + 1), block_w,
                                 static_cast<uint16_t>(block_h > 2 ? block_h - 2 : block_h));
-    emitRoundedOutline(sink, block, 4u, black, white, 1u);
+    if (event_elapsed) {
+      emitDitheredRoundedOutline(sink, block, 4u, black, white, 1u);
+    } else {
+      emitRoundedOutline(sink, block, 4u, black, white, 1u);
+    }
     const uint8_t accent_color = (event.color_nibble == white) ? blue : event.color_nibble;
     const uint16_t accent_h = (block.h > 6u) ? static_cast<uint16_t>(block.h - 4u) : block.h;
-    sink.fillRect(makeRect(static_cast<uint16_t>(block.x + 2u), static_cast<uint16_t>(block.y + 2u),
-                           4u, accent_h),
-                  accent_color);
+    const Rect accent = makeRect(static_cast<uint16_t>(block.x + 2u),
+                                 static_cast<uint16_t>(block.y + 2u), 4u, accent_h);
+    if (event_elapsed) {
+      emitCheckerRect(sink, accent, black, white);
+    } else {
+      sink.fillRect(accent, accent_color);
+    }
 
     const uint16_t text_pad_x = 9;
     const uint16_t text_space =
@@ -759,30 +1002,21 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (text_space == 0 || block.h < 8) {
       continue;
     }
-    const uint8_t title_px = (zh_ui && block.h < 22u) ? static_cast<uint8_t>(10) : item_px;
-    const TextFont title_base_font =
-        zh_ui ? ((title_px <= 10u) ? TextFont::Cjk10 : TextFont::Cjk16) : item_font;
-    const String visible_title =
-        truncateTextToWidth(event.title, text_space, title_px, title_base_font);
-    const TextFont title_font = preferredTextFont(visible_title, title_base_font, title_px);
+    const bool title_ascii = isAsciiOnlyText(event.title);
+    const uint8_t title_px = title_ascii ? static_cast<uint8_t>(8) : static_cast<uint8_t>(10);
+    const TextFont title_font = title_ascii ? TextFont::Ascii8 : TextFont::Cjk10;
+    const String visible_title = truncateTextToWidth(event.title, text_space, title_px, title_font);
     const uint16_t text_y = static_cast<uint16_t>(
         block.y + ((block.h > textHeightPx(visible_title, title_px, title_font))
                         ? (block.h - textHeightPx(visible_title, title_px, title_font)) / 2u
                         : 0u));
-    sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, title_px, black,
-              title_font, preferredAsciiAAMode(visible_title, title_font, title_px));
-  }
-
-  if (model.visible_event_count == 0 && model.no_time_label.length() > 0) {
-    const uint8_t empty_px = zh_ui ? static_cast<uint8_t>(18) : static_cast<uint8_t>(12);
-    const TextFont empty_font = preferredTextFont(model.no_time_label, item_font, empty_px);
-    const uint16_t empty_w = textWidthPx(model.no_time_label, empty_px, empty_font);
-    const uint16_t empty_x = static_cast<uint16_t>(
-        layout.schedule_inner.x +
-        ((layout.schedule_inner.w > empty_w) ? (layout.schedule_inner.w - empty_w) / 2u : 8u));
-    const uint16_t empty_y = static_cast<uint16_t>(layout.schedule_inner.y + 12);
-    sink.text(empty_x, empty_y, model.no_time_label, empty_px, red, empty_font,
-              preferredAsciiAAMode(model.no_time_label, empty_font, empty_px));
+    if (event_elapsed) {
+      emitDitheredText(sink, static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title,
+                       title_px, black, title_font);
+    } else {
+      sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, title_px, black,
+                title_font, preferredAsciiAAMode(visible_title, title_font, title_px));
+    }
   }
 
   if (!model.time_valid || !layout.has_grid) {
@@ -810,19 +1044,19 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t text_y = static_cast<uint16_t>(cell_y + layout.cell_pad_y + 10u);
     const uint16_t text_cx = static_cast<uint16_t>(text_x + (text_w / 2u));
     const uint16_t text_cy = static_cast<uint16_t>(text_y + (text_h / 2u));
+    uint16_t today_radius = (layout.mode == LayoutMode::LandscapeSplit) ? 16u : 14u;
+    const uint16_t content_h = static_cast<uint16_t>((layout.cell_h > 10u) ? (layout.cell_h - 10u)
+                                                                            : layout.cell_h);
+    const uint16_t max_radius =
+        (layout.cell_w < content_h ? layout.cell_w : content_h) > 10u
+            ? static_cast<uint16_t>((layout.cell_w < content_h ? layout.cell_w : content_h) /
+                                    2u - 2u)
+            : 0u;
+    if (today_radius > max_radius) {
+      today_radius = max_radius;
+    }
     if (cell.is_today) {
-      uint16_t radius = (layout.mode == LayoutMode::LandscapeSplit) ? 16u : 14u;
-      const uint16_t content_h = static_cast<uint16_t>((layout.cell_h > 10u) ? (layout.cell_h - 10u)
-                                                                              : layout.cell_h);
-      const uint16_t max_radius =
-          (layout.cell_w < content_h ? layout.cell_w : content_h) > 10u
-              ? static_cast<uint16_t>((layout.cell_w < content_h ? layout.cell_w : content_h) /
-                                      2u - 2u)
-              : 0u;
-      if (radius > max_radius) {
-        radius = max_radius;
-      }
-      emitFilledCircle(sink, text_cx, text_cy, radius, red);
+      emitFilledCircle(sink, text_cx, text_cy, today_radius, red);
     }
     sink.text(text_x, text_y, label, day_px, cell.text_color, TextFont::AsciiSmooth,
               preferredAsciiAAMode(label, TextFont::AsciiSmooth, day_px));
@@ -833,35 +1067,37 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     }
     const uint8_t visible_limit = (layout.grid_rows >= 6u) ? 2u : 3u;
     const uint8_t shown_count = std::min(summary.item_count, visible_limit);
-    const uint8_t summary_px = zh_ui ? static_cast<uint8_t>(10) : static_cast<uint8_t>(9);
-    const uint16_t summary_row_h = static_cast<uint16_t>(summary_px + 3u);
-    uint16_t summary_y = static_cast<uint16_t>(text_y + text_h + 4u);
+    const uint16_t summary_y_base = static_cast<uint16_t>(text_cy + today_radius +
+                                                          kMonthSummaryCircleGap);
+    uint16_t summary_y = summary_y_base;
     const uint16_t summary_x = static_cast<uint16_t>(cell_x + 7u);
     const uint16_t chip_size = (layout.mode == LayoutMode::LandscapeSplit) ? 5u : 4u;
     const uint16_t text_offset_x = static_cast<uint16_t>(chip_size + 4u);
+    const uint16_t summary_row_h = 13u;
     for (uint8_t item_index = 0; item_index < shown_count; ++item_index) {
       const DaySummary::Item &item = summary.items[item_index];
+      const String summary_label(item.label);
+      const bool summary_ascii = isAsciiOnlyText(summary_label);
+      const uint8_t summary_px = summary_ascii ? static_cast<uint8_t>(6) : static_cast<uint8_t>(10);
+      const TextFont summary_font = summary_ascii ? TextFont::Ascii6 : TextFont::Cjk10;
+      const uint16_t summary_text_h = textHeightPx(summary_label, summary_px, summary_font);
+      const uint16_t summary_text_y =
+          static_cast<uint16_t>(summary_y + ((summary_row_h > summary_text_h)
+                                                 ? (summary_row_h - summary_text_h) / 2u
+                                                 : 0u));
       emitFilledRoundedRect(
           sink,
           makeRect(summary_x,
-                   static_cast<uint16_t>(summary_y + ((summary_row_h > chip_size) ? (summary_row_h - chip_size) / 2u : 0u)),
+                   static_cast<uint16_t>(
+                       summary_y + ((summary_row_h > chip_size)
+                                        ? (summary_row_h - chip_size) / 2u
+                                        : 0u)),
                    chip_size, chip_size),
           1u, item.color_nibble);
-      const String summary_label(item.label);
-      sink.text(static_cast<uint16_t>(summary_x + text_offset_x), summary_y, summary_label, summary_px,
-                black, zh_ui ? TextFont::Cjk10 : TextFont::AsciiSmooth,
-                preferredAsciiAAMode(summary_label,
-                                     zh_ui ? TextFont::Cjk10 : TextFont::AsciiSmooth, summary_px));
+      sink.text(static_cast<uint16_t>(summary_x + text_offset_x), summary_text_y, summary_label,
+                summary_px, black, summary_font,
+                preferredAsciiAAMode(summary_label, summary_font, summary_px));
       summary_y = static_cast<uint16_t>(summary_y + summary_row_h);
-    }
-    const uint8_t hidden_total =
-        static_cast<uint8_t>(summary.hidden_count + ((summary.item_count > shown_count)
-                                                         ? (summary.item_count - shown_count)
-                                                         : 0u));
-    if (hidden_total > 0u) {
-      sink.text(summary_x, summary_y, "+" + String(hidden_total), summary_px, black,
-                TextFont::AsciiSmooth,
-                preferredAsciiAAMode("+" + String(hidden_total), TextFont::AsciiSmooth, summary_px));
     }
   }
 }

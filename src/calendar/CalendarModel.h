@@ -59,6 +59,8 @@ struct CalendarModel {
   String header_weather;
   String header_sensors;
   int16_t header_weather_code = -1;
+  bool header_wifi_connected = false;
+  int16_t header_battery_pct = -1;
   String schedule_title;
   String no_time_label;
   String more_label;

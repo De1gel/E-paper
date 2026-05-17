@@ -138,9 +138,6 @@ void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected)
     return;
   }
 
-  if (mode == OperationMode::ConfigSTA && !sta_connected_prev_ && sta_connected) {
-    triggerSingleBlink("sta_connected");
-  }
   sta_connected_prev_ = sta_connected;
 
   if (blink_mode_ != BlinkMode::None) {

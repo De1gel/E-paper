@@ -27,7 +27,7 @@ class LightSleepController {
 
  private:
   static constexpr uint32_t kMinSleepMs = 200u;
-  static constexpr uint32_t kMaxSleepMs = 300000u;
+  static constexpr uint32_t kMaxSleepMs = 86400000u;
 };
 
 }  // namespace appfw

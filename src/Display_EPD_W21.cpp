@@ -12,7 +12,7 @@ void EPD_W21_Init(void)
 
 void lcd_chkstatus(void)
 {
-  while(!isEPD_W21_BUSY);                         
+  while(!isEPD_W21_BUSY);
 }
 //slow
 void EPD_init(void)

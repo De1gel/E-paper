@@ -44,9 +44,33 @@ constexpr uint8_t kHeaderDatePx = 20u;
 constexpr uint8_t kHeaderTimePx = 30u;
 constexpr uint8_t kHeaderWeatherPx = 30u;
 constexpr uint8_t kHeaderSensorsPx = 20u;
-constexpr uint16_t kHeaderWeatherIconSize = 22u;
+constexpr uint16_t kHeaderWeatherIconSize = 24u;
 constexpr uint16_t kHeaderWeatherIconGap = 6u;
 constexpr uint16_t kHeaderWeatherIconOffsetX = 12u;
+constexpr uint16_t kHeaderStatusIconSize = 16u;
+constexpr uint16_t kHeaderBatteryIconW = 22u;
+constexpr uint16_t kHeaderStatusIconGap = 5u;
+constexpr uint16_t kHeaderMetaBlockLandscapeW = 168u;
+constexpr uint16_t kHeaderMetaBlockPortraitW = 136u;
+
+struct HeaderSensorTextParts {
+  String temperature;
+  String humidity;
+};
+
+HeaderSensorTextParts splitHeaderSensors(const String &text) {
+  HeaderSensorTextParts parts;
+  const int split = text.indexOf(' ');
+  if (split < 0) {
+    parts.temperature = text;
+    return parts;
+  }
+  parts.temperature = text.substring(0, split);
+  parts.humidity = text.substring(split + 1);
+  parts.temperature.trim();
+  parts.humidity.trim();
+  return parts;
+}
 
 String twoDigits(int value) {
   if (value < 10) {
@@ -91,12 +115,71 @@ calendar::TextFont preferredTextFont(const String &text, calendar::TextFont fall
   return fallback_font;
 }
 
+calendar::TextFont dynamicTextFont(const String &text, calendar::TextFont cjk_font,
+                                   calendar::TextFont ascii_font, uint8_t pixel_height) {
+  return isAsciiOnlyText(text) ? preferredTextFont(text, ascii_font, pixel_height) : cjk_font;
+}
+
 calendar::TextAAMode preferredAsciiAAMode(const String &text, calendar::TextFont font,
                                           uint8_t pixel_height) {
   (void)text;
   (void)font;
   (void)pixel_height;
   return calendar::TextAAMode::Threshold;
+}
+
+uint16_t minuteOfDay(const struct tm &local_tm) {
+  return static_cast<uint16_t>(local_tm.tm_hour * 60 + local_tm.tm_min);
+}
+
+bool isInSleepWindow(const struct tm &local_tm, const appfw::WifiSettings &settings) {
+  const uint16_t now_minute = minuteOfDay(local_tm);
+  if (settings.sleep_start_minute < settings.sleep_end_minute) {
+    return now_minute >= settings.sleep_start_minute && now_minute < settings.sleep_end_minute;
+  }
+  return now_minute >= settings.sleep_start_minute || now_minute < settings.sleep_end_minute;
+}
+
+time_t windowBoundaryEpoch(const struct tm &local_tm, time_t local_epoch, uint16_t minute_of_day,
+                           bool next_day) {
+  struct tm boundary_tm = local_tm;
+  boundary_tm.tm_sec = 0;
+  boundary_tm.tm_min = minute_of_day % 60u;
+  boundary_tm.tm_hour = minute_of_day / 60u;
+  if (next_day) {
+    boundary_tm.tm_mday += 1;
+  }
+  const time_t boundary_epoch = mktime(&boundary_tm);
+  return (boundary_epoch > local_epoch) ? boundary_epoch : local_epoch;
+}
+
+time_t nextSleepEndEpoch(const struct tm &local_tm, time_t local_epoch,
+                         const appfw::WifiSettings &settings) {
+  const uint16_t now_minute = minuteOfDay(local_tm);
+  const bool next_day = settings.sleep_start_minute > settings.sleep_end_minute &&
+                        now_minute >= settings.sleep_start_minute;
+  return windowBoundaryEpoch(local_tm, local_epoch, settings.sleep_end_minute, next_day);
+}
+
+time_t nextSleepStartEpoch(const struct tm &local_tm, time_t local_epoch,
+                           const appfw::WifiSettings &settings) {
+  const uint16_t now_minute = minuteOfDay(local_tm);
+  bool next_day = false;
+  if (settings.sleep_start_minute < settings.sleep_end_minute) {
+    next_day = now_minute >= settings.sleep_start_minute;
+  } else {
+    next_day = now_minute >= settings.sleep_start_minute || now_minute < settings.sleep_end_minute;
+  }
+  return windowBoundaryEpoch(local_tm, local_epoch, settings.sleep_start_minute, next_day);
+}
+
+uint32_t deadlineFromEpoch(uint32_t now_ms, time_t local_epoch, time_t deadline_epoch) {
+  if (deadline_epoch <= local_epoch) {
+    return now_ms;
+  }
+  const uint64_t delta_ms = static_cast<uint64_t>(deadline_epoch - local_epoch) * 1000ULL;
+  const uint64_t max_delta = 0xFFFFFFFFULL - now_ms;
+  return now_ms + static_cast<uint32_t>((delta_ms > max_delta) ? max_delta : delta_ms);
 }
 
 void setPackedBufferPixel(uint8_t *buffer, uint16_t buffer_width_px, uint16_t buffer_rows,
@@ -377,15 +460,23 @@ struct HeaderMetrics {
   uint16_t time_x = 0;
   uint16_t time_y = 0;
   uint16_t meta_x = 0;
+  uint16_t meta_w = 0;
   uint16_t weather_y = 0;
   uint16_t sensors_y = 0;
 };
 
 uint16_t weatherHeaderIconX(const HeaderMetrics &header, const String &weather_text,
                             calendar::TextFont weather_font) {
-  return static_cast<uint16_t>(header.meta_x +
-                               calendar::textWidthPx(weather_text, kHeaderWeatherPx, weather_font) +
-                               kHeaderWeatherIconGap + kHeaderWeatherIconOffsetX);
+  (void)weather_text;
+  (void)weather_font;
+  const uint16_t status_group_w =
+      static_cast<uint16_t>(kHeaderWeatherIconSize + kHeaderStatusIconGap +
+                            kHeaderStatusIconSize + kHeaderStatusIconGap +
+                            kHeaderBatteryIconW + 2u);
+  const uint16_t row_right = static_cast<uint16_t>(header.meta_x + header.meta_w);
+  return (row_right > status_group_w)
+             ? static_cast<uint16_t>(row_right - status_group_w)
+             : header.meta_x;
 }
 
 HeaderMetrics computeHeaderMetrics(const calendar::CalendarModel &model,
@@ -407,12 +498,17 @@ HeaderMetrics computeHeaderMetrics(const calendar::CalendarModel &model,
   metrics.time_y = static_cast<uint16_t>(
       metrics.date_y +
       calendar::textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
-  const uint16_t meta_block_w =
-      (layout.mode == calendar::LayoutMode::LandscapeSplit) ? 168u : 136u;
+  const uint16_t meta_block_w = (layout.mode == calendar::LayoutMode::LandscapeSplit)
+                                    ? kHeaderMetaBlockLandscapeW
+                                    : kHeaderMetaBlockPortraitW;
   metrics.meta_x =
       (metrics.card_w > meta_block_w + right_pad)
           ? static_cast<uint16_t>(metrics.card_x + metrics.card_w - meta_block_w - right_pad)
           : metrics.date_x;
+  metrics.meta_w =
+      static_cast<uint16_t>(metrics.card_x + metrics.card_w > metrics.meta_x + right_pad
+                                ? (metrics.card_x + metrics.card_w - metrics.meta_x - right_pad)
+                                : 0u);
   metrics.weather_y = (metrics.date_y > 2u) ? static_cast<uint16_t>(metrics.date_y - 2u) : metrics.date_y;
   metrics.sensors_y = static_cast<uint16_t>(metrics.weather_y + kHeaderWeatherPx + 6u);
   return metrics;
@@ -461,6 +557,7 @@ void App::begin() {
   state_ = kDebugBootState;
   photo_index_ = 0;
   last_photo_switch_ms_ = millis();
+  last_app_switch_ms_ = last_photo_switch_ms_;
   // Always redraw the default page after boot/reset so the panel state matches app state.
   needs_render_ = true;
   calendar_layout_ = CalendarLayout::LandscapeSplit;
@@ -647,6 +744,9 @@ void App::updateCalendarAutoRefresh(uint32_t now_ms) {
   if (!getLocalTimeSnapshot(now_ms, local_tm, local_epoch)) {
     return;
   }
+  if (isInSleepWindow(local_tm, wifi_manager_.settings())) {
+    return;
+  }
   const int32_t key = appfw::dayKeyFromTm(local_tm);
   const int32_t minute_key = appfw::minuteKeyFromTm(local_tm);
   const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
@@ -683,6 +783,136 @@ void App::updateCalendarAutoRefresh(uint32_t now_ms) {
   last_calendar_check_ms_ = now_ms;
   needs_render_ = true;
   Serial.printf("[CAL] periodic refresh epoch=%lu\n", static_cast<unsigned long>(local_epoch));
+}
+
+void App::updateAppAutoSwitch(uint32_t now_ms) {
+  const appfw::WifiSettings &settings = wifi_manager_.settings();
+  if (!settings.app_auto_switch_enabled ||
+      mode_manager_.mode() != appfw::OperationMode::Normal ||
+      needs_render_ ||
+      calendar_pre_refresh_sync_waiting_) {
+    return;
+  }
+  struct tm local_tm {};
+  time_t local_epoch = 0;
+  if (getLocalTimeSnapshot(now_ms, local_tm, local_epoch) &&
+      isInSleepWindow(local_tm, settings)) {
+    return;
+  }
+  uint32_t interval_ms = settings.app_switch_interval_sec * 1000UL;
+  if (interval_ms < 60000UL) {
+    interval_ms = 60000UL;
+  }
+  if (last_app_switch_ms_ == 0u) {
+    last_app_switch_ms_ = now_ms;
+    return;
+  }
+  if ((now_ms - last_app_switch_ms_) < interval_ms) {
+    return;
+  }
+  last_app_switch_ms_ = now_ms;
+  setState((state_ == AppState::Photo) ? AppState::Calendar : AppState::Photo);
+  Serial.printf("[APP] auto switch -> %s interval=%lus\n",
+                (state_ == AppState::Photo) ? "Photo" : "Calendar",
+                static_cast<unsigned long>(interval_ms / 1000UL));
+}
+
+uint32_t App::calendarSyncSignature() const {
+  uint32_t hash = 2166136261UL;
+  auto mixByte = [&hash](uint8_t value) {
+    hash ^= value;
+    hash *= 16777619UL;
+  };
+  auto mixString = [&mixByte](const String &value) {
+    for (size_t i = 0; i < value.length(); ++i) {
+      mixByte(static_cast<uint8_t>(value[i]));
+    }
+    mixByte(0xFFu);
+  };
+  auto mixInt = [&mixByte](int32_t value) {
+    for (uint8_t i = 0; i < 4u; ++i) {
+      mixByte(static_cast<uint8_t>((static_cast<uint32_t>(value) >> (i * 8u)) & 0xFFu));
+    }
+  };
+  mixInt(wifi_manager_.weatherCode());
+  mixInt(static_cast<int32_t>(wifi_manager_.calendarEventCount()));
+  for (size_t i = 0; i < wifi_manager_.calendarEventCount(); ++i) {
+    appfw::CalendarEvent event;
+    if (!wifi_manager_.calendarEventAt(i, event)) {
+      continue;
+    }
+    mixInt(event.id);
+    mixString(event.title);
+    mixString(event.date);
+    mixString(event.time_hhmm);
+    mixString(event.end_time_hhmm);
+    mixString(event.color);
+    mixString(event.repeat);
+    mixInt(event.weekday);
+    mixString(event.source);
+    mixString(event.external_id);
+    mixString(event.updated_at);
+  }
+  return hash;
+}
+
+void App::startCalendarBackgroundSync(const char *reason) {
+  if (calendar_background_sync_active_ || !wifi_manager_.hasStaCredentials()) {
+    return;
+  }
+  calendar_background_sync_signature_ = calendarSyncSignature();
+  calendar_background_sync_active_ = true;
+  calendar_background_sync_started_session_ = false;
+  if (wifi_manager_.isStaConnected()) {
+    wifi_manager_.syncWeatherNow(reason ? reason : "calendar_background_sync");
+    wifi_manager_.requestCalendarSyncNow();
+    Serial.printf("[CAL] background sync requested on active STA reason=%s sig=%lu\n",
+                  reason ? reason : "unknown",
+                  static_cast<unsigned long>(calendar_background_sync_signature_));
+  } else {
+    wifi_manager_.startStaPreRefreshSync();
+    calendar_background_sync_started_session_ = true;
+    Serial.printf("[CAL] background sync starting STA reason=%s sig=%lu\n",
+                  reason ? reason : "unknown",
+                  static_cast<unsigned long>(calendar_background_sync_signature_));
+  }
+}
+
+void App::updateCalendarBackgroundSync(uint32_t now_ms) {
+  (void)now_ms;
+  if (!calendar_background_sync_active_) {
+    return;
+  }
+  if (wifi_manager_.isStaConnecting() || wifi_manager_.isCalendarSyncBusy()) {
+    return;
+  }
+
+  const uint32_t next_signature = calendarSyncSignature();
+  const bool changed = next_signature != calendar_background_sync_signature_;
+  const bool should_stop_sta = calendar_background_sync_started_session_;
+  calendar_background_sync_active_ = false;
+  calendar_background_sync_started_session_ = false;
+  calendar_background_sync_signature_ = next_signature;
+
+  if (changed && state_ == AppState::Calendar) {
+    force_calendar_full_refresh_ = true;
+    calendar_partial_refresh_count_ = 0;
+    needs_render_ = true;
+    calendar_skip_presync_once_ = true;
+    calendar_start_background_sync_after_render_ = false;
+    calendar_stop_sta_after_render_ = should_stop_sta;
+    Serial.printf("[CAL] background sync changed -> full refresh sig=%lu\n",
+                  static_cast<unsigned long>(next_signature));
+    return;
+  }
+
+  if (should_stop_sta) {
+    wifi_manager_.stop(changed ? "calendar_background_sync_changed_not_visible"
+                               : "calendar_background_sync_no_change");
+  }
+  Serial.printf("[CAL] background sync done changed=%s sig=%lu\n",
+                changed ? "true" : "false",
+                static_cast<unsigned long>(next_signature));
 }
 
 void App::applyCalendarLayoutFromConfig(bool force_apply) {
@@ -722,11 +952,17 @@ void App::update(uint32_t now_ms) {
   mode_manager_.update(now_ms);
   wifi_manager_.update(now_ms);
   now_ms = millis();
+  updateCalendarBackgroundSync(now_ms);
   updateClockAnchor(now_ms);
   applyCalendarLayoutFromConfig(false);
-  if (wifi_manager_.consumeStaConnectFailed()) {
-    led_manager_.triggerDoubleBlink();
+  if (wifi_manager_.consumeSettingsSavedRefreshRequested()) {
+    force_calendar_full_refresh_ = true;
+    calendar_partial_refresh_count_ = 0;
+    needs_render_ = true;
+    last_app_switch_ms_ = now_ms;
+    Serial.println("[APP] settings saved -> full refresh queued");
   }
+  wifi_manager_.consumeStaConnectFailed();
   const uint32_t latest_interval_ms = wifi_manager_.settings().photo_interval_sec * 1000UL;
   if (latest_interval_ms >= 30000UL && latest_interval_ms != photo_interval_ms_) {
     photo_interval_ms_ = latest_interval_ms;
@@ -752,6 +988,7 @@ void App::update(uint32_t now_ms) {
   }
 
   if (mode_manager_.mode() == appfw::OperationMode::Normal) {
+    updateAppAutoSwitch(now_ms);
     if (state_ == AppState::Photo) {
       updatePhotoCarousel(now_ms);
     } else if (state_ == AppState::Calendar) {
@@ -820,6 +1057,14 @@ void App::render() {
   }
 
   endDisplaySession();
+  if (calendar_start_background_sync_after_render_ && state_ == AppState::Calendar) {
+    calendar_start_background_sync_after_render_ = false;
+    startCalendarBackgroundSync("calendar_fast_render");
+  }
+  if (calendar_stop_sta_after_render_) {
+    wifi_manager_.stop("calendar_post_refresh_sync_done");
+    calendar_stop_sta_after_render_ = false;
+  }
   led_manager_.stopEffects("render_done");
   Serial.printf("[APP] render done, epd sleep led=%s\n", led_manager_.currentStateName());
   needs_render_ = false;
@@ -842,6 +1087,9 @@ bool App::canEnterLightSleep(uint32_t now_ms) const {
   if (calendar_pre_refresh_sync_waiting_ || calendar_pre_refresh_sync_started_session_) {
     return false;
   }
+  if (calendar_background_sync_active_) {
+    return false;
+  }
   if (wifi_manager_.blocksLightSleep()) {
     return false;
   }
@@ -856,54 +1104,74 @@ bool App::canEnterLightSleep(uint32_t now_ms) const {
 
 uint32_t App::nextWakeDeadlineMs(uint32_t now_ms) const {
   uint32_t deadline_ms = saturatingAddMs(now_ms, 1000u);
-  if (state_ == AppState::Photo) {
-    return saturatingAddMs(last_photo_switch_ms_, photo_interval_ms_);
-  }
-  if (state_ != AppState::Calendar) {
+  if (state_ != AppState::Photo && state_ != AppState::Calendar) {
     return deadline_ms;
   }
-
-  uint32_t check_interval_ms = wifi_manager_.settings().calendar_refresh_sec * 1000UL;
-  if (check_interval_ms < 60000UL) {
-    check_interval_ms = 60000UL;
-  }
-  deadline_ms =
-      (last_calendar_check_ms_ == 0u) ? saturatingAddMs(now_ms, check_interval_ms)
-                                      : saturatingAddMs(last_calendar_check_ms_, check_interval_ms);
 
   struct tm local_tm {};
   time_t local_epoch = 0;
-  if (!getLocalTimeSnapshot(now_ms, local_tm, local_epoch)) {
-    return deadline_ms;
+  const bool time_valid = getLocalTimeSnapshot(now_ms, local_tm, local_epoch);
+  if (time_valid && isInSleepWindow(local_tm, wifi_manager_.settings())) {
+    return deadlineFromEpoch(now_ms, local_epoch,
+                             nextSleepEndEpoch(local_tm, local_epoch, wifi_manager_.settings()));
   }
 
-  const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
-  if (time_refresh_sec != 0u) {
-    const time_t next_time_bucket =
-        ((local_epoch / static_cast<time_t>(time_refresh_sec)) + 1) *
-        static_cast<time_t>(time_refresh_sec);
-    if (next_time_bucket > local_epoch) {
-      const uint32_t delta_ms =
-          static_cast<uint32_t>((next_time_bucket - local_epoch) * 1000ULL);
-      const uint32_t time_deadline = saturatingAddMs(now_ms, delta_ms);
-      if (time_deadline < deadline_ms) {
-        deadline_ms = time_deadline;
+  if (state_ == AppState::Photo) {
+    deadline_ms = saturatingAddMs(last_photo_switch_ms_, photo_interval_ms_);
+  } else {
+    uint32_t check_interval_ms = wifi_manager_.settings().calendar_refresh_sec * 1000UL;
+    if (check_interval_ms < 60000UL) {
+      check_interval_ms = 60000UL;
+    }
+    deadline_ms =
+        (last_calendar_check_ms_ == 0u) ? saturatingAddMs(now_ms, check_interval_ms)
+                                        : saturatingAddMs(last_calendar_check_ms_, check_interval_ms);
+
+    const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
+    if (time_valid && time_refresh_sec != 0u) {
+      const time_t next_time_bucket =
+          ((local_epoch / static_cast<time_t>(time_refresh_sec)) + 1) *
+          static_cast<time_t>(time_refresh_sec);
+      if (next_time_bucket > local_epoch) {
+        const uint32_t time_deadline = deadlineFromEpoch(now_ms, local_epoch, next_time_bucket);
+        if (time_deadline < deadline_ms) {
+          deadline_ms = time_deadline;
+        }
       }
     }
   }
 
-  struct tm next_midnight_tm = local_tm;
-  next_midnight_tm.tm_sec = 0;
-  next_midnight_tm.tm_min = 0;
-  next_midnight_tm.tm_hour = 0;
-  next_midnight_tm.tm_mday += 1;
-  const time_t next_midnight_epoch = mktime(&next_midnight_tm);
-  if (next_midnight_epoch > local_epoch) {
-    const uint32_t delta_ms =
-        static_cast<uint32_t>((next_midnight_epoch - local_epoch) * 1000ULL);
-    const uint32_t midnight_deadline = saturatingAddMs(now_ms, delta_ms);
-    if (midnight_deadline < deadline_ms) {
-      deadline_ms = midnight_deadline;
+  if (wifi_manager_.settings().app_auto_switch_enabled) {
+    uint32_t switch_interval_ms = wifi_manager_.settings().app_switch_interval_sec * 1000UL;
+    if (switch_interval_ms < 60000UL) {
+      switch_interval_ms = 60000UL;
+    }
+    const uint32_t switch_deadline = saturatingAddMs(last_app_switch_ms_, switch_interval_ms);
+    if (switch_deadline < deadline_ms) {
+      deadline_ms = switch_deadline;
+    }
+  }
+
+  if (time_valid) {
+    struct tm next_midnight_tm = local_tm;
+    next_midnight_tm.tm_sec = 0;
+    next_midnight_tm.tm_min = 0;
+    next_midnight_tm.tm_hour = 0;
+    next_midnight_tm.tm_mday += 1;
+    const time_t next_midnight_epoch = mktime(&next_midnight_tm);
+    if (next_midnight_epoch > local_epoch) {
+      const uint32_t midnight_deadline = deadlineFromEpoch(now_ms, local_epoch, next_midnight_epoch);
+      if (midnight_deadline < deadline_ms) {
+        deadline_ms = midnight_deadline;
+      }
+    }
+
+    const time_t sleep_start = nextSleepStartEpoch(local_tm, local_epoch, wifi_manager_.settings());
+    if (sleep_start > local_epoch) {
+      const uint32_t sleep_start_deadline = deadlineFromEpoch(now_ms, local_epoch, sleep_start);
+      if (sleep_start_deadline < deadline_ms) {
+        deadline_ms = sleep_start_deadline;
+      }
     }
   }
 
@@ -941,6 +1209,12 @@ void App::cancelLightSleepEntry(const char *reason) {
 }
 
 void App::updatePhotoCarousel(uint32_t now_ms) {
+  struct tm local_tm {};
+  time_t local_epoch = 0;
+  if (getLocalTimeSnapshot(now_ms, local_tm, local_epoch) &&
+      isInSleepWindow(local_tm, wifi_manager_.settings())) {
+    return;
+  }
   if ((now_ms - last_photo_switch_ms_) < photo_interval_ms_) {
     return;
   }
@@ -1008,9 +1282,22 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
   if (state_ != AppState::Calendar || !force_calendar_full_refresh_) {
     return true;
   }
+  if (calendar_skip_presync_once_) {
+    calendar_skip_presync_once_ = false;
+    calendar_pre_refresh_sync_waiting_ = false;
+    calendar_pre_refresh_sync_started_session_ = false;
+    calendar_pre_refresh_led_active_ = false;
+    Serial.println("[CAL] pre-refresh sync skipped: fast calendar render");
+    return true;
+  }
   if (!wifi_manager_.hasStaCredentials()) {
     calendar_pre_refresh_sync_waiting_ = false;
     calendar_pre_refresh_sync_started_session_ = false;
+    calendar_start_background_sync_after_render_ = false;
+    calendar_background_sync_active_ = false;
+    calendar_background_sync_started_session_ = false;
+    calendar_stop_sta_after_render_ = false;
+    calendar_pre_refresh_led_active_ = false;
     static bool logged_missing_credentials = false;
     if (!logged_missing_credentials) {
       logged_missing_credentials = true;
@@ -1021,12 +1308,17 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
 
   if (!calendar_pre_refresh_sync_waiting_) {
     calendar_pre_refresh_sync_waiting_ = true;
+    if (!calendar_pre_refresh_led_active_) {
+      led_manager_.startBreath("calendar_pre_refresh_sync");
+      calendar_pre_refresh_led_active_ = true;
+    }
     if (wifi_manager_.isStaConnected()) {
+      wifi_manager_.syncWeatherNow("calendar_pre_refresh");
       wifi_manager_.requestCalendarSyncNow();
       calendar_pre_refresh_sync_started_session_ = false;
       Serial.println("[CAL] pre-refresh sync requested on active STA");
     } else {
-      wifi_manager_.startStaAutoSync();
+      wifi_manager_.startStaPreRefreshSync();
       calendar_pre_refresh_sync_started_session_ = true;
       Serial.println("[CAL] pre-refresh sync: starting STA before full refresh");
     }
@@ -1034,14 +1326,14 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
   }
 
   if (wifi_manager_.isStaConnecting() || wifi_manager_.isCalendarSyncBusy()) {
+    led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
     return false;
   }
 
-  if (calendar_pre_refresh_sync_started_session_) {
-    wifi_manager_.stop("calendar_pre_refresh_sync_done");
-  }
+  calendar_stop_sta_after_render_ = calendar_pre_refresh_sync_started_session_;
   calendar_pre_refresh_sync_waiting_ = false;
   calendar_pre_refresh_sync_started_session_ = false;
+  calendar_pre_refresh_led_active_ = false;
   Serial.println("[CAL] pre-refresh sync settled -> proceed render");
   return true;
 }
@@ -1062,14 +1354,24 @@ void App::setState(AppState next) {
   if (next == state_) {
     return;
   }
-  if (calendar_pre_refresh_sync_started_session_) {
+  if (calendar_pre_refresh_sync_started_session_ || calendar_stop_sta_after_render_ ||
+      (calendar_background_sync_active_ && calendar_background_sync_started_session_)) {
     wifi_manager_.stop("state_change_cancel_pre_refresh_sync");
   }
   calendar_pre_refresh_sync_waiting_ = false;
   calendar_pre_refresh_sync_started_session_ = false;
+  calendar_skip_presync_once_ = false;
+  calendar_start_background_sync_after_render_ = false;
+  calendar_background_sync_active_ = false;
+  calendar_background_sync_started_session_ = false;
+  calendar_stop_sta_after_render_ = false;
+  calendar_pre_refresh_led_active_ = false;
   state_ = next;
+  last_app_switch_ms_ = millis();
   if (state_ == AppState::Calendar) {
     force_calendar_full_refresh_ = true;
+    calendar_skip_presync_once_ = true;
+    calendar_start_background_sync_after_render_ = true;
     last_calendar_day_key_ = -1;
     last_calendar_render_minute_key_ = -1;
     last_calendar_check_ms_ = 0;
@@ -1499,18 +1801,20 @@ calendar::Rect App::calendarHeaderTimeRect(const calendar::CalendarModel &model,
 
 calendar::Rect App::calendarHeaderWeatherRect(const calendar::CalendarModel &model,
                                               const calendar::CalendarLayout &layout) const {
-  const bool zh_ui = (model.ui_language == "zh");
-  const calendar::TextFont fallback_font =
-      zh_ui ? calendar::TextFont::CjkAuto : calendar::TextFont::Auto;
   const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, fallback_font, kHeaderDatePx);
+      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
   const calendar::TextFont weather_font =
-      preferredTextFont(model.header_weather, fallback_font, kHeaderWeatherPx);
+      dynamicTextFont(model.header_weather, calendar::TextFont::Cjk30,
+                      calendar::TextFont::Auto, kHeaderWeatherPx);
   const uint16_t right_x = header.meta_x;
+  const uint16_t status_group_w =
+      static_cast<uint16_t>(kHeaderWeatherIconSize + kHeaderStatusIconGap +
+                            kHeaderStatusIconSize + kHeaderStatusIconGap +
+                            kHeaderBatteryIconW + 2u);
   const uint16_t icon_right =
       static_cast<uint16_t>(weatherHeaderIconX(header, model.header_weather, weather_font) +
-                            kHeaderWeatherIconSize + 4u);
+                            status_group_w + 4u);
   const uint16_t desired_w =
       (icon_right > right_x) ? static_cast<uint16_t>(icon_right - right_x) : 0u;
   const uint16_t available_w =
@@ -1520,7 +1824,7 @@ calendar::Rect App::calendarHeaderWeatherRect(const calendar::CalendarModel &mod
   const uint16_t clamped_w =
       (desired_w < available_w) ? desired_w : available_w;
   const uint16_t text_h =
-      calendar::textHeightPx(model.header_weather, kHeaderWeatherPx, fallback_font);
+      calendar::textHeightPx(model.header_weather, kHeaderWeatherPx, weather_font);
   const calendar::Rect raw = calendar::makeRect(
       right_x, (header.weather_y > 3u) ? static_cast<uint16_t>(header.weather_y - 3u)
                                        : layout.header_bar.y,
@@ -1530,11 +1834,8 @@ calendar::Rect App::calendarHeaderWeatherRect(const calendar::CalendarModel &mod
 
 calendar::Rect App::calendarHeaderSensorsRect(const calendar::CalendarModel &model,
                                               const calendar::CalendarLayout &layout) const {
-  const bool zh_ui = (model.ui_language == "zh");
-  const calendar::TextFont fallback_font =
-      zh_ui ? calendar::TextFont::CjkAuto : calendar::TextFont::Auto;
   const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, fallback_font, kHeaderDatePx);
+      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
   const uint16_t right_x = header.meta_x;
   const uint16_t right_w =
@@ -1542,7 +1843,7 @@ calendar::Rect App::calendarHeaderSensorsRect(const calendar::CalendarModel &mod
                                 ? (layout.header_bar.x + layout.header_bar.w - right_x - 12u)
                                 : 0u);
   const uint16_t text_h =
-      calendar::textHeightPx(model.header_sensors, kHeaderSensorsPx, fallback_font);
+      calendar::textHeightPx(model.header_sensors, kHeaderSensorsPx, calendar::TextFont::AsciiSmooth);
   const calendar::Rect raw = calendar::makeRect(
       right_x, (header.sensors_y > 3u) ? static_cast<uint16_t>(header.sensors_y - 3u)
                                        : layout.header_bar.y,
@@ -1680,15 +1981,13 @@ bool App::redrawCalendarHeaderWeather(const calendar::CalendarModel &model,
   if (rect.w == 0 || rect.h == 0) {
     return false;
   }
-  const bool zh_ui = (model.ui_language == "zh");
-  const calendar::TextFont fallback_font =
-      zh_ui ? calendar::TextFont::CjkAuto : calendar::TextFont::Auto;
   const calendar::TextFont font =
-      preferredTextFont(model.header_weather, fallback_font, kHeaderWeatherPx);
+      dynamicTextFont(model.header_weather, calendar::TextFont::Cjk30,
+                      calendar::TextFont::Auto, kHeaderWeatherPx);
   const calendar::TextAAMode aa_mode =
       preferredAsciiAAMode(model.header_weather, font, kHeaderWeatherPx);
   const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, fallback_font, kHeaderDatePx);
+      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
 
   if (calendarUsesPortraitRotation()) {
@@ -1729,25 +2028,36 @@ bool App::redrawCalendarHeaderSensors(const calendar::CalendarModel &model,
   if (rect.w == 0 || rect.h == 0) {
     return false;
   }
-  const bool zh_ui = (model.ui_language == "zh");
-  const calendar::TextFont fallback_font =
-      zh_ui ? calendar::TextFont::CjkAuto : calendar::TextFont::Auto;
   const calendar::TextFont font =
-      preferredTextFont(model.header_sensors, fallback_font, kHeaderSensorsPx);
+      preferredTextFont(model.header_sensors, calendar::TextFont::Auto, kHeaderSensorsPx);
   const calendar::TextAAMode aa_mode =
       preferredAsciiAAMode(model.header_sensors, font, kHeaderSensorsPx);
   const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, fallback_font, kHeaderDatePx);
+      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const uint16_t text_x = header.meta_x;
+  const uint16_t text_w = calendar::textWidthPx(model.header_sensors, kHeaderSensorsPx, font);
+  const uint16_t text_x =
+      (header.meta_w > text_w)
+          ? static_cast<uint16_t>(header.meta_x + header.meta_w - text_w)
+          : header.meta_x;
   const uint16_t text_y = header.sensors_y;
+  const HeaderSensorTextParts sensor_parts = splitHeaderSensors(model.header_sensors);
+  const String temperature_with_space = sensor_parts.temperature + " ";
+  const uint16_t humidity_x =
+      static_cast<uint16_t>(text_x + calendar::textWidthPx(temperature_with_space,
+                                                           kHeaderSensorsPx, font));
 
   if (calendarUsesPortraitRotation()) {
     if (!ensureCalendarFrameBuffer("portrait_header_sensors_partial")) {
       return false;
     }
     fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    drawCalendarText3x5(text_x, text_y, model.header_sensors, kHeaderSensorsPx, green, font, aa_mode);
+    drawCalendarText3x5(text_x, text_y, sensor_parts.temperature, kHeaderSensorsPx, red, font,
+                        aa_mode);
+    if (sensor_parts.humidity.length() > 0) {
+      drawCalendarText3x5(humidity_x, text_y, sensor_parts.humidity, kHeaderSensorsPx, blue, font,
+                          aa_mode);
+    }
     physical_area = calendarLogicalRectToPhysical(rect);
     pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
     return true;
@@ -1759,11 +2069,23 @@ bool App::redrawCalendarHeaderSensors(const calendar::CalendarModel &model,
   calendar_window_buffer_.clear(white);
   drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
                        calendar_window_buffer_.rows(), static_cast<uint16_t>(text_x - rect.x),
-                       static_cast<uint16_t>(text_y - rect.y), model.header_sensors, kHeaderSensorsPx,
-                       green, font, aa_mode);
+                       static_cast<uint16_t>(text_y - rect.y), sensor_parts.temperature,
+                       kHeaderSensorsPx, red, font, aa_mode);
+  if (sensor_parts.humidity.length() > 0) {
+    drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
+                         calendar_window_buffer_.rows(),
+                         static_cast<uint16_t>(humidity_x - rect.x),
+                         static_cast<uint16_t>(text_y - rect.y), sensor_parts.humidity,
+                         kHeaderSensorsPx, blue, font, aa_mode);
+  }
   if (calendar_frame_ != nullptr) {
     fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    drawCalendarText3x5(text_x, text_y, model.header_sensors, kHeaderSensorsPx, green, font, aa_mode);
+    drawCalendarText3x5(text_x, text_y, sensor_parts.temperature, kHeaderSensorsPx, red, font,
+                        aa_mode);
+    if (sensor_parts.humidity.length() > 0) {
+      drawCalendarText3x5(humidity_x, text_y, sensor_parts.humidity, kHeaderSensorsPx, blue, font,
+                          aa_mode);
+    }
   }
   physical_area = rect;
   partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),
@@ -1866,11 +2188,9 @@ void App::renderCalendarPage(uint32_t now_ms) {
   const bool body_changed =
       !calendarBodyEquivalentForHeaderRefresh(previous_model, calendar_model_cache_);
   const bool header_time_changed = previous_model.header_time != calendar_model_cache_.header_time;
-  const bool header_weather_changed =
-      previous_model.header_weather != calendar_model_cache_.header_weather ||
-      previous_model.header_weather_code != calendar_model_cache_.header_weather_code;
-  const bool header_sensors_changed =
-      previous_model.header_sensors != calendar_model_cache_.header_sensors;
+  // Right-side info fields are full-page-only. Partial refresh is reserved for time ticks.
+  const bool header_weather_changed = false;
+  const bool header_sensors_changed = false;
   const calendar::Rect logical_full_screen = calendar_layout_cache_.screen;
   const calendar::Rect logical_header_time =
       calendarHeaderTimeRect(calendar_model_cache_, calendar_layout_cache_);
@@ -1967,7 +2287,7 @@ void App::renderCalendarPage(uint32_t now_ms) {
 
 void App::renderWhiteScreen() {
   Serial.println("[CONFIG] white screen action begin");
-  led_manager_.triggerBreath(2, "white_screen");
+  led_manager_.startBreath("white_screen");
   beginDisplaySession();
   EPD_W21_WriteCMD(0x10);
   for (uint16_t y = 0; y < 480; ++y) {
@@ -1984,6 +2304,8 @@ void App::renderWhiteScreen() {
   delay(1);
   waitEpdReadyWithLed();
   endDisplaySession();
+  led_manager_.stopEffects("white_screen_done");
+  led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
   Serial.println("[CONFIG] white screen action done");
 }
 

@@ -65,6 +65,27 @@ String formatDateTimeYmdHm(time_t epoch_value) {
   return String(buf);
 }
 
+String formatMinuteHm(uint16_t minute_of_day) {
+  if (minute_of_day >= 1440u) {
+    minute_of_day = 0;
+  }
+  char buf[8] = {0};
+  snprintf(buf, sizeof(buf), "%02u:%02u",
+           static_cast<unsigned>(minute_of_day / 60u),
+           static_cast<unsigned>(minute_of_day % 60u));
+  return String(buf);
+}
+
+bool parseMinuteHm(const String &raw, uint16_t &minute_out) {
+  String normalized;
+  if (!normalizeCalendarTimeValue(raw, normalized)) {
+    return false;
+  }
+  minute_out = static_cast<uint16_t>(
+      normalized.substring(0, 2).toInt() * 60 + normalized.substring(3, 5).toInt());
+  return true;
+}
+
 uint8_t bcdToDec(uint8_t value) {
   return static_cast<uint8_t>(((value >> 4) * 10u) + (value & 0x0Fu));
 }
@@ -158,7 +179,7 @@ String jsonEscape(const String &s) {
   String out;
   out.reserve(s.length() + 8);
   for (size_t i = 0; i < s.length(); ++i) {
-    const char c = s[i];
+    const unsigned char c = static_cast<unsigned char>(s[i]);
     if (c == '\\') {
       out += "\\\\";
     } else if (c == '"') {
@@ -167,8 +188,14 @@ String jsonEscape(const String &s) {
       out += "\\n";
     } else if (c == '\r') {
       out += "\\r";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else if (c < 0x20u) {
+      char escaped[7] = {0};
+      snprintf(escaped, sizeof(escaped), "\\u%04X", static_cast<unsigned>(c));
+      out += escaped;
     } else {
-      out += c;
+      out += static_cast<char>(c);
     }
   }
   return out;
@@ -304,34 +331,38 @@ bool extractJsonIntField(const String &json, const char *key, int32_t &value) {
     return false;
   }
   const String token = String("\"") + key + "\":";
-  const int start = json.indexOf(token);
-  if (start < 0) {
-    return false;
-  }
+  int search_start = 0;
+  while (search_start < static_cast<int>(json.length())) {
+    const int start = json.indexOf(token, search_start);
+    if (start < 0) {
+      return false;
+    }
 
-  int pos = start + static_cast<int>(token.length());
-  while (pos < static_cast<int>(json.length()) &&
-         (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-    ++pos;
-  }
-  if (pos >= static_cast<int>(json.length())) {
-    return false;
-  }
+    int pos = start + static_cast<int>(token.length());
+    while (pos < static_cast<int>(json.length()) &&
+           (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+      ++pos;
+    }
+    if (pos >= static_cast<int>(json.length())) {
+      return false;
+    }
 
-  int end = pos;
-  if (json[end] == '-') {
-    ++end;
+    int end = pos;
+    if (json[end] == '-') {
+      ++end;
+    }
+    bool saw_digit = false;
+    while (end < static_cast<int>(json.length()) && isDigit(json[end])) {
+      saw_digit = true;
+      ++end;
+    }
+    if (saw_digit) {
+      value = static_cast<int32_t>(json.substring(pos, end).toInt());
+      return true;
+    }
+    search_start = pos + 1;
   }
-  bool saw_digit = false;
-  while (end < static_cast<int>(json.length()) && isDigit(json[end])) {
-    saw_digit = true;
-    ++end;
-  }
-  if (!saw_digit) {
-    return false;
-  }
-  value = static_cast<int32_t>(json.substring(pos, end).toInt());
-  return true;
+  return false;
 }
 
 String posixTimezoneFromUtcOffsetSeconds(int32_t utc_offset_seconds) {
@@ -745,6 +776,10 @@ void WifiManager::startStaAutoSync() {
   startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "auto_sync");
 }
 
+void WifiManager::startStaPreRefreshSync() {
+  startSTAWithTimeout(kStaConnectTimeoutManualMs, "calendar_pre_refresh");
+}
+
 String WifiManager::effectiveStaAuthMode() const {
   String mode = settings_.sta_auth_mode;
   mode.trim();
@@ -958,6 +993,12 @@ bool WifiManager::consumeAutoExitRequested() {
   return value;
 }
 
+bool WifiManager::consumeSettingsSavedRefreshRequested() {
+  const bool value = settings_saved_refresh_requested_;
+  settings_saved_refresh_requested_ = false;
+  return value;
+}
+
 bool WifiManager::consumeStaConnectFailed() {
   const bool value = sta_connect_failed_;
   sta_connect_failed_ = false;
@@ -1008,6 +1049,32 @@ void WifiManager::requestCalendarSyncNow() {
     last_calendar_sync_status_ = "queued";
   }
   last_calendar_sync_error_ = "";
+}
+
+bool WifiManager::syncWeatherNow(const char *reason) {
+  if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[WEATHER] sync skipped reason=%s sta_not_connected\n",
+                  reason ? reason : "manual");
+    return false;
+  }
+  String resolved_timezone;
+  bool timezone_updated = false;
+  String local_time;
+  String time_sync_error;
+  String preview;
+  int http_status = 0;
+  String request_error;
+  const bool ok = syncClockFromWeather(resolved_timezone, timezone_updated, local_time,
+                                       time_sync_error, preview, http_status, request_error);
+  if (ok) {
+    writeClockToRtc(reason ? reason : "weather_sync");
+    Serial.printf("[WEATHER] sync ok reason=%s code=%d city=%s\n",
+                  reason ? reason : "manual", weather_code_, settings_.weather_city.c_str());
+  } else {
+    Serial.printf("[WEATHER] sync failed reason=%s status=%d err=%s code=%d\n",
+                  reason ? reason : "manual", http_status, request_error.c_str(), weather_code_);
+  }
+  return ok;
 }
 
 const WifiManager::Settings &WifiManager::settings() const {
@@ -1061,8 +1128,10 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
   int32_t weather_code = -1;
   if (extractJsonIntField(body, "weather_code", weather_code)) {
     weather_code_ = static_cast<int>(weather_code);
+    Serial.printf("[WEATHER] code=%d\n", weather_code_);
   } else {
     weather_code_ = -1;
+    Serial.println("[WEATHER] code missing");
   }
   if (resolved_timezone.length() == 0) {
     resolved_timezone = settings_.timezone;
@@ -1138,6 +1207,10 @@ void WifiManager::maybeSyncCalendarUrl(uint32_t now_ms) {
   const bool is_local_path = settings_.calendar_url.startsWith("/");
   if (!is_remote_url && !is_local_path) {
     Serial.printf("[CALSYNC] skip unsupported source=%s\n", settings_.calendar_url.c_str());
+    calendar_sync_pending_ = false;
+    if (last_calendar_sync_status_ == "queued" || last_calendar_sync_status_ == "running") {
+      last_calendar_sync_status_ = "idle";
+    }
     return;
   }
 
@@ -1729,16 +1802,31 @@ bool WifiManager::readAHT20(float &temperature_c, float &humidity_pct) {
 }
 
 int WifiManager::readBatteryMilliVolts(int pin) const {
-  const int raw_mv = analogReadMilliVolts(static_cast<uint8_t>(pin));
-  if (raw_mv <= 0) {
-    return raw_mv;
+  static constexpr uint8_t kSampleCount = 9;
+  int samples[kSampleCount] = {};
+  uint8_t valid_count = 0;
+  for (uint8_t i = 0; i < kSampleCount; ++i) {
+    const int raw_mv = analogReadMilliVolts(static_cast<uint8_t>(pin));
+    if (raw_mv > 0) {
+      samples[valid_count++] = raw_mv;
+    }
+    delay(2);
   }
-  // This board commonly feeds VBAT through a 1:1 divider to the ADC input.
-  const int scaled_mv = raw_mv * 2;
-  if (scaled_mv >= 3000 && scaled_mv <= 5000) {
-    return scaled_mv;
+  if (valid_count == 0) {
+    return -1;
   }
-  return raw_mv;
+  for (uint8_t i = 1; i < valid_count; ++i) {
+    const int value = samples[i];
+    uint8_t j = i;
+    while (j > 0 && samples[j - 1] > value) {
+      samples[j] = samples[j - 1];
+      --j;
+    }
+    samples[j] = value;
+  }
+  const int raw_mv = samples[valid_count / 2u];
+  // Hardware divider is 1:2 at IO39, so the ADC sees half of VBAT.
+  return raw_mv * 2;
 }
 
 void WifiManager::detectBatteryPin() {}
@@ -2742,6 +2830,13 @@ void WifiManager::handleStatus() {
   } else {
     json += String(battery_pct, 1);
   }
+  json += ",\"weather_city\":\"";
+  json += jsonEscape(settings_.weather_city);
+  json += "\",\"weather_code\":";
+  json += String(weather_code_);
+  json += ",\"weather_url\":\"";
+  json += jsonEscape(settings_.weather_url);
+  json += "\"";
   json += ",\"calendar_sync_pending\":";
   json += calendar_sync_pending_ ? "true" : "false";
   json += ",\"calendar_sync_status\":\"";
@@ -2795,11 +2890,16 @@ void WifiManager::handleSettingsGet() {
   json += "\"ui_language\":\"" + jsonEscape(settings_.ui_language) + "\",";
   json += "\"timezone\":\"" + jsonEscape(settings_.timezone) + "\",";
   json += "\"photo_interval_sec\":" + String(settings_.photo_interval_sec) + ",";
+  json += "\"app_auto_switch_enabled\":";
+  json += settings_.app_auto_switch_enabled ? "true," : "false,";
+  json += "\"app_switch_interval_sec\":" + String(settings_.app_switch_interval_sec) + ",";
   json += "\"calendar_enabled\":";
   json += settings_.calendar_enabled ? "true," : "false,";
   json += "\"calendar_layout\":\"" + jsonEscape(settings_.calendar_layout) + "\",";
   json += "\"calendar_refresh_sec\":" + String(settings_.calendar_refresh_sec) + ",";
   json += "\"calendar_time_refresh_sec\":" + String(settings_.calendar_time_refresh_sec) + ",";
+  json += "\"sleep_start\":\"" + formatMinuteHm(settings_.sleep_start_minute) + "\",";
+  json += "\"sleep_end\":\"" + formatMinuteHm(settings_.sleep_end_minute) + "\",";
   json += "\"calendar_url\":\"" + jsonEscape(settings_.calendar_url) + "\",";
   json += "\"weather_city\":\"" + jsonEscape(settings_.weather_city) + "\",";
   json += "\"weather_lat\":\"" + jsonEscape(settings_.weather_lat) + "\",";
@@ -2816,6 +2916,7 @@ void WifiManager::handleSettingsPost() {
   const bool previous_calendar_enabled = settings_.calendar_enabled;
   const String previous_calendar_url = settings_.calendar_url;
   const uint32_t previous_calendar_refresh_sec = settings_.calendar_refresh_sec;
+  const String previous_weather_url = settings_.weather_url;
   if (server_->hasArg("sta_ssid")) settings_.sta_ssid = server_->arg("sta_ssid");
   if (server_->hasArg("sta_user")) settings_.sta_user = server_->arg("sta_user");
   if (server_->hasArg("sta_pass")) settings_.sta_pass = server_->arg("sta_pass");
@@ -2828,6 +2929,19 @@ void WifiManager::handleSettingsPost() {
     settings_.photo_interval_sec = static_cast<uint32_t>(server_->arg("photo_interval_sec").toInt());
     if (settings_.photo_interval_sec < 30) settings_.photo_interval_sec = 30;
     if (settings_.photo_interval_sec > 86400) settings_.photo_interval_sec = 86400;
+  }
+  if (server_->hasArg("app_auto_switch_enabled")) {
+    const String enabled = server_->arg("app_auto_switch_enabled");
+    settings_.app_auto_switch_enabled = (enabled == "1" || enabled == "true" || enabled == "on");
+  } else if (server_->hasArg("app_auto_switch")) {
+    const String enabled = server_->arg("app_auto_switch");
+    settings_.app_auto_switch_enabled = (enabled == "1" || enabled == "true" || enabled == "on");
+  }
+  if (server_->hasArg("app_switch_interval_sec")) {
+    settings_.app_switch_interval_sec =
+        static_cast<uint32_t>(server_->arg("app_switch_interval_sec").toInt());
+    if (settings_.app_switch_interval_sec < 60) settings_.app_switch_interval_sec = 60;
+    if (settings_.app_switch_interval_sec > 86400) settings_.app_switch_interval_sec = 86400;
   }
   if (server_->hasArg("calendar_enabled")) {
     const String enabled = server_->arg("calendar_enabled");
@@ -2843,6 +2957,18 @@ void WifiManager::handleSettingsPost() {
   if (server_->hasArg("calendar_time_refresh_sec")) {
     settings_.calendar_time_refresh_sec = normalizeCalendarTimeRefreshSec(
         static_cast<uint32_t>(server_->arg("calendar_time_refresh_sec").toInt()));
+  }
+  if (server_->hasArg("sleep_start")) {
+    uint16_t minute = settings_.sleep_start_minute;
+    if (parseMinuteHm(server_->arg("sleep_start"), minute)) {
+      settings_.sleep_start_minute = minute;
+    }
+  }
+  if (server_->hasArg("sleep_end")) {
+    uint16_t minute = settings_.sleep_end_minute;
+    if (parseMinuteHm(server_->arg("sleep_end"), minute)) {
+      settings_.sleep_end_minute = minute;
+    }
   }
   if (server_->hasArg("calendar_url")) settings_.calendar_url = server_->arg("calendar_url");
   if (server_->hasArg("weather_city")) settings_.weather_city = server_->arg("weather_city");
@@ -2866,6 +2992,38 @@ void WifiManager::handleSettingsPost() {
   }
 
   saveSettings();
+  if (settings_.calendar_enabled && settings_.calendar_url.startsWith("/") &&
+      (settings_.calendar_enabled != previous_calendar_enabled ||
+       settings_.calendar_url != previous_calendar_url ||
+       settings_.calendar_refresh_sec != previous_calendar_refresh_sec)) {
+    String calendar_error;
+    if (syncCalendarFromUrl(calendar_error)) {
+      calendar_sync_pending_ = false;
+      Serial.printf("[CALSYNC] settings local sync ok url=%s\n", settings_.calendar_url.c_str());
+    } else {
+      Serial.printf("[CALSYNC] settings local sync failed err=%s url=%s\n",
+                    calendar_error.c_str(), settings_.calendar_url.c_str());
+    }
+  }
+  if (state_ == State::StaRunning && settings_.weather_url != previous_weather_url) {
+    String resolved_timezone;
+    bool timezone_updated = false;
+    String local_time;
+    String time_sync_error;
+    String preview;
+    int http_status = 0;
+    String request_error;
+    if (syncClockFromWeather(resolved_timezone, timezone_updated, local_time, time_sync_error,
+                             preview, http_status, request_error)) {
+      writeClockToRtc("settings_weather_update");
+      Serial.printf("[WEATHER] settings update ok code=%d city=%s\n",
+                    weather_code_, settings_.weather_city.c_str());
+    } else {
+      Serial.printf("[WEATHER] settings update failed status=%d err=%s code=%d\n",
+                    http_status, request_error.c_str(), weather_code_);
+    }
+  }
+  settings_saved_refresh_requested_ = true;
   if (isApSessionActive()) {
     if (hasStaCredentials()) {
       Serial.println("[WIFI] settings saved during AP session -> restart STA background");
@@ -2881,7 +3039,47 @@ void WifiManager::handleCalendarEventsGet() {
   markActivity(millis());
   Serial.printf("[HTTP] GET /api/calendar/events from %s\n",
                 server_->client().remoteIP().toString().c_str());
-  server_->send(200, "application/json", calendar_store_.toJson());
+  server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server_->sendHeader("Pragma", "no-cache");
+  server_->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server_->send(200, "application/json; charset=utf-8", "");
+  server_->sendContent("{\"ok\":true,\"items\":[");
+  for (size_t i = 0; i < calendar_store_.count(); ++i) {
+    CalendarEvent event;
+    if (!calendar_store_.eventAt(i, event)) {
+      continue;
+    }
+    String item;
+    item.reserve(240);
+    if (i > 0) {
+      item += ",";
+    }
+    item += "{\"id\":";
+    item += String(event.id);
+    item += ",\"title\":\"";
+    item += jsonEscape(event.title);
+    item += "\",\"date\":\"";
+    item += jsonEscape(event.date);
+    item += "\",\"time\":\"";
+    item += jsonEscape(event.time_hhmm);
+    item += "\",\"end_time\":\"";
+    item += jsonEscape(event.end_time_hhmm);
+    item += "\",\"color\":\"";
+    item += jsonEscape(event.color);
+    item += "\",\"repeat\":\"";
+    item += jsonEscape(event.repeat);
+    item += "\",\"weekday\":";
+    item += String(event.weekday);
+    item += ",\"source\":\"";
+    item += jsonEscape(event.source);
+    item += "\",\"external_id\":\"";
+    item += jsonEscape(event.external_id);
+    item += "\",\"updated_at\":\"";
+    item += jsonEscape(event.updated_at);
+    item += "\"}";
+    server_->sendContent(item);
+  }
+  server_->sendContent("]}");
 }
 
 void WifiManager::handleCalendarEventsPost() {
@@ -3007,6 +3205,11 @@ void WifiManager::handleCalendarEventsDelete() {
     server_->send(404, "application/json", "{\"ok\":false,\"error\":\"event_not_found\"}");
     return;
   }
+  CalendarEvent target;
+  if (calendar_store_.eventAt(static_cast<size_t>(idx), target) && target.source == "ics") {
+    server_->send(403, "application/json", "{\"ok\":false,\"error\":\"ics_event_readonly\"}");
+    return;
+  }
 
   calendar_store_.removeAt(static_cast<size_t>(idx));
   saveSettings();
@@ -3090,7 +3293,7 @@ void WifiManager::handleGeocode() {
   json += jsonEscape(lat);
   json += "\",\"lon\":\"";
   json += jsonEscape(lon);
-  json += "\",\"weather_url\":\"https://api.open-meteo.com/v1/forecast?latitude=";
+  json += "\",\"weather_url\":\"http://api.open-meteo.com/v1/forecast?latitude=";
   json += jsonEscape(lat);
   json += "&longitude=";
   json += jsonEscape(lon);
@@ -3216,12 +3419,13 @@ void WifiManager::handleWeatherTest() {
     Serial.printf("[TIME] weather sync failed tz=%s err=%s\n",
                   resolved_timezone.c_str(), time_sync_error.c_str());
   }
-
   String json = "{";
   json += "\"ok\":true,";
   json += "\"msg\":\"weather_request_ok\",";
   json += "\"http_status\":";
   json += String(code);
+  json += ",\"weather_code\":";
+  json += String(weather_code_);
   json += ",\"url\":\"";
   json += jsonEscape(settings_.weather_url);
   json += "\",\"preview\":\"";

@@ -8,6 +8,12 @@ namespace {
 
 constexpr uint8_t kAsciiGlyphWidth = 5;
 constexpr uint8_t kAsciiGlyphHeight = 7;
+constexpr uint8_t kAscii6GlyphWidth = 4;
+constexpr uint8_t kAscii6GlyphHeight = 6;
+constexpr uint8_t kAscii8GlyphWidth = 5;
+constexpr uint8_t kAscii8GlyphHeight = 8;
+constexpr uint8_t kAscii10GlyphWidth = 5;
+constexpr uint8_t kAscii10GlyphHeight = 10;
 
 struct FontBoxMetrics {
   uint8_t left;
@@ -28,6 +34,12 @@ FontBoxMetrics fontBoxMetrics(TextFont font) {
   switch (font) {
     case TextFont::AsciiSmooth:
       return FontBoxMetrics{0, 0, 0, fonts::kAsciiSmoothFontPx};
+    case TextFont::Ascii6:
+      return FontBoxMetrics{0, 0, kAscii6GlyphWidth, kAscii6GlyphHeight};
+    case TextFont::Ascii8:
+      return FontBoxMetrics{0, 0, kAscii8GlyphWidth, kAscii8GlyphHeight};
+    case TextFont::Ascii10:
+      return FontBoxMetrics{0, 0, kAscii10GlyphWidth, kAscii10GlyphHeight};
     case TextFont::Cjk30:
       return FontBoxMetrics{fonts::kZhFont30BoxLeft, fonts::kZhFont30BoxTop,
                             fonts::kZhFont30BoxWidth, fonts::kZhFont30BoxHeight};
@@ -113,7 +125,13 @@ GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle 
     return GlyphRenderMetrics{style.box_left, style.box_top, style.box_width, style.box_height,
                               style.base_height};
   }
-  const FontBoxMetrics ascii_box = fontBoxMetrics(TextFont::Auto);
+  const FontBoxMetrics ascii_box =
+      fontBoxMetrics(style.font == TextFont::Ascii6
+                         ? TextFont::Ascii6
+                         : (style.font == TextFont::Ascii8
+                                ? TextFont::Ascii8
+                                : (style.font == TextFont::Ascii10 ? TextFont::Ascii10
+                                                                   : TextFont::Auto)));
   return GlyphRenderMetrics{ascii_box.left, ascii_box.top, ascii_box.width, ascii_box.height,
                             ascii_box.height};
 }
@@ -527,6 +545,74 @@ const uint8_t *glyph3x5(char c) {
   return kUnknown;
 }
 
+const uint8_t *glyph4x6(char c) {
+  static const uint8_t kSpace[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  static const uint8_t kDash[6] = {0x00, 0x00, 0x00, 0xE0, 0x00, 0x00};
+  static const uint8_t kSlash[6] = {0x10, 0x10, 0x20, 0x40, 0x80, 0x80};
+  static const uint8_t kColon[6] = {0x00, 0x40, 0x00, 0x00, 0x40, 0x00};
+  static const uint8_t kDot[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x40};
+  static const uint8_t kPlus[6] = {0x00, 0x40, 0xE0, 0x40, 0x00, 0x00};
+  static const uint8_t kPercent[6] = {0x90, 0x20, 0x40, 0x80, 0x90, 0x00};
+  static const uint8_t kTilde[6] = {0x00, 0x00, 0x50, 0xA0, 0x00, 0x00};
+  static const uint8_t kUnknown[6] = {0x60, 0x90, 0x20, 0x40, 0x00, 0x40};
+  static const uint8_t kDigits[10][6] = {
+      {0x60, 0x90, 0xB0, 0xD0, 0x90, 0x60}, {0x40, 0xC0, 0x40, 0x40, 0x40, 0xE0},
+      {0x60, 0x90, 0x10, 0x20, 0x40, 0xF0}, {0xE0, 0x10, 0x60, 0x10, 0x10, 0xE0},
+      {0x20, 0x60, 0xA0, 0xF0, 0x20, 0x20}, {0xF0, 0x80, 0xE0, 0x10, 0x10, 0xE0},
+      {0x60, 0x80, 0xE0, 0x90, 0x90, 0x60}, {0xF0, 0x10, 0x20, 0x40, 0x40, 0x40},
+      {0x60, 0x90, 0x60, 0x90, 0x90, 0x60}, {0x60, 0x90, 0x90, 0x70, 0x10, 0x60},
+  };
+  static const uint8_t kUpper[26][6] = {
+      {0x60, 0x90, 0x90, 0xF0, 0x90, 0x90}, {0xE0, 0x90, 0xE0, 0x90, 0x90, 0xE0},
+      {0x70, 0x80, 0x80, 0x80, 0x80, 0x70}, {0xE0, 0x90, 0x90, 0x90, 0x90, 0xE0},
+      {0xF0, 0x80, 0xE0, 0x80, 0x80, 0xF0}, {0xF0, 0x80, 0xE0, 0x80, 0x80, 0x80},
+      {0x70, 0x80, 0xB0, 0x90, 0x90, 0x70}, {0x90, 0x90, 0xF0, 0x90, 0x90, 0x90},
+      {0xE0, 0x40, 0x40, 0x40, 0x40, 0xE0}, {0x10, 0x10, 0x10, 0x10, 0x90, 0x60},
+      {0x90, 0xA0, 0xC0, 0xA0, 0x90, 0x90}, {0x80, 0x80, 0x80, 0x80, 0x80, 0xF0},
+      {0x90, 0xF0, 0xF0, 0x90, 0x90, 0x90}, {0x90, 0xD0, 0xB0, 0x90, 0x90, 0x90},
+      {0x60, 0x90, 0x90, 0x90, 0x90, 0x60}, {0xE0, 0x90, 0x90, 0xE0, 0x80, 0x80},
+      {0x60, 0x90, 0x90, 0x90, 0xA0, 0x50}, {0xE0, 0x90, 0x90, 0xE0, 0xA0, 0x90},
+      {0x70, 0x80, 0x60, 0x10, 0x10, 0xE0}, {0xF0, 0x40, 0x40, 0x40, 0x40, 0x40},
+      {0x90, 0x90, 0x90, 0x90, 0x90, 0x60}, {0x90, 0x90, 0x90, 0x90, 0x60, 0x60},
+      {0x90, 0x90, 0x90, 0xF0, 0xF0, 0x90}, {0x90, 0x90, 0x60, 0x60, 0x90, 0x90},
+      {0x90, 0x90, 0x60, 0x40, 0x40, 0x40}, {0xF0, 0x10, 0x20, 0x40, 0x80, 0xF0},
+  };
+  if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+  if (c >= 'A' && c <= 'Z') return kUpper[c - 'A'];
+  if (c >= '0' && c <= '9') return kDigits[c - '0'];
+  if (c == ' ') return kSpace;
+  if (c == '-') return kDash;
+  if (c == '/') return kSlash;
+  if (c == ':') return kColon;
+  if (c == '.') return kDot;
+  if (c == '+') return kPlus;
+  if (c == '%') return kPercent;
+  if (c == '~') return kTilde;
+  return kUnknown;
+}
+
+const uint8_t *glyph5x10(char c) {
+  static uint8_t out[kAscii10GlyphHeight] = {};
+  const uint8_t *base = glyph3x5(c);
+  out[0] = 0x00;
+  out[1] = 0x00;
+  for (uint8_t row = 0; row < kAsciiGlyphHeight; ++row) {
+    out[row + 2u] = base[row];
+  }
+  out[9] = 0x00;
+  return out;
+}
+
+const uint8_t *glyph5x8(char c) {
+  static uint8_t out[kAscii8GlyphHeight] = {};
+  const uint8_t *base = glyph3x5(c);
+  for (uint8_t row = 0; row < kAsciiGlyphHeight; ++row) {
+    out[row] = base[row];
+  }
+  out[7] = 0x00;
+  return out;
+}
+
 uint8_t glyphCoverage(const GlyphBitmap &glyph, uint8_t row, uint8_t col) {
   if (glyph.rows == nullptr || row >= glyph.height || col >= glyph.width) {
     return 0;
@@ -542,6 +628,9 @@ uint8_t glyphCoverage(const GlyphBitmap &glyph, uint8_t row, uint8_t col) {
     return static_cast<uint8_t>((*src >> shift) & 0x03u);
   }
   const uint8_t bits = glyph.rows[row];
+  if (glyph.width == kAscii6GlyphWidth && glyph.height == kAscii6GlyphHeight) {
+    return (bits & (1u << (7u - col))) ? 3u : 0u;
+  }
   return (bits & (1u << (glyph.width - 1u - col))) ? 3u : 0u;
 }
 
@@ -557,6 +646,30 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
   }
 
   if (codepoint < 0x80u) {
+    if (font == TextFont::Ascii6) {
+      glyph.rows = glyph4x6(static_cast<char>(codepoint));
+      glyph.width = kAscii6GlyphWidth;
+      glyph.height = kAscii6GlyphHeight;
+      glyph.row_bytes = 1;
+      glyph.bits_per_pixel = 1;
+      return true;
+    }
+    if (font == TextFont::Ascii8) {
+      glyph.rows = glyph5x8(static_cast<char>(codepoint));
+      glyph.width = kAscii8GlyphWidth;
+      glyph.height = kAscii8GlyphHeight;
+      glyph.row_bytes = 1;
+      glyph.bits_per_pixel = 1;
+      return true;
+    }
+    if (font == TextFont::Ascii10) {
+      glyph.rows = glyph5x10(static_cast<char>(codepoint));
+      glyph.width = kAscii10GlyphWidth;
+      glyph.height = kAscii10GlyphHeight;
+      glyph.row_bytes = 1;
+      glyph.bits_per_pixel = 1;
+      return true;
+    }
     if (font == TextFont::AsciiSmooth) {
       if (fonts::lookupAsciiSmoothGlyph(static_cast<char>(codepoint), glyph.rows, glyph.width,
                                         glyph.height, glyph.row_bytes, glyph.bits_per_pixel)) {

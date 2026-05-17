@@ -24,9 +24,11 @@ class WifiManager {
   void startAP();
   void startSTA();
   void startStaAutoSync();
+  void startStaPreRefreshSync();
   void stop(const char *reason);
 
   bool consumeAutoExitRequested();
+  bool consumeSettingsSavedRefreshRequested();
   bool consumeStaConnectFailed();
   bool isStaConnecting() const;
   bool isStaConnected() const;
@@ -34,6 +36,7 @@ class WifiManager {
   bool isCalendarSyncBusy() const;
   bool blocksLightSleep() const;
   void requestCalendarSyncNow();
+  bool syncWeatherNow(const char *reason = nullptr);
   const Settings &settings() const;
   size_t calendarEventCount() const;
   bool calendarEventAt(size_t index, CalendarEvent &event) const;
@@ -42,6 +45,8 @@ class WifiManager {
   float humidityPct() const { return humidity_pct_; }
   String weatherCity() const { return settings_.weather_city; }
   int weatherCode() const { return weather_code_; }
+  int batteryMilliVolts() const { return battery_mv_; }
+  float batteryPercent() const { return estimateBatteryPercent(battery_mv_); }
 
  private:
   enum class State : uint8_t {
@@ -120,6 +125,7 @@ class WifiManager {
   Settings settings_{};
   CalendarStore calendar_store_{};
   bool auto_exit_requested_ = false;
+  bool settings_saved_refresh_requested_ = false;
   bool sta_connect_failed_ = false;
   bool upload_ok_ = true;
   String upload_error_{};

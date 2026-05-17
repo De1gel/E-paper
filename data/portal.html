@@ -194,6 +194,23 @@
       font-size:13px;
     }
     .advanced-toggle input { width:auto; }
+    .check-row {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      min-height:38px;
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.4;
+      margin:0;
+    }
+    .check-row input {
+      width:auto;
+      margin:0;
+      flex:0 0 auto;
+    }
+    .conditional-field { display:none; }
+    .conditional-field.show { display:block; }
     .advanced-panel {
       grid-column:1 / -1;
       display:none;
@@ -326,6 +343,16 @@
             <label data-i18n="cfg.photo.interval">轮播间隔（秒）</label>
             <input id="sec" type="number" min="30">
           </div>
+          <div class="field">
+            <label class="check-row">
+              <input id="appAutoSwitch" type="checkbox">
+              <span data-i18n="cfg.photo.auto_switch">相册日历自动切换</span>
+            </label>
+          </div>
+          <div class="field conditional-field" id="appSwitchSecField">
+            <label data-i18n="cfg.photo.switch_interval">页面切换间隔（秒）</label>
+            <input id="appSwitchSec" type="number" min="60" placeholder="3600">
+          </div>
         </div>
       </div>
 
@@ -352,6 +379,14 @@
               <option value="3600" data-i18n="cfg.calendar.time_refresh_60">60 分钟</option>
               <option value="0" data-i18n="cfg.calendar.time_refresh_follow">与日历页同时刷新</option>
             </select>
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.calendar.sleep_start">休眠开始</label>
+            <input id="sleepStart" type="time" value="22:00">
+          </div>
+          <div class="field">
+            <label data-i18n="cfg.calendar.sleep_end">休眠结束</label>
+            <input id="sleepEnd" type="time" value="08:00">
           </div>
           <div class="field" style="grid-column:1 / -1;">
             <label data-i18n="cfg.calendar.url">日历数据 URL（预留）</label>
@@ -527,6 +562,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=20260406f"></script>
+  <script src="/app.js?v=20260406k"></script>
 </body>
 </html>

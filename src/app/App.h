@@ -43,6 +43,8 @@ class App {
   void updateClockAnchor(uint32_t now_ms);
   bool getLocalTimeSnapshot(uint32_t now_ms, struct tm &local_tm, time_t &local_epoch) const;
   void updateCalendarAutoRefresh(uint32_t now_ms);
+  void updateAppAutoSwitch(uint32_t now_ms);
+  void updateCalendarBackgroundSync(uint32_t now_ms);
   void applyCalendarLayoutFromConfig(bool force_apply);
   void updatePhotoCarousel(uint32_t now_ms);
   void nextPhoto(const char *reason, uint32_t now_ms);
@@ -102,9 +104,12 @@ class App {
   void renderWhiteScreen();
   void waitEpdReadyWithLed();
   bool isAnyWakeKeyPressed() const;
+  uint32_t calendarSyncSignature() const;
+  void startCalendarBackgroundSync(const char *reason);
 
   AppState state_ = AppState::Photo;
   uint32_t last_photo_switch_ms_ = 0;
+  uint32_t last_app_switch_ms_ = 0;
   uint32_t photo_interval_ms_ = 3600000;
   uint16_t photo_index_ = 0;
   uint16_t photo_file_count_ = 0;
@@ -124,6 +129,13 @@ class App {
   uint16_t calendar_partial_refresh_count_ = 0;
   bool calendar_pre_refresh_sync_waiting_ = false;
   bool calendar_pre_refresh_sync_started_session_ = false;
+  bool calendar_skip_presync_once_ = false;
+  bool calendar_start_background_sync_after_render_ = false;
+  bool calendar_background_sync_active_ = false;
+  bool calendar_background_sync_started_session_ = false;
+  bool calendar_stop_sta_after_render_ = false;
+  bool calendar_pre_refresh_led_active_ = false;
+  uint32_t calendar_background_sync_signature_ = 0;
   uint32_t last_calendar_check_ms_ = 0;
   int32_t last_calendar_day_key_ = -1;
   int32_t last_calendar_render_minute_key_ = -1;

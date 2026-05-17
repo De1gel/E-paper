@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-05-17
+- Stabilized the calendar build after the failed full-month ICS expansion experiment. The device logs showed ICS parsing/sync could import `64` occurrences from `/weekly-language-class.ics`, but persisting the expanded event set failed with `nvs_set_str fail: cal_events`, and after skipping ICS persistence the device still reset during the calendar render path after `[POWER] peripheral rail=ON`.
+- Root cause analysis: increasing `kMaxCalendarEvents` from `24` to `96` amplified several fixed-size model paths, especially the `ScheduleGroup` `N x N` index storage and duplicated current/previous `CalendarModel` caches; the timeline lane code also has a fixed 32-slot active set. This made "load every event for the month into the normal event store" unsafe on ESP32.
+- Restored the stable short-window/fixed-cap behavior for the committed baseline: `kMaxCalendarEvents` remains `24`, the calendar store uses fixed storage, manual add rejects full stores, pre-refresh STA stays active through render and stops afterward, and the temporary EPD busy timeout/power-delay experiments were removed.
+- Verified before commit with `platformio run --environment esp32dev`: build passed. Build result: RAM `20.0%` (`65696 / 327680`), Flash `28.9%` (`2117601 / 7340032`). Uploaded firmware successfully to `COM4`.
+
 ## 2026-04-27
 - Consolidated the current calendar-focused iteration into a commit candidate after repeated on-device tuning across layout, rendering, weather display, and connectivity behavior.
 - Calendar page now uses the editorial-style header card, larger fixed today highlight, per-day event summaries, refined schedule cards, and layered vector weather icons with partial-refresh-aware header redraw paths.
