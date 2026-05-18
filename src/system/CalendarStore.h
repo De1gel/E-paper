@@ -23,6 +23,7 @@ class CalendarStore {
   int findIndexByExternal(const String &source, const String &external_id) const;
   bool removeAt(size_t index);
   size_t removeExpiredBefore(const String &min_date);
+  size_t removeOnceOutsideRange(const String &min_date, const String &max_date_exclusive);
   bool push(const CalendarEvent &event);
   void replaceAll(const CalendarEvent *events, size_t count);
 

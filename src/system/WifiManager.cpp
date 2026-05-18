@@ -1205,7 +1205,7 @@ void WifiManager::loadSettings() {
     return;
   }
   calendar_store_.setNextId(next_calendar_event_id);
-  calendar_store_.clear();
+  calendar_store_.deserialize(packed_events);
   calendar_store_.setNextId(next_calendar_event_id);
   Serial.printf("[CFG] loaded sta_ssid=%s (%s)\n",
                 settings_.sta_ssid.c_str(),
@@ -1228,15 +1228,21 @@ void WifiManager::pruneExpiredCalendarEvents() {
   if (now_epoch <= 0) {
     return;
   }
-  struct tm local_tm {};
-  if (localtime_r(&now_epoch, &local_tm) == nullptr) {
+  const time_t month_start = localMonthWindowStart(now_epoch);
+  const time_t month_end = localWindowEndOneMonth(month_start);
+  struct tm start_tm {};
+  struct tm end_tm {};
+  if (localtime_r(&month_start, &start_tm) == nullptr ||
+      localtime_r(&month_end, &end_tm) == nullptr) {
     return;
   }
-  const String today = formatDateYmd(local_tm);
-  const size_t removed = calendar_store_.removeExpiredBefore(today);
+  const String min_date = formatDateYmd(start_tm);
+  const String max_date = formatDateYmd(end_tm);
+  const size_t removed = calendar_store_.removeOnceOutsideRange(min_date, max_date);
   if (removed > 0) {
-    Serial.printf("[CAL] pruned expired runtime events removed=%u before=%s\n",
-                  static_cast<unsigned>(removed), today.c_str());
+    Serial.printf("[CAL] pruned out-of-month manual events removed=%u range=%s..%s\n",
+                  static_cast<unsigned>(removed), min_date.c_str(), max_date.c_str());
+    saveSettings();
   }
 }
 

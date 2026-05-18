@@ -8,6 +8,7 @@
 - Reworked the full-month ICS path after the baseline commit: sync now expands the full current month into a lightweight in-RAM month-summary cache while keeping the normal persisted calendar store capped at `24` entries for the right-side day timeline. ICS entries are no longer serialized into `cal_events`, avoiding the previous NVS `NOT_ENOUGH_SPACE` failure.
 - On-device validation of the new path with `/weekly-language-class.ics`: sync window `2026-05-01 00:00` to `2026-06-01 00:00`, `expanded imported=64`, `month=64`, `stored_ics=24`; the calendar full refresh completed and entered sleep without the earlier WDT/reset.
 - Manual calendar entries now follow the same runtime-only storage rule as ICS-derived entries: `cal_events` is always saved empty, persisted legacy event data is ignored on boot, and one-time runtime events older than the current local date are pruned automatically.
+- Corrected that behavior after review: ICS entries remain runtime-only, but manual entries are persisted again. One-time manual entries outside the current month display window are pruned from storage, while recurring manual entries such as weekly meetings remain stored. Expanded the compact ASCII glyph set to cover common event-title symbols including `@`, `_`, punctuation, and brackets, so ICS titles no longer need to be rewritten to avoid missing glyphs.
 
 ## 2026-04-27
 - Consolidated the current calendar-focused iteration into a commit candidate after repeated on-device tuning across layout, rendering, weather display, and connectivity behavior.

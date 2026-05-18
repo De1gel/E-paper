@@ -501,7 +501,7 @@ String buildImportedTitle(const String &summary, const String &location, const S
     title = "Busy";
   }
   if (trimmed_location.length() > 0 && title.indexOf(trimmed_location.c_str()) < 0) {
-    title += " ";
+    title += " @";
     title += trimmed_location;
   } else if (trimmed_description.length() > 0 &&
              title.indexOf(trimmed_description.c_str()) < 0 &&
