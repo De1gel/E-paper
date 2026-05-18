@@ -29,6 +29,7 @@ constexpr uint16_t kScheduleStartMinute = 8u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
 constexpr uint8_t kScheduleSlotCount = 28u;
 constexpr uint16_t kMonthSummaryCircleGap = 3u;
+constexpr uint16_t kMonthSummaryOffsetUp = 2u;
 
 struct HeaderMetrics {
   uint16_t card_x = 0;
@@ -1117,8 +1118,12 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     }
     const uint8_t visible_limit = (layout.grid_rows >= 6u) ? 2u : 3u;
     const uint8_t shown_count = std::min(summary.item_count, visible_limit);
-    const uint16_t summary_y_base = static_cast<uint16_t>(text_cy + today_radius +
-                                                          kMonthSummaryCircleGap);
+    const uint16_t summary_y_base_raw = static_cast<uint16_t>(text_cy + today_radius +
+                                                              kMonthSummaryCircleGap);
+    const uint16_t summary_y_base =
+        (summary_y_base_raw > kMonthSummaryOffsetUp)
+            ? static_cast<uint16_t>(summary_y_base_raw - kMonthSummaryOffsetUp)
+            : summary_y_base_raw;
     uint16_t summary_y = summary_y_base;
     const uint16_t summary_x = static_cast<uint16_t>(cell_x + 7u);
     const uint16_t chip_size = (layout.mode == LayoutMode::LandscapeSplit) ? 5u : 4u;
