@@ -40,6 +40,9 @@ class WifiManager {
   const Settings &settings() const;
   size_t calendarEventCount() const;
   bool calendarEventAt(size_t index, CalendarEvent &event) const;
+  size_t calendarMonthSummaryCount() const;
+  bool calendarMonthSummaryAt(size_t index, CalendarMonthSummaryEvent &event) const;
+  uint32_t calendarMonthSummarySignature() const;
   void sampleSensorsNow(bool assume_peripheral_powered = false);
   float temperatureC() const { return temperature_c_; }
   float humidityPct() const { return humidity_pct_; }
@@ -61,6 +64,7 @@ class WifiManager {
   void applyDefaultSettings();
   void maybeSyncCalendarUrl(uint32_t now_ms);
   bool syncCalendarFromUrl(String &error_msg);
+  void pruneExpiredCalendarEvents();
   void registerWifiEvents();
   void handleWifiEvent(arduino_event_id_t event, arduino_event_info_t info);
   const char *wifiStatusName(int status) const;
@@ -124,6 +128,9 @@ class WifiManager {
   State state_ = State::Idle;
   Settings settings_{};
   CalendarStore calendar_store_{};
+  CalendarMonthSummaryEvent calendar_month_summaries_[kMaxCalendarMonthSummaries];
+  size_t calendar_month_summary_count_ = 0;
+  uint32_t calendar_month_summary_signature_ = 0;
   bool auto_exit_requested_ = false;
   bool settings_saved_refresh_requested_ = false;
   bool sta_connect_failed_ = false;

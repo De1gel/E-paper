@@ -70,6 +70,26 @@ bool CalendarStore::removeAt(size_t index) {
   return true;
 }
 
+size_t CalendarStore::removeExpiredBefore(const String &min_date) {
+  size_t removed = 0;
+  size_t write = 0;
+  for (size_t read = 0; read < count_; ++read) {
+    const CalendarEvent &event = events_[read];
+    const bool expired_once =
+        event.repeat == "once" && event.date.length() > 0 && event.date.compareTo(min_date) < 0;
+    if (expired_once) {
+      ++removed;
+      continue;
+    }
+    if (write != read) {
+      events_[write] = events_[read];
+    }
+    ++write;
+  }
+  count_ = write;
+  return removed;
+}
+
 bool CalendarStore::push(const CalendarEvent &event) {
   if (count_ >= static_cast<size_t>(kMaxCalendarEvents)) {
     return false;
@@ -88,35 +108,7 @@ void CalendarStore::replaceAll(const CalendarEvent *events, size_t count) {
 }
 
 String CalendarStore::serialize() const {
-  String out;
-  for (size_t i = 0; i < count_; ++i) {
-    const CalendarEvent &e = events_[i];
-    if (i > 0) {
-      out += "\n";
-    }
-    out += String(e.id);
-    out += "|";
-    out += urlEncode(e.date);
-    out += "|";
-    out += urlEncode(e.time_hhmm);
-    out += "|";
-    out += urlEncode(e.end_time_hhmm);
-    out += "|";
-    out += urlEncode(e.color);
-    out += "|";
-    out += urlEncode(e.repeat);
-    out += "|";
-    out += String(e.weekday);
-    out += "|";
-    out += urlEncode(e.title);
-    out += "|";
-    out += urlEncode(e.source);
-    out += "|";
-    out += urlEncode(e.external_id);
-    out += "|";
-    out += urlEncode(e.updated_at);
-  }
-  return out;
+  return "";
 }
 
 String CalendarStore::toJson() const {

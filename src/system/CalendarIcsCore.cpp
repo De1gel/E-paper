@@ -450,6 +450,18 @@ time_t localWeekWindowStart(time_t now_epoch) {
   return mktime(&local_tm);
 }
 
+time_t localMonthWindowStart(time_t now_epoch) {
+  struct tm local_tm {};
+  if (localtime_r(&now_epoch, &local_tm) == nullptr) {
+    return now_epoch;
+  }
+  local_tm.tm_hour = 0;
+  local_tm.tm_min = 0;
+  local_tm.tm_sec = 0;
+  local_tm.tm_mday = 1;
+  return mktime(&local_tm);
+}
+
 time_t localWindowEndOneMonth(time_t window_start) {
   struct tm local_tm {};
   if (localtime_r(&window_start, &local_tm) == nullptr) {

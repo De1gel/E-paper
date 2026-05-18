@@ -498,8 +498,50 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
       if (!wifi_manager.calendarEventAt(event_index, event)) {
         continue;
       }
+      if (event.source == "ics") {
+        continue;
+      }
       if (!calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday, event.date.c_str(),
                                                day_ymd.c_str(), day_weekday)) {
+        continue;
+      }
+      ++total_matches;
+      uint16_t start_minute = 24u * 60u;
+      parseHmToMinutes(event.time_hhmm, start_minute);
+      SummaryCandidate candidate;
+      candidate.start_minute = start_minute;
+      candidate.color_nibble = dayIndicatorColorNibble(event.color);
+      candidate.label = summarizeEventTitle(event.title);
+
+      uint8_t insert_at = candidate_count;
+      for (uint8_t i = 0; i < candidate_count; ++i) {
+        if (candidate.start_minute < candidates[i].start_minute ||
+            (candidate.start_minute == candidates[i].start_minute &&
+             candidate.label < candidates[i].label)) {
+          insert_at = i;
+          break;
+        }
+      }
+      if (insert_at < DaySummary::kMaxItems) {
+        const uint8_t limit =
+            (candidate_count < DaySummary::kMaxItems) ? static_cast<uint8_t>(candidate_count + 1u)
+                                                      : DaySummary::kMaxItems;
+        for (uint8_t move = limit; move > insert_at + 1u; --move) {
+          candidates[move - 1u] = candidates[move - 2u];
+        }
+        candidates[insert_at] = candidate;
+        if (candidate_count < DaySummary::kMaxItems) {
+          ++candidate_count;
+        }
+      }
+    }
+    for (size_t event_index = 0; event_index < wifi_manager.calendarMonthSummaryCount();
+         ++event_index) {
+      appfw::CalendarMonthSummaryEvent event;
+      if (!wifi_manager.calendarMonthSummaryAt(event_index, event)) {
+        continue;
+      }
+      if (event.date != day_ymd) {
         continue;
       }
       ++total_matches;

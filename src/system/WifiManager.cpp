@@ -86,6 +86,24 @@ bool parseMinuteHm(const String &raw, uint16_t &minute_out) {
   return true;
 }
 
+void mixCalendarHashByte(uint32_t &hash, uint8_t value) {
+  hash ^= value;
+  hash *= 16777619UL;
+}
+
+void mixCalendarHashString(uint32_t &hash, const String &value) {
+  for (size_t i = 0; i < value.length(); ++i) {
+    mixCalendarHashByte(hash, static_cast<uint8_t>(value[i]));
+  }
+  mixCalendarHashByte(hash, 0xFFu);
+}
+
+void mixCalendarHashInt(uint32_t &hash, uint32_t value) {
+  for (uint8_t i = 0; i < 4u; ++i) {
+    mixCalendarHashByte(hash, static_cast<uint8_t>((value >> (i * 8u)) & 0xFFu));
+  }
+}
+
 uint8_t bcdToDec(uint8_t value) {
   return static_cast<uint8_t>(((value >> 4) * 10u) + (value & 0x0Fu));
 }
@@ -654,6 +672,7 @@ void WifiManager::begin() {
 
 void WifiManager::update(uint32_t now_ms) {
   updateSensors(now_ms);
+  pruneExpiredCalendarEvents();
 
   if (server_ != nullptr && (isApSessionActive() || state_ == State::StaRunning)) {
     server_->handleClient();
@@ -1159,6 +1178,22 @@ bool WifiManager::calendarEventAt(size_t index, CalendarEvent &event) const {
   return calendar_store_.eventAt(index, event);
 }
 
+size_t WifiManager::calendarMonthSummaryCount() const {
+  return calendar_month_summary_count_;
+}
+
+bool WifiManager::calendarMonthSummaryAt(size_t index, CalendarMonthSummaryEvent &event) const {
+  if (index >= calendar_month_summary_count_) {
+    return false;
+  }
+  event = calendar_month_summaries_[index];
+  return true;
+}
+
+uint32_t WifiManager::calendarMonthSummarySignature() const {
+  return calendar_month_summary_signature_;
+}
+
 void WifiManager::loadSettings() {
   if (prefs_ == nullptr) {
     prefs_ = new Preferences();
@@ -1170,7 +1205,8 @@ void WifiManager::loadSettings() {
     return;
   }
   calendar_store_.setNextId(next_calendar_event_id);
-  calendar_store_.deserialize(packed_events);
+  calendar_store_.clear();
+  calendar_store_.setNextId(next_calendar_event_id);
   Serial.printf("[CFG] loaded sta_ssid=%s (%s)\n",
                 settings_.sta_ssid.c_str(),
                 (settings_.sta_ssid == SettingsStore::defaultStaSsid()) ? "default" : "prefs");
@@ -1185,6 +1221,23 @@ void WifiManager::saveSettings() {
     return;
   }
   Serial.println("[CFG] settings saved");
+}
+
+void WifiManager::pruneExpiredCalendarEvents() {
+  const time_t now_epoch = time(nullptr);
+  if (now_epoch <= 0) {
+    return;
+  }
+  struct tm local_tm {};
+  if (localtime_r(&now_epoch, &local_tm) == nullptr) {
+    return;
+  }
+  const String today = formatDateYmd(local_tm);
+  const size_t removed = calendar_store_.removeExpiredBefore(today);
+  if (removed > 0) {
+    Serial.printf("[CAL] pruned expired runtime events removed=%u before=%s\n",
+                  static_cast<unsigned>(removed), today.c_str());
+  }
 }
 
 void WifiManager::applyDefaultSettings() {
@@ -1333,7 +1386,7 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
     error_msg = "clock_invalid";
     return false;
   }
-  const time_t window_start = localWeekWindowStart(now_epoch);
+  const time_t window_start = localMonthWindowStart(now_epoch);
   const time_t window_end = localWindowEndOneMonth(window_start);
   Serial.printf("[CALSYNC] window start=%s end=%s now=%s\n",
                 formatDateTimeYmdHm(window_start).c_str(),
@@ -1384,9 +1437,41 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
                   static_cast<unsigned>(imported_items.size() - 8u));
   }
 
+  calendar_month_summary_count_ = 0;
+  uint32_t month_signature = 2166136261UL;
+  for (const ImportedCalendarEvent &item : imported_items) {
+    if (calendar_month_summary_count_ >= static_cast<size_t>(kMaxCalendarMonthSummaries)) {
+      break;
+    }
+    CalendarMonthSummaryEvent &summary = calendar_month_summaries_[calendar_month_summary_count_++];
+    summary.title = item.event.title;
+    summary.date = item.event.date;
+    summary.time_hhmm = item.event.time_hhmm;
+    summary.color = item.event.color;
+    mixCalendarHashString(month_signature, summary.date);
+    mixCalendarHashString(month_signature, summary.time_hhmm);
+    mixCalendarHashString(month_signature, summary.color);
+    mixCalendarHashString(month_signature, summary.title);
+  }
+  mixCalendarHashInt(month_signature, static_cast<uint32_t>(calendar_month_summary_count_));
+  calendar_month_summary_signature_ = month_signature;
+
+  const time_t store_window_start = localWeekWindowStart(now_epoch);
+  std::vector<ImportedCalendarEvent> store_items;
+  store_items.reserve(std::min(imported_items.size(), static_cast<size_t>(kMaxCalendarEvents)));
+  for (const ImportedCalendarEvent &item : imported_items) {
+    if (item.sort_epoch < store_window_start) {
+      continue;
+    }
+    if (store_items.size() >= static_cast<size_t>(kMaxCalendarEvents)) {
+      break;
+    }
+    store_items.push_back(item);
+  }
+
   const time_t updated_now = time(nullptr);
   const std::vector<CalendarEvent> normalized_imported =
-      CalendarSyncService::normalizeImportedEvents(imported_items, updated_now);
+      CalendarSyncService::normalizeImportedEvents(store_items, updated_now);
   const CalendarSyncMergeStats merge_stats =
       CalendarSyncService::mergeImportedEvents(calendar_store_, normalized_imported);
   last_calendar_sync_epoch_ = time(nullptr);
@@ -1395,14 +1480,17 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   last_calendar_sync_total_ =
       static_cast<uint16_t>(std::min<size_t>(calendar_store_.count(), 65535u));
   saveSettings();
-  Serial.printf("[CALSYNC] ok vevents=%u imported=%u kept_manual=%u total=%u elapsed=%lums window=%lu..%lu\n",
+  Serial.printf("[CALSYNC] ok vevents=%u imported=%u month=%u stored_ics=%u kept_manual=%u total=%u elapsed=%lums window=%lu..%lu store_start=%lu\n",
                 static_cast<unsigned>(vevent_count),
                 static_cast<unsigned>(imported_items.size()),
+                static_cast<unsigned>(calendar_month_summary_count_),
+                static_cast<unsigned>(store_items.size()),
                 static_cast<unsigned>(merge_stats.kept_manual),
                 static_cast<unsigned>(calendar_store_.count()),
                 static_cast<unsigned long>(millis() - sync_start_ms),
                 static_cast<unsigned long>(window_start),
-                static_cast<unsigned long>(window_end));
+                static_cast<unsigned long>(window_end),
+                static_cast<unsigned long>(store_window_start));
   return true;
 }
 

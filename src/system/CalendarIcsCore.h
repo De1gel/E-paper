@@ -68,6 +68,7 @@ bool splitIcsProperty(const String &line, String &name, String &params, String &
 bool parseRruleCore(const String &raw_rrule, CalendarRruleCore &rrule);
 int weekdayMon0FromTm(const struct tm &tm_value);
 time_t localWeekWindowStart(time_t now_epoch);
+time_t localMonthWindowStart(time_t now_epoch);
 time_t localWindowEndOneMonth(time_t window_start);
 bool eventOverlapsWindow(time_t start_epoch, time_t end_epoch, time_t window_start,
                          time_t window_end);

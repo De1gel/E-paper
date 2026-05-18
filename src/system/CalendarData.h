@@ -6,6 +6,7 @@
 namespace appfw {
 
 static constexpr size_t kMaxCalendarEvents = 24;
+static constexpr size_t kMaxCalendarMonthSummaries = 96;
 
 struct CalendarEvent {
   uint16_t id = 0;
@@ -19,6 +20,13 @@ struct CalendarEvent {
   String source;  // manual/outlook/google...
   String external_id;  // Provider-side stable id.
   String updated_at;   // Optional ISO-8601 or epoch string.
+};
+
+struct CalendarMonthSummaryEvent {
+  String title;
+  String date;
+  String time_hhmm;
+  String color;
 };
 
 }  // namespace appfw

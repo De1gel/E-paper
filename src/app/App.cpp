@@ -836,6 +836,7 @@ uint32_t App::calendarSyncSignature() const {
   };
   mixInt(wifi_manager_.weatherCode());
   mixInt(static_cast<int32_t>(wifi_manager_.calendarEventCount()));
+  mixInt(static_cast<int32_t>(wifi_manager_.calendarMonthSummarySignature()));
   for (size_t i = 0; i < wifi_manager_.calendarEventCount(); ++i) {
     appfw::CalendarEvent event;
     if (!wifi_manager_.calendarEventAt(i, event)) {
