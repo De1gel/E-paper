@@ -7,7 +7,7 @@ namespace fonts {
 
 constexpr size_t kZhCommonGlyphCount = 3000;
 constexpr size_t kZhWeekdayGlyphCount = 7;
-constexpr uint8_t kZhFontPx10 = 10;
+constexpr uint8_t kZhFontPx10 = 12;
 constexpr uint8_t kZhFontPx16 = 16;
 constexpr uint8_t kZhFontPx26 = 26;
 constexpr uint8_t kZhFontPx30 = 30;

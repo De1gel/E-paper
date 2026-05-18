@@ -336,13 +336,13 @@ void emitDitheredText(SceneSink &sink, uint16_t x, uint16_t y, const String &tex
   freeTextCoverageMap(map);
 }
 
-constexpr uint8_t kScheduleTitleLinePx = 10u;
-constexpr uint8_t kScheduleTitleAsciiPx = 8u;
-constexpr uint8_t kScheduleTitleCjkPx = 10u;
+constexpr uint8_t kScheduleTitleLinePx = 12u;
+constexpr uint8_t kScheduleTitleAsciiPx = 10u;
+constexpr uint8_t kScheduleTitleCjkPx = 12u;
 
 uint16_t scheduleTitleRunWidth(const String &run, bool ascii_run) {
   return textWidthPx(run, ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx,
-                     ascii_run ? TextFont::Ascii8 : TextFont::Cjk10);
+                     ascii_run ? TextFont::Ascii10 : TextFont::Cjk10);
 }
 
 uint16_t scheduleTitleWidth(const String &text) {
@@ -395,7 +395,7 @@ void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String
 
     const String run = text.substring(run_start, byte_index);
     const uint8_t px = ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
-    const TextFont font = ascii_run ? TextFont::Ascii8 : TextFont::Cjk10;
+    const TextFont font = ascii_run ? TextFont::Ascii10 : TextFont::Cjk10;
     const uint16_t run_y =
         static_cast<uint16_t>(y + ((kScheduleTitleLinePx > px) ? (kScheduleTitleLinePx - px) : 0u));
     if (dithered) {
@@ -1304,8 +1304,8 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       const DaySummary::Item &item = summary.items[item_index];
       const String summary_label(item.label);
       const bool summary_ascii = isAsciiOnlyText(summary_label);
-      const uint8_t summary_px = summary_ascii ? static_cast<uint8_t>(6) : static_cast<uint8_t>(10);
-      const TextFont summary_font = summary_ascii ? TextFont::Ascii6 : TextFont::Cjk10;
+      const uint8_t summary_px = summary_ascii ? static_cast<uint8_t>(10) : static_cast<uint8_t>(12);
+      const TextFont summary_font = summary_ascii ? TextFont::Ascii10 : TextFont::Cjk10;
       const uint16_t summary_text_h = textHeightPx(summary_label, summary_px, summary_font);
       const uint16_t summary_text_y =
           static_cast<uint16_t>(summary_y + ((summary_row_h > summary_text_h)
