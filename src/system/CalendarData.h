@@ -26,6 +26,7 @@ struct CalendarMonthSummaryEvent {
   String title;
   String date;
   String time_hhmm;
+  String end_time_hhmm;
   String color;
 };
 

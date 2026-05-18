@@ -296,6 +296,41 @@ void appendDaySummaryItem(DaySummary &summary, uint8_t color_nibble, const Strin
 constexpr uint16_t kScheduleStartMinute = 8u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
 
+bool appendVisibleEvent(CalendarModel &model, uint16_t id, const String &title,
+                        const String &time_hhmm, const String &end_time_hhmm,
+                        const String &color) {
+  if (model.visible_event_count >= appfw::kMaxCalendarEvents) {
+    return false;
+  }
+  VisibleEvent &dst = model.visible_events[model.visible_event_count++];
+  dst.id = id;
+  dst.title = title;
+  dst.title.trim();
+  if (dst.title.length() == 0) {
+    dst.title = "ITEM";
+  } else {
+    dst.title = normalizeDynamicDisplayText(dst.title, TextFont::Cjk16, "ITEM");
+  }
+  dst.time_hhmm = time_hhmm;
+  dst.end_time_hhmm = end_time_hhmm;
+  uint16_t start_minute = 0;
+  if (!parseHmToMinutes(time_hhmm, start_minute)) {
+    start_minute = kScheduleStartMinute;
+  }
+  uint16_t end_minute = static_cast<uint16_t>(start_minute + 30u);
+  uint16_t parsed_end = 0;
+  if (parseHmToMinutes(end_time_hhmm, parsed_end) && parsed_end > start_minute) {
+    end_minute = parsed_end;
+  }
+  if (end_minute <= start_minute) {
+    end_minute = static_cast<uint16_t>(start_minute + 30u);
+  }
+  dst.start_minute = start_minute;
+  dst.end_minute = end_minute;
+  dst.color_nibble = calendarColorToNibble(color);
+  return true;
+}
+
 void assignTimelineLanes(CalendarModel &model) {
   if (model.visible_event_count == 0) {
     return;
@@ -365,38 +400,32 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     if (!wifi_manager.calendarEventAt(i, event)) {
       continue;
     }
+    if (event.source == "ics") {
+      continue;
+    }
     if (!time_valid || calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday,
                                                            event.date.c_str(), today_ymd.c_str(),
                                                            today_weekday)) {
-      if (model.visible_event_count >= appfw::kMaxCalendarEvents) {
+      if (!appendVisibleEvent(model, event.id, event.title, event.time_hhmm, event.end_time_hhmm,
+                              event.color)) {
         break;
       }
-      VisibleEvent &dst = model.visible_events[model.visible_event_count++];
-      dst.id = event.id;
-      dst.title = event.title;
-      dst.title.trim();
-      if (dst.title.length() == 0) {
-        dst.title = "ITEM";
-      } else {
-        dst.title = normalizeDynamicDisplayText(dst.title, TextFont::Cjk16, "ITEM");
+    }
+  }
+  if (time_valid) {
+    for (size_t i = 0; i < wifi_manager.calendarMonthSummaryCount(); ++i) {
+      appfw::CalendarMonthSummaryEvent event;
+      if (!wifi_manager.calendarMonthSummaryAt(i, event)) {
+        continue;
       }
-      dst.time_hhmm = event.time_hhmm;
-      dst.end_time_hhmm = event.end_time_hhmm;
-      uint16_t start_minute = 0;
-      if (!parseHmToMinutes(event.time_hhmm, start_minute)) {
-        start_minute = kScheduleStartMinute;
+      if (event.date != today_ymd) {
+        continue;
       }
-      uint16_t end_minute = static_cast<uint16_t>(start_minute + 30u);
-      uint16_t parsed_end = 0;
-      if (parseHmToMinutes(event.end_time_hhmm, parsed_end) && parsed_end > start_minute) {
-        end_minute = parsed_end;
+      const uint16_t id = static_cast<uint16_t>(30000u + (i & 0x7FFFu));
+      if (!appendVisibleEvent(model, id, event.title, event.time_hhmm, event.end_time_hhmm,
+                              event.color)) {
+        break;
       }
-      if (end_minute <= start_minute) {
-        end_minute = static_cast<uint16_t>(start_minute + 30u);
-      }
-      dst.start_minute = start_minute;
-      dst.end_minute = end_minute;
-      dst.color_nibble = calendarColorToNibble(event.color);
     }
   }
 

@@ -1447,9 +1447,11 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
     summary.title = item.event.title;
     summary.date = item.event.date;
     summary.time_hhmm = item.event.time_hhmm;
+    summary.end_time_hhmm = item.event.end_time_hhmm;
     summary.color = item.event.color;
     mixCalendarHashString(month_signature, summary.date);
     mixCalendarHashString(month_signature, summary.time_hhmm);
+    mixCalendarHashString(month_signature, summary.end_time_hhmm);
     mixCalendarHashString(month_signature, summary.color);
     mixCalendarHashString(month_signature, summary.title);
   }
