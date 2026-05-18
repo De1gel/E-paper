@@ -4,6 +4,10 @@
 
 namespace calendar {
 
+namespace {
+constexpr uint16_t kLandscapeCalendarContentShiftX = 3u;
+}
+
 bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t screen_width,
                          uint16_t screen_height, uint8_t month_row_count) {
   layout = CalendarLayout{};
@@ -30,8 +34,12 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   }
 
   const uint16_t margin = (mode == LayoutMode::LandscapeSplit) ? 8 : 6;
+  const uint16_t calendar_content_shift_x =
+      (mode == LayoutMode::LandscapeSplit) ? kLandscapeCalendarContentShiftX : 0u;
   layout.header_y = static_cast<uint16_t>(layout.calendar_panel.y + margin);
-  layout.header_bar = makeRect(static_cast<uint16_t>(layout.calendar_panel.x + margin), layout.header_y,
+  layout.header_bar = makeRect(static_cast<uint16_t>(layout.calendar_panel.x + margin +
+                                                     calendar_content_shift_x),
+                               layout.header_y,
                                static_cast<uint16_t>(layout.calendar_panel.w > margin * 2
                                                          ? (layout.calendar_panel.w - margin * 2)
                                                          : layout.calendar_panel.w),
@@ -47,9 +55,11 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   layout.weekday_h =
       (mode == LayoutMode::LandscapeSplit) ? static_cast<uint16_t>(28) : static_cast<uint16_t>(24);
   const uint16_t grid_top = static_cast<uint16_t>(layout.weekday_y + layout.weekday_h + 2);
-  const uint16_t grid_left_base = static_cast<uint16_t>(layout.calendar_panel.x + margin);
+  const uint16_t grid_left_base =
+      static_cast<uint16_t>(layout.calendar_panel.x + margin + calendar_content_shift_x);
   const uint16_t grid_right =
-      static_cast<uint16_t>(layout.calendar_panel.x + layout.calendar_panel.w - margin);
+      static_cast<uint16_t>(layout.calendar_panel.x + layout.calendar_panel.w - margin +
+                            calendar_content_shift_x);
   if (grid_right <= grid_left_base || grid_top >= (layout.calendar_panel.y + layout.calendar_panel.h)) {
     return true;
   }

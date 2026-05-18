@@ -59,6 +59,19 @@ int CalendarStore::findIndexByExternal(const String &source, const String &exter
   return -1;
 }
 
+int CalendarStore::findLastIndexBySource(const String &source) const {
+  if (source.length() == 0) {
+    return -1;
+  }
+  for (size_t i = count_; i > 0; --i) {
+    const size_t index = i - 1u;
+    if (events_[index].source == source) {
+      return static_cast<int>(index);
+    }
+  }
+  return -1;
+}
+
 bool CalendarStore::removeAt(size_t index) {
   if (index >= count_) {
     return false;

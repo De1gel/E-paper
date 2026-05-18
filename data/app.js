@@ -226,8 +226,11 @@ const I18N = {
     "common.dir_read_failed": "目录读取失败",
     "common.schedule_loaded_zero": "已加载 0 条日程",
     "common.schedule_loaded_fmt": "已加载 {count} 条日程",
+    "common.schedule_loaded_limited_fmt": "显示即将生效的前 {shown} 条，共 {total} 条",
     "common.schedule_read_failed": "日程读取失败",
     "common.add_failed": "添加失败",
+    "common.err_calendar_events_full": "日程数量已满，请先删除部分日程",
+    "common.err_manual_calendar_events_full": "手动日程数量已满，请先删除部分手动日程",
     "common.delete_failed": "删除失败",
     "common.please_enter_city": "请先输入城市名称。",
     "common.resolving_city": "正在解析城市...",
@@ -434,8 +437,11 @@ const I18N = {
     "common.dir_read_failed": "Failed to read directory",
     "common.schedule_loaded_zero": "Loaded 0 schedule item(s)",
     "common.schedule_loaded_fmt": "Loaded {count} schedule item(s)",
+    "common.schedule_loaded_limited_fmt": "Showing next {shown} of {total} schedule item(s)",
     "common.schedule_read_failed": "Failed to load schedule",
     "common.add_failed": "Add failed",
+    "common.err_calendar_events_full": "Schedule list is full. Delete some events first.",
+    "common.err_manual_calendar_events_full": "Manual schedule list is full. Delete some manual events first.",
     "common.delete_failed": "Delete failed",
     "common.please_enter_city": "Please enter a city name first.",
     "common.resolving_city": "Resolving city...",
@@ -642,8 +648,11 @@ const I18N = {
     "common.dir_read_failed": "Lecture du dossier echouee",
     "common.schedule_loaded_zero": "0 planning charge",
     "common.schedule_loaded_fmt": "{count} planning(s) charge(s)",
+    "common.schedule_loaded_limited_fmt": "{shown} sur {total} planning(s) a venir",
     "common.schedule_read_failed": "Chargement du planning echoue",
     "common.add_failed": "Ajout echoue",
+    "common.err_calendar_events_full": "Planning plein. Supprimez d abord quelques evenements.",
+    "common.err_manual_calendar_events_full": "Planning manuel plein. Supprimez d abord quelques evenements manuels.",
     "common.delete_failed": "Suppression echouee",
     "common.please_enter_city": "Veuillez saisir un nom de ville.",
     "common.resolving_city": "Resolution de la ville...",
@@ -1349,7 +1358,10 @@ function responseErrorText(j, fallback, status) {
   const parts = [fallback];
   if (j && typeof j === "object") {
     const detail = j.msg || j.message || j.error;
-    if (detail) parts.push(String(detail));
+    if (detail) {
+      const key = `common.err_${String(detail)}`;
+      parts.push(I18N[currentLang] && I18N[currentLang][key] ? t(key) : String(detail));
+    }
   } else if (status && status >= 400) {
     parts.push(`HTTP ${status}`);
   }
@@ -1380,6 +1392,12 @@ async function loadSchedules() {
       return;
     }
     renderScheduleRows(items);
+    if (j && Number(j.total) > items.length && Number(j.shown) === items.length) {
+      scheduleSummary.textContent = fmt("common.schedule_loaded_limited_fmt", {
+        shown: items.length,
+        total: Number(j.total),
+      });
+    }
     schedulesLoadedOnce = true;
   } catch {
     scheduleRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.schedule_read_failed")}</td></tr>`;

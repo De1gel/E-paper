@@ -3,6 +3,7 @@
 #include <FS.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include <algorithm>
 #include <vector>
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +42,7 @@ constexpr uint8_t kDebugForcedCalendarRows = 0;
 constexpr bool kDebugCalendarHeaderPartialPattern = false;
 constexpr uint16_t kPartialAlignPx = 4u;
 constexpr uint8_t kHeaderDatePx = 20u;
-constexpr uint8_t kHeaderTimePx = 30u;
+constexpr uint8_t kHeaderTimePx = 26u;
 constexpr uint8_t kHeaderWeatherPx = 30u;
 constexpr uint8_t kHeaderSensorsPx = 20u;
 constexpr uint16_t kHeaderWeatherIconSize = 24u;
@@ -492,12 +493,6 @@ HeaderMetrics computeHeaderMetrics(const calendar::CalendarModel &model,
   const uint16_t top_pad =
       (layout.mode == calendar::LayoutMode::LandscapeSplit) ? 10u : 8u;
   const uint16_t right_pad = left_pad;
-  metrics.date_x = static_cast<uint16_t>(metrics.card_x + left_pad);
-  metrics.date_y = static_cast<uint16_t>(metrics.card_y + top_pad);
-  metrics.time_x = metrics.date_x;
-  metrics.time_y = static_cast<uint16_t>(
-      metrics.date_y +
-      calendar::textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
   const uint16_t meta_block_w = (layout.mode == calendar::LayoutMode::LandscapeSplit)
                                     ? kHeaderMetaBlockLandscapeW
                                     : kHeaderMetaBlockPortraitW;
@@ -509,6 +504,25 @@ HeaderMetrics computeHeaderMetrics(const calendar::CalendarModel &model,
       static_cast<uint16_t>(metrics.card_x + metrics.card_w > metrics.meta_x + right_pad
                                 ? (metrics.card_x + metrics.card_w - metrics.meta_x - right_pad)
                                 : 0u);
+  const uint16_t left_x = static_cast<uint16_t>(metrics.card_x + left_pad);
+  const uint16_t left_w =
+      (metrics.meta_x > left_x + right_pad)
+          ? static_cast<uint16_t>(metrics.meta_x - left_x - right_pad)
+          : static_cast<uint16_t>(metrics.card_w > left_pad + right_pad
+                                      ? metrics.card_w - left_pad - right_pad
+                                      : 0u);
+  const uint16_t date_w =
+      calendar::textWidthPx(model.header_date, kHeaderDatePx, header_date_font);
+  const uint16_t time_w =
+      calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
+  metrics.date_x =
+      static_cast<uint16_t>(left_x + ((left_w > date_w) ? (left_w - date_w) / 2u : 0u));
+  metrics.date_y = static_cast<uint16_t>(metrics.card_y + top_pad);
+  metrics.time_x =
+      static_cast<uint16_t>(left_x + ((left_w > time_w) ? (left_w - time_w) / 2u : 0u));
+  metrics.time_y = static_cast<uint16_t>(
+      metrics.date_y +
+      calendar::textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
   metrics.weather_y = (metrics.date_y > 2u) ? static_cast<uint16_t>(metrics.date_y - 2u) : metrics.date_y;
   metrics.sensors_y = static_cast<uint16_t>(metrics.weather_y + kHeaderWeatherPx + 6u);
   return metrics;
@@ -1781,21 +1795,25 @@ calendar::Rect App::calendarHeaderTimeRect(const calendar::CalendarModel &model,
   const calendar::TextFont header_date_font =
       preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const uint16_t time_w = calendar::textWidthPx(kTimeWindowSample, kHeaderTimePx,
-                                                calendar::TextFont::Digit30);
+  const uint16_t sample_w = calendar::textWidthPx(kTimeWindowSample, kHeaderTimePx,
+                                                  calendar::TextFont::Digit26);
+  const uint16_t time_w = calendar::textWidthPx(model.header_time, kHeaderTimePx,
+                                                calendar::TextFont::Digit26);
   const uint16_t time_h = calendar::textHeightPx(kTimeWindowSample, kHeaderTimePx,
-                                                 calendar::TextFont::Digit30);
-  constexpr uint16_t kPadX = 4u;
+                                                 calendar::TextFont::Digit26);
+  constexpr uint16_t kPadX = 2u;
   constexpr uint16_t kPadTop = 2u;
-  constexpr uint16_t kPadBottom = 6u;
-  const uint16_t rect_x = (header.time_x > kPadX)
-                              ? static_cast<uint16_t>(header.time_x - kPadX)
+  constexpr uint16_t kPadBottom = 2u;
+  const uint16_t sample_offset =
+      (sample_w > time_w) ? static_cast<uint16_t>((sample_w - time_w) / 2u) : 0u;
+  const uint16_t rect_x = (header.time_x > sample_offset + kPadX)
+                              ? static_cast<uint16_t>(header.time_x - sample_offset - kPadX)
                               : layout.header_bar.x;
   const uint16_t rect_y = (header.time_y > kPadTop)
                               ? static_cast<uint16_t>(header.time_y - kPadTop)
                               : layout.header_bar.y;
   const calendar::Rect raw = calendar::makeRect(
-      rect_x, rect_y, static_cast<uint16_t>(time_w + kPadX * 2u),
+      rect_x, rect_y, static_cast<uint16_t>(sample_w + kPadX * 2u),
       static_cast<uint16_t>(time_h + kPadTop + kPadBottom));
   return alignRectToPartialGrid(raw, layout.header_bar);
 }
@@ -1864,11 +1882,16 @@ bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
       return false;
     }
     fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    const calendar::TextFont header_date_font =
-        preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-    const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-    drawCalendarText3x5(header.time_x, header.time_y, model.header_time, kHeaderTimePx, black,
-                        calendar::TextFont::Digit30, calendar::TextAAMode::Threshold);
+    const uint16_t time_w =
+        calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
+    const uint16_t time_h =
+        calendar::textHeightPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
+    const uint16_t time_x =
+        static_cast<uint16_t>(rect.x + ((rect.w > time_w) ? (rect.w - time_w) / 2u : 0u));
+    const uint16_t time_y =
+        static_cast<uint16_t>(rect.y + ((rect.h > time_h) ? (rect.h - time_h) / 2u : 0u));
+    drawCalendarText3x5(time_x, time_y, model.header_time, kHeaderTimePx, black,
+                        calendar::TextFont::Digit26, calendar::TextAAMode::Threshold);
     physical_area = calendarLogicalRectToPhysical(rect);
     pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
     return true;
@@ -1889,9 +1912,14 @@ bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
   }
   physical_area = rect;
 
-  const calendar::TextFont date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, date_font);
+  const uint16_t time_w =
+      calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
+  const uint16_t time_h =
+      calendar::textHeightPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
+  const uint16_t time_x =
+      static_cast<uint16_t>(rect.x + ((rect.w > time_w) ? (rect.w - time_w) / 2u : 0u));
+  const uint16_t time_y =
+      static_cast<uint16_t>(rect.y + ((rect.h > time_h) ? (rect.h - time_h) / 2u : 0u));
   if (!calendar_window_buffer_.ensure(rect.w, rect.h)) {
     return false;
   }
@@ -1959,14 +1987,14 @@ bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
   } else {
     drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
                          calendar_window_buffer_.rows(),
-                         static_cast<uint16_t>(header.time_x - rect.x),
-                         static_cast<uint16_t>(header.time_y - rect.y),
-                         model.header_time, kHeaderTimePx, black, calendar::TextFont::Digit30,
+                         static_cast<uint16_t>(time_x - rect.x),
+                         static_cast<uint16_t>(time_y - rect.y),
+                         model.header_time, kHeaderTimePx, black, calendar::TextFont::Digit26,
                          calendar::TextAAMode::Threshold);
     if (calendar_frame_ != nullptr) {
       fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-      drawCalendarText3x5(header.time_x, header.time_y, model.header_time, kHeaderTimePx, black,
-                          calendar::TextFont::Digit30, calendar::TextAAMode::Threshold);
+      drawCalendarText3x5(time_x, time_y, model.header_time, kHeaderTimePx, black,
+                          calendar::TextFont::Digit26, calendar::TextAAMode::Threshold);
     }
   }
   partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),

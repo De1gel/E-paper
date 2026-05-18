@@ -282,6 +282,145 @@ int daysInMonth(int year, int month) {
   return kDays[month - 1];
 }
 
+bool parseYmdDate(const String &raw, int &year, int &month, int &day) {
+  if (raw.length() != 10 || raw.charAt(4) != '-' || raw.charAt(7) != '-') {
+    return false;
+  }
+  year = raw.substring(0, 4).toInt();
+  month = raw.substring(5, 7).toInt();
+  day = raw.substring(8, 10).toInt();
+  return year >= 2020 && month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+}
+
+time_t localEpochFromYmdHm(const String &date, const String &time_hhmm) {
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  if (!parseYmdDate(date, year, month, day)) {
+    return 0;
+  }
+  uint16_t minute = 0;
+  if (!parseMinuteHm(time_hhmm, minute)) {
+    return 0;
+  }
+  struct tm tm_value {};
+  tm_value.tm_year = year - 1900;
+  tm_value.tm_mon = month - 1;
+  tm_value.tm_mday = day;
+  tm_value.tm_hour = static_cast<int>(minute / 60u);
+  tm_value.tm_min = static_cast<int>(minute % 60u);
+  tm_value.tm_sec = 0;
+  tm_value.tm_isdst = -1;
+  return mktime(&tm_value);
+}
+
+time_t startOfLocalDay(time_t epoch_value, struct tm &local_tm) {
+  if (localtime_r(&epoch_value, &local_tm) == nullptr) {
+    memset(&local_tm, 0, sizeof(local_tm));
+    return 0;
+  }
+  local_tm.tm_hour = 0;
+  local_tm.tm_min = 0;
+  local_tm.tm_sec = 0;
+  local_tm.tm_isdst = -1;
+  return mktime(&local_tm);
+}
+
+bool nextManualEventEpoch(const CalendarEvent &event, time_t now_epoch, time_t &next_epoch,
+                          String &occurrence_date) {
+  next_epoch = 0;
+  occurrence_date = event.date;
+  if (event.source == "ics") {
+    return false;
+  }
+  uint16_t minute = 0;
+  if (!parseMinuteHm(event.time_hhmm, minute)) {
+    return false;
+  }
+  if (event.repeat == "once") {
+    next_epoch = localEpochFromYmdHm(event.date, event.time_hhmm);
+    occurrence_date = event.date;
+    return next_epoch > 0 && (now_epoch <= 0 || next_epoch >= now_epoch);
+  }
+
+  if (now_epoch <= 0) {
+    next_epoch = 1;
+    occurrence_date = event.date;
+    return true;
+  }
+
+  struct tm day_tm {};
+  time_t day_start = startOfLocalDay(now_epoch, day_tm);
+  if (day_start <= 0) {
+    return false;
+  }
+
+  uint8_t days_ahead = 0;
+  if (event.repeat == "weekly") {
+    if (event.weekday < 0 || event.weekday > 6) {
+      return false;
+    }
+    const int today_weekday = (day_tm.tm_wday + 6) % 7;
+    days_ahead = static_cast<uint8_t>((event.weekday - today_weekday + 7) % 7);
+  } else if (event.repeat != "daily") {
+    return false;
+  }
+
+  next_epoch = day_start + static_cast<time_t>(days_ahead) * 86400L +
+               static_cast<time_t>(minute) * 60L;
+  if (next_epoch < now_epoch) {
+    next_epoch += (event.repeat == "weekly") ? static_cast<time_t>(7 * 86400L)
+                                             : static_cast<time_t>(86400L);
+  }
+  struct tm next_tm {};
+  if (localtime_r(&next_epoch, &next_tm) != nullptr) {
+    occurrence_date = formatDateYmd(next_tm);
+  }
+  return true;
+}
+
+struct UpcomingCalendarEvent {
+  CalendarEvent event;
+  time_t epoch = 0;
+  uint16_t order = 0;
+};
+
+bool upcomingEventLess(const UpcomingCalendarEvent &a, const UpcomingCalendarEvent &b) {
+  if (a.epoch != b.epoch) {
+    return a.epoch < b.epoch;
+  }
+  if (a.event.title != b.event.title) {
+    return a.event.title < b.event.title;
+  }
+  return a.order < b.order;
+}
+
+void appendCalendarEventJson(String &item, const CalendarEvent &event) {
+  item += "{\"id\":";
+  item += String(event.id);
+  item += ",\"title\":\"";
+  item += jsonEscape(event.title);
+  item += "\",\"date\":\"";
+  item += jsonEscape(event.date);
+  item += "\",\"time\":\"";
+  item += jsonEscape(event.time_hhmm);
+  item += "\",\"end_time\":\"";
+  item += jsonEscape(event.end_time_hhmm);
+  item += "\",\"color\":\"";
+  item += jsonEscape(event.color);
+  item += "\",\"repeat\":\"";
+  item += jsonEscape(event.repeat);
+  item += "\",\"weekday\":";
+  item += String(event.weekday);
+  item += ",\"source\":\"";
+  item += jsonEscape(event.source);
+  item += "\",\"external_id\":\"";
+  item += jsonEscape(event.external_id);
+  item += "\",\"updated_at\":\"";
+  item += jsonEscape(event.updated_at);
+  item += "\"}";
+}
+
 String extractJsonStringField(const String &json, const char *key) {
   if (key == nullptr || key[0] == '\0') {
     return "";
@@ -1464,22 +1603,7 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   mixCalendarHashInt(month_signature, static_cast<uint32_t>(calendar_month_summary_count_));
   calendar_month_summary_signature_ = month_signature;
 
-  const time_t store_window_start = localWeekWindowStart(now_epoch);
-  std::vector<ImportedCalendarEvent> store_items;
-  store_items.reserve(std::min(imported_items.size(), static_cast<size_t>(kMaxCalendarEvents)));
-  for (const ImportedCalendarEvent &item : imported_items) {
-    if (item.sort_epoch < store_window_start) {
-      continue;
-    }
-    if (store_items.size() >= static_cast<size_t>(kMaxCalendarEvents)) {
-      break;
-    }
-    store_items.push_back(item);
-  }
-
-  const time_t updated_now = time(nullptr);
-  const std::vector<CalendarEvent> normalized_imported =
-      CalendarSyncService::normalizeImportedEvents(store_items, updated_now);
+  const std::vector<CalendarEvent> normalized_imported;
   const CalendarSyncMergeStats merge_stats =
       CalendarSyncService::mergeImportedEvents(calendar_store_, normalized_imported);
   last_calendar_sync_epoch_ = time(nullptr);
@@ -1488,17 +1612,16 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   last_calendar_sync_total_ =
       static_cast<uint16_t>(std::min<size_t>(calendar_store_.count(), 65535u));
   saveSettings();
-  Serial.printf("[CALSYNC] ok vevents=%u imported=%u month=%u stored_ics=%u kept_manual=%u total=%u elapsed=%lums window=%lu..%lu store_start=%lu\n",
+  Serial.printf("[CALSYNC] ok vevents=%u imported=%u month=%u stored_ics=%u kept_manual=%u total=%u elapsed=%lums window=%lu..%lu\n",
                 static_cast<unsigned>(vevent_count),
                 static_cast<unsigned>(imported_items.size()),
                 static_cast<unsigned>(calendar_month_summary_count_),
-                static_cast<unsigned>(store_items.size()),
+                static_cast<unsigned>(0),
                 static_cast<unsigned>(merge_stats.kept_manual),
                 static_cast<unsigned>(calendar_store_.count()),
                 static_cast<unsigned long>(millis() - sync_start_ms),
                 static_cast<unsigned long>(window_start),
-                static_cast<unsigned long>(window_end),
-                static_cast<unsigned long>(store_window_start));
+                static_cast<unsigned long>(window_end));
   return true;
 }
 
@@ -3135,47 +3258,50 @@ void WifiManager::handleCalendarEventsGet() {
   markActivity(millis());
   Serial.printf("[HTTP] GET /api/calendar/events from %s\n",
                 server_->client().remoteIP().toString().c_str());
-  server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  server_->sendHeader("Pragma", "no-cache");
-  server_->setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server_->send(200, "application/json; charset=utf-8", "");
-  server_->sendContent("{\"ok\":true,\"items\":[");
+  constexpr size_t kMaxUpcomingEvents = 5u;
+  std::vector<UpcomingCalendarEvent> upcoming;
+  upcoming.reserve(kMaxUpcomingEvents + calendar_store_.count());
+  const time_t now_epoch = time(nullptr);
+  uint16_t order = 0;
   for (size_t i = 0; i < calendar_store_.count(); ++i) {
     CalendarEvent event;
     if (!calendar_store_.eventAt(i, event)) {
       continue;
     }
+    time_t next_epoch = 0;
+    String occurrence_date;
+    if (!nextManualEventEpoch(event, now_epoch, next_epoch, occurrence_date)) {
+      continue;
+    }
+    event.date = occurrence_date;
+    UpcomingCalendarEvent item;
+    item.event = event;
+    item.epoch = next_epoch;
+    item.order = order++;
+    upcoming.push_back(item);
+  }
+  std::sort(upcoming.begin(), upcoming.end(), upcomingEventLess);
+
+  server_->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server_->sendHeader("Pragma", "no-cache");
+  server_->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server_->send(200, "application/json; charset=utf-8", "");
+  server_->sendContent("{\"ok\":true,\"items\":[");
+  const size_t send_count = std::min(upcoming.size(), kMaxUpcomingEvents);
+  for (size_t i = 0; i < send_count; ++i) {
     String item;
     item.reserve(240);
     if (i > 0) {
       item += ",";
     }
-    item += "{\"id\":";
-    item += String(event.id);
-    item += ",\"title\":\"";
-    item += jsonEscape(event.title);
-    item += "\",\"date\":\"";
-    item += jsonEscape(event.date);
-    item += "\",\"time\":\"";
-    item += jsonEscape(event.time_hhmm);
-    item += "\",\"end_time\":\"";
-    item += jsonEscape(event.end_time_hhmm);
-    item += "\",\"color\":\"";
-    item += jsonEscape(event.color);
-    item += "\",\"repeat\":\"";
-    item += jsonEscape(event.repeat);
-    item += "\",\"weekday\":";
-    item += String(event.weekday);
-    item += ",\"source\":\"";
-    item += jsonEscape(event.source);
-    item += "\",\"external_id\":\"";
-    item += jsonEscape(event.external_id);
-    item += "\",\"updated_at\":\"";
-    item += jsonEscape(event.updated_at);
-    item += "\"}";
+    appendCalendarEventJson(item, upcoming[i].event);
     server_->sendContent(item);
   }
-  server_->sendContent("]}");
+  server_->sendContent("],\"total\":");
+  server_->sendContent(String(upcoming.size()));
+  server_->sendContent(",\"shown\":");
+  server_->sendContent(String(send_count));
+  server_->sendContent("}");
 }
 
 void WifiManager::handleCalendarEventsPost() {
@@ -3271,8 +3397,15 @@ void WifiManager::handleCalendarEventsPost() {
     calendar_store_.data()[existing_idx] = e;
   } else {
     if (calendar_store_.count() >= static_cast<size_t>(kMaxCalendarEvents)) {
-      server_->send(409, "application/json", "{\"ok\":false,\"error\":\"calendar_events_full\"}");
-      return;
+      const int evict_ics_index = calendar_store_.findLastIndexBySource("ics");
+      if (evict_ics_index >= 0) {
+        calendar_store_.removeAt(static_cast<size_t>(evict_ics_index));
+        Serial.println("[CAL] evicted one cached ICS event to add manual event");
+      } else {
+        server_->send(409, "application/json",
+                      "{\"ok\":false,\"error\":\"manual_calendar_events_full\"}");
+        return;
+      }
     }
     e.id = calendar_store_.allocateId();
     calendar_store_.push(e);

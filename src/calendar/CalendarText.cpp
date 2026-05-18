@@ -21,6 +21,8 @@ constexpr uint8_t kDigit14GlyphWidth = 8;
 constexpr uint8_t kDigit14GlyphHeight = 14;
 constexpr uint8_t kDigit16GlyphWidth = 9;
 constexpr uint8_t kDigit16GlyphHeight = 16;
+constexpr uint8_t kDigit26GlyphWidth = 16;
+constexpr uint8_t kDigit26GlyphHeight = 26;
 constexpr uint8_t kDigit30GlyphWidth = 18;
 constexpr uint8_t kDigit30GlyphHeight = 30;
 constexpr uint8_t kDigitMaxRowBytes = 3;
@@ -56,6 +58,8 @@ FontBoxMetrics fontBoxMetrics(TextFont font) {
       return FontBoxMetrics{0, 0, 0, kDigit14GlyphHeight};
     case TextFont::Digit16:
       return FontBoxMetrics{0, 0, 0, kDigit16GlyphHeight};
+    case TextFont::Digit26:
+      return FontBoxMetrics{0, 0, 0, kDigit26GlyphHeight};
     case TextFont::Digit30:
       return FontBoxMetrics{0, 0, 0, kDigit30GlyphHeight};
     case TextFont::Cjk30:
@@ -147,7 +151,7 @@ GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle 
       style.font == TextFont::Ascii6 || style.font == TextFont::Ascii8 ||
       style.font == TextFont::Ascii10 || style.font == TextFont::Digit10 ||
       style.font == TextFont::Digit14 || style.font == TextFont::Digit16 ||
-      style.font == TextFont::Digit30;
+      style.font == TextFont::Digit26 || style.font == TextFont::Digit30;
   const FontBoxMetrics ascii_box = fontBoxMetrics(fixed_bitmap_font ? style.font : TextFont::Auto);
   return GlyphRenderMetrics{ascii_box.left, ascii_box.top, ascii_box.width, ascii_box.height,
                             ascii_box.height};
@@ -309,7 +313,12 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
   style.box_top = box.top;
   style.box_width = box.width;
   style.box_height = box.height;
-  style.letter_spacing = 1u;
+  style.letter_spacing =
+      (style.font == TextFont::Digit10 || style.font == TextFont::Digit14 ||
+       style.font == TextFont::Digit16 || style.font == TextFont::Digit26 ||
+       style.font == TextFont::Digit30)
+          ? 0u
+          : 1u;
   return style;
 }
 
@@ -680,6 +689,8 @@ uint8_t digitGlyphHeight(TextFont font) {
   switch (font) {
     case TextFont::Digit30:
       return kDigit30GlyphHeight;
+    case TextFont::Digit26:
+      return kDigit26GlyphHeight;
     case TextFont::Digit16:
       return kDigit16GlyphHeight;
     case TextFont::Digit14:
@@ -695,6 +706,8 @@ uint8_t digitGlyphWidth(TextFont font, char c) {
     switch (font) {
       case TextFont::Digit30:
         return 6u;
+      case TextFont::Digit26:
+        return 5u;
       case TextFont::Digit16:
         return 4u;
       case TextFont::Digit14:
@@ -707,6 +720,8 @@ uint8_t digitGlyphWidth(TextFont font, char c) {
   switch (font) {
     case TextFont::Digit30:
       return kDigit30GlyphWidth;
+    case TextFont::Digit26:
+      return kDigit26GlyphWidth;
     case TextFont::Digit16:
       return kDigit16GlyphWidth;
     case TextFont::Digit14:
@@ -851,13 +866,16 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
 
   if (codepoint < 0x80u) {
     if (font == TextFont::Digit10 || font == TextFont::Digit14 || font == TextFont::Digit16 ||
-        font == TextFont::Digit30) {
+        font == TextFont::Digit26 || font == TextFont::Digit30) {
       const uint8_t numeric_px =
           (font == TextFont::Digit30)
               ? kDigit30GlyphHeight
-              : (font == TextFont::Digit16
-                     ? kDigit16GlyphHeight
-                     : (font == TextFont::Digit14 ? kDigit14GlyphHeight : kDigit10GlyphHeight));
+              : (font == TextFont::Digit26
+                     ? kDigit26GlyphHeight
+                     : (font == TextFont::Digit16
+                            ? kDigit16GlyphHeight
+                            : (font == TextFont::Digit14 ? kDigit14GlyphHeight
+                                                          : kDigit10GlyphHeight)));
       if (fonts::lookupAsciiNumericGlyph(static_cast<char>(codepoint), numeric_px, glyph.rows,
                                          glyph.width, glyph.height, glyph.row_bytes,
                                          glyph.bits_per_pixel)) {
