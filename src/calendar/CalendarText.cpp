@@ -149,17 +149,6 @@ uint8_t resolveCjkFontForPixelHeight(uint8_t pixel_height) {
   return fonts::kZhFontPx10;
 }
 
-uint8_t scaledDimension(uint8_t source_dim, const TextStyle &style) {
-  if (source_dim == 0 || style.pixel_height == 0 || style.base_height == 0) {
-    return 0;
-  }
-  const uint16_t scaled =
-      static_cast<uint16_t>((static_cast<uint32_t>(source_dim) * style.pixel_height +
-                             (style.base_height / 2u)) /
-                            style.base_height);
-  return (scaled == 0u) ? 1u : static_cast<uint8_t>(scaled);
-}
-
 uint8_t effectivePixelHeight(uint8_t scale, TextFont font) {
   if (scale == 0) {
     return 0;
@@ -303,38 +292,25 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
   style.box_top = box.top;
   style.box_width = box.width;
   style.box_height = box.height;
-
-  const uint16_t spacing =
-      static_cast<uint16_t>((style.pixel_height + (style.base_height / 2u)) / style.base_height);
-  style.letter_spacing = static_cast<uint8_t>((spacing == 0u) ? 1u : spacing);
+  style.letter_spacing = 1u;
   return style;
 }
 
 uint16_t glyphWidthPx(const GlyphBitmap &glyph, const TextStyle &style) {
   const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
-  TextStyle glyph_style = style;
-  glyph_style.base_height = metrics.base_height;
-  const uint8_t source_width = (metrics.width > 0u) ? metrics.width : glyph.width;
-  return scaledDimension(source_width, glyph_style);
+  (void)style;
+  return (metrics.width > 0u) ? metrics.width : glyph.width;
 }
 
 uint16_t glyphHeightPx(const GlyphBitmap &glyph, const TextStyle &style) {
   const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
-  TextStyle glyph_style = style;
-  glyph_style.base_height = metrics.base_height;
-  const uint8_t source_height = (metrics.height > 0u) ? metrics.height : glyph.height;
-  return scaledDimension(source_height, glyph_style);
+  (void)style;
+  return (metrics.height > 0u) ? metrics.height : glyph.height;
 }
 
 uint8_t glyphLetterSpacingPx(const GlyphBitmap &glyph, const TextStyle &style) {
-  const GlyphRenderMetrics metrics = glyphRenderMetrics(glyph, style);
-  const uint8_t base_height = (metrics.base_height > 0u) ? metrics.base_height : style.base_height;
-  if (base_height == 0u) {
-    return 1u;
-  }
-  const uint16_t spacing =
-      static_cast<uint16_t>((style.pixel_height + (base_height / 2u)) / base_height);
-  return static_cast<uint8_t>((spacing == 0u) ? 1u : spacing);
+  (void)glyph;
+  return style.letter_spacing;
 }
 
 uint16_t textWidthPx(const String &text, uint8_t pixel_height, TextFont font) {

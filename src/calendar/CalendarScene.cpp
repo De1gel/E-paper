@@ -74,6 +74,54 @@ TextFont dynamicTextFont(const String &text, TextFont cjk_font, TextFont ascii_f
   return isAsciiOnlyText(text) ? preferredTextFont(text, ascii_font, pixel_height) : cjk_font;
 }
 
+uint8_t intrinsicTextPx(TextFont font, uint8_t requested_px) {
+  switch (font) {
+    case TextFont::Ascii6:
+      return 6u;
+    case TextFont::Ascii8:
+      return 8u;
+    case TextFont::Ascii10:
+      return 10u;
+    case TextFont::AsciiSmooth:
+      return 20u;
+    case TextFont::Cjk10:
+      return 10u;
+    case TextFont::Cjk16:
+      return 16u;
+    case TextFont::Cjk26:
+      return 26u;
+    case TextFont::Cjk30:
+      return 30u;
+    default:
+      return requested_px;
+  }
+}
+
+TextFont weatherCandidateFont(const String &text, uint8_t requested_px) {
+  if (isAsciiOnlyText(text)) {
+    if (requested_px >= 18u) {
+      return TextFont::AsciiSmooth;
+    }
+    if (requested_px >= 10u) {
+      return TextFont::Ascii10;
+    }
+    if (requested_px >= 8u) {
+      return TextFont::Ascii8;
+    }
+    return TextFont::Ascii6;
+  }
+  if (requested_px >= 30u) {
+    return TextFont::Cjk30;
+  }
+  if (requested_px >= 26u) {
+    return TextFont::Cjk26;
+  }
+  if (requested_px >= 16u) {
+    return TextFont::Cjk16;
+  }
+  return TextFont::Cjk10;
+}
+
 TextAAMode preferredAsciiAAMode(const String &text, TextFont font, uint8_t pixel_height) {
   (void)text;
   (void)font;
@@ -483,21 +531,23 @@ HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
                                        : icon_x;
   const uint16_t available_w =
       (right_limit > left_limit) ? static_cast<uint16_t>(right_limit - left_limit) : 0u;
-  static const uint8_t kCandidatePx[] = {30u, 28u, 26u, 24u, 22u, 20u, 18u, 16u};
+  static const uint8_t kCandidatePx[] = {30u, 26u, 20u, 16u, 10u, 8u, 6u};
   for (const uint8_t px : kCandidatePx) {
-    const TextFont font = preferredTextFont(model.header_weather, header_font, px);
-    const uint16_t text_w = textWidthPx(model.header_weather, px, font);
+    const TextFont font = weatherCandidateFont(model.header_weather, px);
+    const uint8_t intrinsic_px = intrinsicTextPx(font, px);
+    const uint16_t text_w = textWidthPx(model.header_weather, intrinsic_px, font);
     if (text_w <= available_w) {
-      out.px = px;
+      out.px = intrinsic_px;
       out.font = font;
-      out.aa = preferredAsciiAAMode(model.header_weather, font, px);
+      out.aa = preferredAsciiAAMode(model.header_weather, font, intrinsic_px);
       out.x = static_cast<uint16_t>(right_limit - text_w);
       return out;
     }
   }
 
-  out.px = kCandidatePx[sizeof(kCandidatePx) / sizeof(kCandidatePx[0]) - 1u];
-  out.font = preferredTextFont(model.header_weather, header_font, out.px);
+  const uint8_t fallback_px = kCandidatePx[sizeof(kCandidatePx) / sizeof(kCandidatePx[0]) - 1u];
+  out.font = weatherCandidateFont(model.header_weather, fallback_px);
+  out.px = intrinsicTextPx(out.font, fallback_px);
   out.aa = preferredAsciiAAMode(model.header_weather, out.font, out.px);
   out.text = truncateTextToWidth(model.header_weather, available_w, out.px, out.font);
   const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
