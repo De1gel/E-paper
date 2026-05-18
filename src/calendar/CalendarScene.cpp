@@ -63,6 +63,30 @@ bool isAsciiOnlyText(const String &text) {
   return true;
 }
 
+uint8_t utf8CharByteLen(const String &text, size_t byte_index) {
+  if (byte_index >= text.length()) {
+    return 0u;
+  }
+  const uint8_t first = static_cast<uint8_t>(text[byte_index]);
+  if ((first & 0x80u) == 0u) {
+    return 1u;
+  }
+  if ((first & 0xE0u) == 0xC0u) {
+    return (byte_index + 1u < text.length()) ? 2u : 1u;
+  }
+  if ((first & 0xF0u) == 0xE0u) {
+    return (byte_index + 2u < text.length()) ? 3u : 1u;
+  }
+  if ((first & 0xF8u) == 0xF0u) {
+    return (byte_index + 3u < text.length()) ? 4u : 1u;
+  }
+  return 1u;
+}
+
+bool isAsciiAt(const String &text, size_t byte_index) {
+  return byte_index < text.length() && static_cast<uint8_t>(text[byte_index]) < 0x80u;
+}
+
 TextFont preferredTextFont(const String &text, TextFont fallback_font, uint8_t pixel_height) {
   if (isAsciiOnlyText(text) && pixel_height >= 14u) {
     return TextFont::AsciiSmooth;
@@ -299,6 +323,78 @@ void emitDitheredText(SceneSink &sink, uint16_t x, uint16_t y, const String &tex
     }
   }
   freeTextCoverageMap(map);
+}
+
+constexpr uint8_t kScheduleTitleLinePx = 10u;
+constexpr uint8_t kScheduleTitleAsciiPx = 8u;
+constexpr uint8_t kScheduleTitleCjkPx = 10u;
+
+uint16_t scheduleTitleRunWidth(const String &run, bool ascii_run) {
+  return textWidthPx(run, ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx,
+                     ascii_run ? TextFont::Ascii8 : TextFont::Cjk10);
+}
+
+uint16_t scheduleTitleWidth(const String &text) {
+  uint16_t total = 0;
+  size_t byte_index = 0;
+  while (byte_index < text.length()) {
+    const bool ascii_run = isAsciiAt(text, byte_index);
+    const size_t run_start = byte_index;
+    while (byte_index < text.length() && isAsciiAt(text, byte_index) == ascii_run) {
+      const uint8_t char_len = utf8CharByteLen(text, byte_index);
+      byte_index += (char_len > 0u) ? char_len : 1u;
+    }
+    total = static_cast<uint16_t>(
+        total + scheduleTitleRunWidth(text.substring(run_start, byte_index), ascii_run));
+  }
+  return total;
+}
+
+String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
+  if (scheduleTitleWidth(text) <= max_width) {
+    return text;
+  }
+  String out;
+  out.reserve(text.length());
+  size_t byte_index = 0;
+  while (byte_index < text.length()) {
+    const uint8_t char_len = utf8CharByteLen(text, byte_index);
+    const size_t next = byte_index + ((char_len > 0u) ? char_len : 1u);
+    String candidate = out + text.substring(byte_index, next);
+    if (scheduleTitleWidth(candidate) > max_width) {
+      break;
+    }
+    out = candidate;
+    byte_index = next;
+  }
+  return out;
+}
+
+void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String &text,
+                           uint8_t color_nibble, bool dithered) {
+  uint16_t pen_x = x;
+  size_t byte_index = 0;
+  while (byte_index < text.length()) {
+    const bool ascii_run = isAsciiAt(text, byte_index);
+    const size_t run_start = byte_index;
+    while (byte_index < text.length() && isAsciiAt(text, byte_index) == ascii_run) {
+      const uint8_t char_len = utf8CharByteLen(text, byte_index);
+      byte_index += (char_len > 0u) ? char_len : 1u;
+    }
+
+    const String run = text.substring(run_start, byte_index);
+    const uint8_t px = ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
+    const TextFont font = ascii_run ? TextFont::Ascii8 : TextFont::Cjk10;
+    const uint16_t run_y =
+        static_cast<uint16_t>(y + ((kScheduleTitleLinePx > px) ? (kScheduleTitleLinePx - px) : 0u));
+    if (dithered) {
+      emitDitheredText(sink, pen_x, run_y, run, px, color_nibble, font);
+    } else {
+      sink.text(pen_x, run_y, run, px, color_nibble, font,
+                preferredAsciiAAMode(run, font, px));
+    }
+    pen_x = static_cast<uint16_t>(pen_x + scheduleTitleRunWidth(run, ascii_run));
+  }
 }
 
 void emitCircleOutline(SceneSink &sink, uint16_t cx, uint16_t cy, uint16_t radius,
@@ -1053,21 +1149,11 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (text_space == 0 || block.h < 8) {
       continue;
     }
-    const bool title_ascii = isAsciiOnlyText(event.title);
-    const uint8_t title_px = title_ascii ? static_cast<uint8_t>(8) : static_cast<uint8_t>(10);
-    const TextFont title_font = title_ascii ? TextFont::Ascii8 : TextFont::Cjk10;
-    const String visible_title = truncateTextToWidth(event.title, text_space, title_px, title_font);
+    const String visible_title = truncateScheduleTitleToWidth(event.title, text_space);
     const uint16_t text_y = static_cast<uint16_t>(
-        block.y + ((block.h > textHeightPx(visible_title, title_px, title_font))
-                        ? (block.h - textHeightPx(visible_title, title_px, title_font)) / 2u
-                        : 0u));
-    if (event_elapsed) {
-      emitDitheredText(sink, static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title,
-                       title_px, black, title_font);
-    } else {
-      sink.text(static_cast<uint16_t>(block.x + text_pad_x), text_y, visible_title, title_px, black,
-                title_font, preferredAsciiAAMode(visible_title, title_font, title_px));
-    }
+        block.y + ((block.h > kScheduleTitleLinePx) ? (block.h - kScheduleTitleLinePx) / 2u : 0u));
+    emitScheduleTitleText(sink, static_cast<uint16_t>(block.x + text_pad_x), text_y,
+                          visible_title, black, event_elapsed);
   }
 
   if (!model.time_valid || !layout.has_grid) {
