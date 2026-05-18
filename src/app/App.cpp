@@ -1782,9 +1782,9 @@ calendar::Rect App::calendarHeaderTimeRect(const calendar::CalendarModel &model,
       preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
   const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
   const uint16_t time_w = calendar::textWidthPx(kTimeWindowSample, kHeaderTimePx,
-                                                calendar::TextFont::AsciiSmooth);
+                                                calendar::TextFont::Digit30);
   const uint16_t time_h = calendar::textHeightPx(kTimeWindowSample, kHeaderTimePx,
-                                                 calendar::TextFont::AsciiSmooth);
+                                                 calendar::TextFont::Digit30);
   constexpr uint16_t kPadX = 4u;
   constexpr uint16_t kPadTop = 2u;
   constexpr uint16_t kPadBottom = 6u;
@@ -1868,7 +1868,7 @@ bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
         preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
     const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
     drawCalendarText3x5(header.time_x, header.time_y, model.header_time, kHeaderTimePx, black,
-                        calendar::TextFont::AsciiSmooth, calendar::TextAAMode::Threshold);
+                        calendar::TextFont::Digit30, calendar::TextAAMode::Threshold);
     physical_area = calendarLogicalRectToPhysical(rect);
     pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
     return true;
@@ -1961,12 +1961,12 @@ bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
                          calendar_window_buffer_.rows(),
                          static_cast<uint16_t>(header.time_x - rect.x),
                          static_cast<uint16_t>(header.time_y - rect.y),
-                         model.header_time, kHeaderTimePx, black, calendar::TextFont::AsciiSmooth,
+                         model.header_time, kHeaderTimePx, black, calendar::TextFont::Digit30,
                          calendar::TextAAMode::Threshold);
     if (calendar_frame_ != nullptr) {
       fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
       drawCalendarText3x5(header.time_x, header.time_y, model.header_time, kHeaderTimePx, black,
-                          calendar::TextFont::AsciiSmooth, calendar::TextAAMode::Threshold);
+                          calendar::TextFont::Digit30, calendar::TextAAMode::Threshold);
     }
   }
   partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),

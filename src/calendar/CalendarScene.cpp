@@ -109,6 +109,14 @@ uint8_t intrinsicTextPx(TextFont font, uint8_t requested_px) {
       return 10u;
     case TextFont::AsciiSmooth:
       return 20u;
+    case TextFont::Digit10:
+      return 10u;
+    case TextFont::Digit14:
+      return 14u;
+    case TextFont::Digit16:
+      return 16u;
+    case TextFont::Digit30:
+      return 30u;
     case TextFont::Cjk10:
       return 10u;
     case TextFont::Cjk16:
@@ -1007,7 +1015,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   const TextFont header_date_font =
       preferredTextFont(model.header_date, header_font, header_date_px);
   const TextFont header_time_font =
-      preferredTextFont(model.header_time, TextFont::Auto, header_time_px);
+      TextFont::Digit30;
   const TextFont header_weather_font =
       preferredTextFont(model.header_weather, header_font, header_weather_px);
   const TextFont header_sensors_font =
@@ -1062,7 +1070,9 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       static_cast<uint16_t>(layout.schedule_inner.x + layout.schedule_inner.w - 8);
   const uint16_t timeline_w =
       (timeline_right > timeline_left) ? static_cast<uint16_t>(timeline_right - timeline_left) : 0u;
-  const uint16_t axis_label_h = textHeightPx("22", 10, TextFont::AsciiSmooth);
+  const uint8_t axis_label_px = 10u;
+  const TextFont axis_label_font = TextFont::Digit10;
+  const uint16_t axis_label_h = textHeightPx("22", axis_label_px, axis_label_font);
 
   for (uint8_t slot = 0; slot <= kScheduleSlotCount; ++slot) {
     const uint16_t minute_value = static_cast<uint16_t>(kScheduleStartMinute + slot * 30u);
@@ -1073,8 +1083,8 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
           String((minute_value / 60u < 10u) ? "0" : "") + String(minute_value / 60u);
       const uint16_t label_y =
           (y > (axis_label_h / 2u)) ? static_cast<uint16_t>(y - axis_label_h / 2u) : 0u;
-      sink.text(axis_x, label_y, hour_label, 10, black, TextFont::AsciiSmooth,
-                preferredAsciiAAMode(hour_label, TextFont::AsciiSmooth, 10));
+      sink.text(axis_x, label_y, hour_label, axis_label_px, black, axis_label_font,
+                TextAAMode::Threshold);
     }
     if (timeline_w == 0) {
       continue;
@@ -1174,8 +1184,10 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t cell_y = static_cast<uint16_t>(layout.grid.y + row * layout.cell_h);
 
     const String label = String(cell.day);
-    const uint16_t text_w = textWidthPx(label, day_px);
-    const uint16_t text_h = textHeightPx(label, day_px);
+    const TextFont day_font =
+        (layout.mode == LayoutMode::LandscapeSplit) ? TextFont::Digit16 : TextFont::Digit14;
+    const uint16_t text_w = textWidthPx(label, day_px, day_font);
+    const uint16_t text_h = textHeightPx(label, day_px, day_font);
     const uint16_t text_x = static_cast<uint16_t>(
         cell_x + ((layout.cell_w > text_w) ? ((layout.cell_w - text_w) / 2u) : 0u));
     const uint16_t text_y = static_cast<uint16_t>(cell_y + layout.cell_pad_y + 10u);
@@ -1195,8 +1207,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (cell.is_today) {
       emitFilledCircle(sink, text_cx, text_cy, today_radius, red);
     }
-    sink.text(text_x, text_y, label, day_px, cell.text_color, TextFont::AsciiSmooth,
-              preferredAsciiAAMode(label, TextFont::AsciiSmooth, day_px));
+    sink.text(text_x, text_y, label, day_px, cell.text_color, day_font, TextAAMode::Threshold);
 
     const DaySummary &summary = model.day_summaries[index];
     if (summary.item_count == 0u) {

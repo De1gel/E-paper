@@ -1,5 +1,6 @@
 #include "calendar/CalendarText.h"
 
+#include "fonts/AsciiNumericFont.h"
 #include "fonts/AsciiSmoothFont.h"
 #include "fonts/ZhSubsetFont.h"
 
@@ -14,6 +15,15 @@ constexpr uint8_t kAscii8GlyphWidth = 5;
 constexpr uint8_t kAscii8GlyphHeight = 8;
 constexpr uint8_t kAscii10GlyphWidth = 5;
 constexpr uint8_t kAscii10GlyphHeight = 10;
+constexpr uint8_t kDigit10GlyphWidth = 6;
+constexpr uint8_t kDigit10GlyphHeight = 10;
+constexpr uint8_t kDigit14GlyphWidth = 8;
+constexpr uint8_t kDigit14GlyphHeight = 14;
+constexpr uint8_t kDigit16GlyphWidth = 9;
+constexpr uint8_t kDigit16GlyphHeight = 16;
+constexpr uint8_t kDigit30GlyphWidth = 18;
+constexpr uint8_t kDigit30GlyphHeight = 30;
+constexpr uint8_t kDigitMaxRowBytes = 3;
 
 struct FontBoxMetrics {
   uint8_t left;
@@ -40,6 +50,14 @@ FontBoxMetrics fontBoxMetrics(TextFont font) {
       return FontBoxMetrics{0, 0, kAscii8GlyphWidth, kAscii8GlyphHeight};
     case TextFont::Ascii10:
       return FontBoxMetrics{0, 0, kAscii10GlyphWidth, kAscii10GlyphHeight};
+    case TextFont::Digit10:
+      return FontBoxMetrics{0, 0, 0, kDigit10GlyphHeight};
+    case TextFont::Digit14:
+      return FontBoxMetrics{0, 0, 0, kDigit14GlyphHeight};
+    case TextFont::Digit16:
+      return FontBoxMetrics{0, 0, 0, kDigit16GlyphHeight};
+    case TextFont::Digit30:
+      return FontBoxMetrics{0, 0, 0, kDigit30GlyphHeight};
     case TextFont::Cjk30:
       return FontBoxMetrics{fonts::kZhFont30BoxLeft, fonts::kZhFont30BoxTop,
                             fonts::kZhFont30BoxWidth, fonts::kZhFont30BoxHeight};
@@ -125,13 +143,12 @@ GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle 
     return GlyphRenderMetrics{style.box_left, style.box_top, style.box_width, style.box_height,
                               style.base_height};
   }
-  const FontBoxMetrics ascii_box =
-      fontBoxMetrics(style.font == TextFont::Ascii6
-                         ? TextFont::Ascii6
-                         : (style.font == TextFont::Ascii8
-                                ? TextFont::Ascii8
-                                : (style.font == TextFont::Ascii10 ? TextFont::Ascii10
-                                                                   : TextFont::Auto)));
+  const bool fixed_bitmap_font =
+      style.font == TextFont::Ascii6 || style.font == TextFont::Ascii8 ||
+      style.font == TextFont::Ascii10 || style.font == TextFont::Digit10 ||
+      style.font == TextFont::Digit14 || style.font == TextFont::Digit16 ||
+      style.font == TextFont::Digit30;
+  const FontBoxMetrics ascii_box = fontBoxMetrics(fixed_bitmap_font ? style.font : TextFont::Auto);
   return GlyphRenderMetrics{ascii_box.left, ascii_box.top, ascii_box.width, ascii_box.height,
                             ascii_box.height};
 }
@@ -659,6 +676,142 @@ const uint8_t *glyph5x8(char c) {
   return out;
 }
 
+uint8_t digitGlyphHeight(TextFont font) {
+  switch (font) {
+    case TextFont::Digit30:
+      return kDigit30GlyphHeight;
+    case TextFont::Digit16:
+      return kDigit16GlyphHeight;
+    case TextFont::Digit14:
+      return kDigit14GlyphHeight;
+    case TextFont::Digit10:
+    default:
+      return kDigit10GlyphHeight;
+  }
+}
+
+uint8_t digitGlyphWidth(TextFont font, char c) {
+  if (c == ':') {
+    switch (font) {
+      case TextFont::Digit30:
+        return 6u;
+      case TextFont::Digit16:
+        return 4u;
+      case TextFont::Digit14:
+        return 4u;
+      case TextFont::Digit10:
+      default:
+        return 3u;
+    }
+  }
+  switch (font) {
+    case TextFont::Digit30:
+      return kDigit30GlyphWidth;
+    case TextFont::Digit16:
+      return kDigit16GlyphWidth;
+    case TextFont::Digit14:
+      return kDigit14GlyphWidth;
+    case TextFont::Digit10:
+    default:
+      return kDigit10GlyphWidth;
+  }
+}
+
+uint8_t digitGlyphRowBytes(TextFont font, char c) {
+  return static_cast<uint8_t>((digitGlyphWidth(font, c) + 7u) / 8u);
+}
+
+void setDigitGlyphPixel(uint8_t *rows, uint8_t row_bytes, uint8_t x, uint8_t y) {
+  const uint16_t index = static_cast<uint16_t>(y) * row_bytes + (x >> 3);
+  rows[index] = static_cast<uint8_t>(rows[index] | (1u << (7u - (x & 0x07u))));
+}
+
+void fillDigitGlyphRect(uint8_t *rows, uint8_t row_bytes, uint8_t glyph_w, uint8_t glyph_h,
+                        int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+  int x0 = x;
+  int y0 = y;
+  int x1 = x + w;
+  int y1 = y + h;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > glyph_w) x1 = glyph_w;
+  if (y1 > glyph_h) y1 = glyph_h;
+  for (int yy = y0; yy < y1; ++yy) {
+    for (int xx = x0; xx < x1; ++xx) {
+      setDigitGlyphPixel(rows, row_bytes, static_cast<uint8_t>(xx), static_cast<uint8_t>(yy));
+    }
+  }
+}
+
+uint8_t digitSegments(char c) {
+  switch (c) {
+    case '0':
+      return 0x3Fu;
+    case '1':
+      return 0x06u;
+    case '2':
+      return 0x5Bu;
+    case '3':
+      return 0x4Fu;
+    case '4':
+      return 0x66u;
+    case '5':
+      return 0x6Du;
+    case '6':
+      return 0x7Du;
+    case '7':
+      return 0x07u;
+    case '8':
+      return 0x7Fu;
+    case '9':
+      return 0x6Fu;
+    default:
+      return 0u;
+  }
+}
+
+const uint8_t *digitGlyph(char c, TextFont font, uint8_t &width, uint8_t &height,
+                          uint8_t &row_bytes) {
+  static uint8_t out[kDigit30GlyphHeight * kDigitMaxRowBytes] = {};
+  width = digitGlyphWidth(font, c);
+  height = digitGlyphHeight(font);
+  row_bytes = digitGlyphRowBytes(font, c);
+  memset(out, 0, sizeof(out));
+
+  if (c == ' ') {
+    return out;
+  }
+  const uint8_t t = static_cast<uint8_t>(std::max<uint8_t>(1u, height / 7u));
+  if (c == ':') {
+    const uint8_t dot = static_cast<uint8_t>(std::max<uint8_t>(1u, t));
+    const uint8_t dot_x = (width > dot) ? static_cast<uint8_t>((width - dot) / 2u) : 0u;
+    fillDigitGlyphRect(out, row_bytes, width, height, dot_x, static_cast<int>(height / 3u), dot,
+                       dot);
+    fillDigitGlyphRect(out, row_bytes, width, height, dot_x,
+                       static_cast<int>((height * 2u) / 3u), dot, dot);
+    return out;
+  }
+
+  const uint8_t segments = digitSegments(c);
+  const uint8_t mid_y = static_cast<uint8_t>((height - t) / 2u);
+  const uint8_t right_x = (width > t) ? static_cast<uint8_t>(width - t) : 0u;
+  const uint8_t inner_w = (width > 2u * t) ? static_cast<uint8_t>(width - 2u * t) : width;
+  const uint8_t upper_h = (mid_y > t) ? static_cast<uint8_t>(mid_y - t) : 1u;
+  const uint8_t lower_y = static_cast<uint8_t>(mid_y + t);
+  const uint8_t lower_h = (height > lower_y + t) ? static_cast<uint8_t>(height - lower_y - t) : 1u;
+  if (segments & 0x01u) fillDigitGlyphRect(out, row_bytes, width, height, t, 0, inner_w, t);
+  if (segments & 0x02u) fillDigitGlyphRect(out, row_bytes, width, height, right_x, t, t, upper_h);
+  if (segments & 0x04u) fillDigitGlyphRect(out, row_bytes, width, height, right_x, lower_y, t, lower_h);
+  if (segments & 0x08u) fillDigitGlyphRect(out, row_bytes, width, height, t, height - t, inner_w, t);
+  if (segments & 0x10u) fillDigitGlyphRect(out, row_bytes, width, height, 0, lower_y, t, lower_h);
+  if (segments & 0x20u) fillDigitGlyphRect(out, row_bytes, width, height, 0, t, t, upper_h);
+  if (segments & 0x40u) fillDigitGlyphRect(out, row_bytes, width, height, t, mid_y, inner_w, t);
+  return out;
+}
+
 uint8_t glyphCoverage(const GlyphBitmap &glyph, uint8_t row, uint8_t col) {
   if (glyph.rows == nullptr || row >= glyph.height || col >= glyph.width) {
     return 0;
@@ -673,11 +826,16 @@ uint8_t glyphCoverage(const GlyphBitmap &glyph, uint8_t row, uint8_t col) {
     const uint8_t shift = static_cast<uint8_t>((3u - (col & 0x03u)) * 2u);
     return static_cast<uint8_t>((*src >> shift) & 0x03u);
   }
-  const uint8_t bits = glyph.rows[row];
-  if (glyph.width == kAscii6GlyphWidth && glyph.height == kAscii6GlyphHeight) {
-    return (bits & (1u << (7u - col))) ? 3u : 0u;
+  if (glyph.row_bytes == 1u) {
+    const uint8_t bits = glyph.rows[row];
+    if (glyph.width == kAscii6GlyphWidth && glyph.height == kAscii6GlyphHeight) {
+      return (bits & (1u << (7u - col))) ? 3u : 0u;
+    }
+    return (bits & (1u << (glyph.width - 1u - col))) ? 3u : 0u;
   }
-  return (bits & (1u << (glyph.width - 1u - col))) ? 3u : 0u;
+  const uint8_t *src = glyph.rows + static_cast<uint16_t>(row) * glyph.row_bytes + (col >> 3);
+  const uint8_t bit = static_cast<uint8_t>(7u - (col & 0x07u));
+  return ((*src) & (1u << bit)) ? 3u : 0u;
 }
 
 bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, TextFont font) {
@@ -692,6 +850,20 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
   }
 
   if (codepoint < 0x80u) {
+    if (font == TextFont::Digit10 || font == TextFont::Digit14 || font == TextFont::Digit16 ||
+        font == TextFont::Digit30) {
+      const uint8_t numeric_px =
+          (font == TextFont::Digit30)
+              ? kDigit30GlyphHeight
+              : (font == TextFont::Digit16
+                     ? kDigit16GlyphHeight
+                     : (font == TextFont::Digit14 ? kDigit14GlyphHeight : kDigit10GlyphHeight));
+      if (fonts::lookupAsciiNumericGlyph(static_cast<char>(codepoint), numeric_px, glyph.rows,
+                                         glyph.width, glyph.height, glyph.row_bytes,
+                                         glyph.bits_per_pixel)) {
+        return true;
+      }
+    }
     if (font == TextFont::Ascii6) {
       glyph.rows = glyph4x6(static_cast<char>(codepoint));
       glyph.width = kAscii6GlyphWidth;
