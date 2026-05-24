@@ -357,7 +357,8 @@ bool isWeekendColumn(int col) {
 
 void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool time_valid,
                         LayoutMode layout_mode, const String &ui_language,
-                        const appfw::WifiManager &wifi_manager) {
+                        const appfw::WifiManager &wifi_manager,
+                        bool force_header_wifi_connected) {
   model = CalendarModel{};
   model.time_valid = time_valid;
   model.layout_mode = layout_mode;
@@ -379,7 +380,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   }
   model.header_weather = weather_label;
   model.header_weather_code = static_cast<int16_t>(wifi_manager.weatherCode());
-  model.header_wifi_connected = wifi_manager.isStaConnected();
+  model.header_wifi_connected = force_header_wifi_connected || wifi_manager.isStaConnected();
   const float battery_pct = wifi_manager.batteryPercent();
   model.header_battery_pct =
       isnan(battery_pct) ? static_cast<int16_t>(-1)
@@ -492,7 +493,7 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     cell.is_today = cell.in_current && (cell.day == today);
     cell.text_color = cell.in_current ? black : blue;
     if (isWeekendColumn(col)) {
-      cell.text_color = blue;
+      cell.text_color = red;
     }
     if (cell.is_today) {
       cell.text_color = white;

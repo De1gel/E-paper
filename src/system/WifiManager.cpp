@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <vector>
 #include <esp_adc_cal.h>
+#include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <esp_wpa2.h>
 
@@ -21,6 +22,8 @@
 #include "system/CalendarEventNormalize.h"
 #include "system/CalendarIcsCore.h"
 #include "system/CalendarSyncService.h"
+#include "system/LogConfig.h"
+#include "system/SdCard.h"
 #include "system/SettingsStore.h"
 
 namespace appfw {
@@ -135,6 +138,19 @@ time_t epochFromUtcTm(const struct tm &tm_value) {
 
 bool isTrustedEpoch(time_t epoch_value) {
   return epoch_value >= kMinTrustedEpoch;
+}
+
+const char *sntpSyncStatusName(sntp_sync_status_t status) {
+  switch (status) {
+    case SNTP_SYNC_STATUS_RESET:
+      return "reset";
+    case SNTP_SYNC_STATUS_COMPLETED:
+      return "completed";
+    case SNTP_SYNC_STATUS_IN_PROGRESS:
+      return "in_progress";
+    default:
+      return "unknown";
+  }
 }
 
 bool readRx8025Utc(time_t &epoch_value) {
@@ -578,12 +594,25 @@ bool syncClockWithTimezone(const String &timezone, String &local_time, String &e
     return false;
   }
 
+  const time_t before_sync = time(nullptr);
+  sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
   configTzTime(timezone.c_str(), "ntp.aliyun.com", "time.cloudflare.com", "pool.ntp.org");
   constexpr time_t kMinValidEpoch = 1700000000;  // About 2023-11.
   const uint32_t start_ms = millis();
+  sntp_sync_status_t last_status = SNTP_SYNC_STATUS_RESET;
+  Serial.printf("[TIME] ntp sync start tz=%s before_epoch=%ld\n",
+                timezone.c_str(), static_cast<long>(before_sync));
   while ((millis() - start_ms) < 10000) {
     const time_t now_ts = time(nullptr);
-    if (now_ts >= kMinValidEpoch) {
+    const sntp_sync_status_t status = sntp_get_sync_status();
+    if (status != last_status) {
+      if (kDebugLogs) {
+        Serial.printf("[TIME] ntp status=%s epoch=%ld\n",
+                      sntpSyncStatusName(status), static_cast<long>(now_ts));
+      }
+      last_status = status;
+    }
+    if (status == SNTP_SYNC_STATUS_COMPLETED && now_ts >= kMinValidEpoch) {
       struct tm tm_local {};
       if (localtime_r(&now_ts, &tm_local) == nullptr) {
         error_msg = "localtime_failed";
@@ -595,11 +624,16 @@ bool syncClockWithTimezone(const String &timezone, String &local_time, String &e
       } else {
         local_time = String(static_cast<unsigned long>(now_ts));
       }
+      Serial.printf("[TIME] ntp sync completed epoch=%ld local=%s\n",
+                    static_cast<long>(now_ts), local_time.c_str());
       return true;
     }
     delay(200);
   }
-  error_msg = "ntp_timeout";
+  error_msg = "ntp_timeout_status_";
+  error_msg += sntpSyncStatusName(sntp_get_sync_status());
+  error_msg += "_epoch_";
+  error_msg += String(static_cast<long>(time(nullptr)));
   return false;
 }
 
@@ -768,6 +802,9 @@ const char *WifiManager::disconnectReasonName(uint8_t reason) const {
 }
 
 void WifiManager::logStaScanResults() {
+  if (!kDebugLogs) {
+    return;
+  }
   Serial.println("[WIFI] STA scan begin");
   WiFi.disconnect(false, false);
   delay(80);
@@ -935,7 +972,8 @@ void WifiManager::startStaAutoSync() {
 }
 
 void WifiManager::startStaPreRefreshSync() {
-  startSTAWithTimeout(kStaConnectTimeoutManualMs, "calendar_pre_refresh");
+  Serial.println("[TIME] pre-refresh time sync required");
+  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "calendar_pre_refresh");
 }
 
 String WifiManager::effectiveStaAuthMode() const {
@@ -1055,8 +1093,12 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
   digitalWrite(kPeripheralPowerPin, HIGH);
   delay(3);
   WiFi.mode(keep_ap ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(true);
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
   WiFi.setHostname(kDefaultHostname);
-  logStaScanResults();
+  if (kDebugLogs) {
+    logStaScanResults();
+  }
   if (!beginStaConnection()) {
     sta_connect_failed_ = true;
     if (keep_ap) {
@@ -1151,9 +1193,9 @@ bool WifiManager::consumeAutoExitRequested() {
   return value;
 }
 
-bool WifiManager::consumeSettingsSavedRefreshRequested() {
-  const bool value = settings_saved_refresh_requested_;
-  settings_saved_refresh_requested_ = false;
+bool WifiManager::consumeSettingsApplyRefreshRequested() {
+  const bool value = settings_apply_refresh_pending_;
+  settings_apply_refresh_pending_ = false;
   return value;
 }
 
@@ -1351,15 +1393,16 @@ void WifiManager::loadSettings() {
                 (settings_.sta_ssid == SettingsStore::defaultStaSsid()) ? "default" : "prefs");
 }
 
-void WifiManager::saveSettings() {
+bool WifiManager::saveSettings() {
   if (prefs_ == nullptr) {
     prefs_ = new Preferences();
   }
   if (!SettingsStore::save(*prefs_, settings_, calendar_store_.nextId(), calendar_store_.serialize())) {
     Serial.println("[CFG] preferences open failed");
-    return;
+    return false;
   }
   Serial.println("[CFG] settings saved");
+  return true;
 }
 
 void WifiManager::pruneExpiredCalendarEvents() {
@@ -1449,10 +1492,12 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   last_calendar_sync_vevents_ = 0;
 
   const uint32_t sync_start_ms = millis();
-  Serial.printf("[CALSYNC] fetch begin url=%s free_heap=%u largest=%u\n",
-                settings_.calendar_url.c_str(),
-                static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (kDebugLogs) {
+    Serial.printf("[CALSYNC] fetch begin url=%s free_heap=%u largest=%u\n",
+                  settings_.calendar_url.c_str(),
+                  static_cast<unsigned>(ESP.getFreeHeap()),
+                  static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  }
 
   String body;
   String content_type = "text/calendar";
@@ -1473,10 +1518,12 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
     }
     body = file.readString();
     file.close();
-    Serial.printf("[CALSYNC] local load ok path=%s bytes=%u elapsed=%lums\n",
-                  settings_.calendar_url.c_str(),
-                  static_cast<unsigned>(body.length()),
-                  static_cast<unsigned long>(millis() - sync_start_ms));
+    if (kDebugLogs) {
+      Serial.printf("[CALSYNC] local load ok path=%s bytes=%u elapsed=%lums\n",
+                    settings_.calendar_url.c_str(),
+                    static_cast<unsigned>(body.length()),
+                    static_cast<unsigned long>(millis() - sync_start_ms));
+    }
   } else {
     HTTPClient http;
     http.setConnectTimeout(8000);
@@ -1499,9 +1546,11 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
     content_type = http.header("Content-Type");
     body = http.getString();
     http.end();
-    Serial.printf("[CALSYNC] fetch ok code=%d bytes=%u content_type=%s elapsed=%lums\n",
-                  http_code, static_cast<unsigned>(body.length()), content_type.c_str(),
-                  static_cast<unsigned long>(millis() - sync_start_ms));
+    if (kDebugLogs) {
+      Serial.printf("[CALSYNC] fetch ok code=%d bytes=%u content_type=%s elapsed=%lums\n",
+                    http_code, static_cast<unsigned>(body.length()), content_type.c_str(),
+                    static_cast<unsigned long>(millis() - sync_start_ms));
+    }
   }
   if (body.length() == 0) {
     error_msg = "empty_body";
@@ -1517,10 +1566,12 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   size_t vevent_count = 0;
   parseIcsBodyIntoEvents(body, master_events, override_events, vevent_count);
   last_calendar_sync_vevents_ = static_cast<uint16_t>(std::min<size_t>(vevent_count, 65535u));
-  Serial.printf("[CALSYNC] parse vevents=%u masters=%u overrides=%u\n",
-                static_cast<unsigned>(vevent_count),
-                static_cast<unsigned>(master_events.size()),
-                static_cast<unsigned>(override_events.size()));
+  if (kDebugLogs) {
+    Serial.printf("[CALSYNC] parse vevents=%u masters=%u overrides=%u\n",
+                  static_cast<unsigned>(vevent_count),
+                  static_cast<unsigned>(master_events.size()),
+                  static_cast<unsigned>(override_events.size()));
+  }
   if (vevent_count == 0u) {
     error_msg = "no_vevent";
     return false;
@@ -1533,15 +1584,19 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   }
   const time_t window_start = localMonthWindowStart(now_epoch);
   const time_t window_end = localWindowEndOneMonth(window_start);
-  Serial.printf("[CALSYNC] window start=%s end=%s now=%s\n",
-                formatDateTimeYmdHm(window_start).c_str(),
-                formatDateTimeYmdHm(window_end).c_str(),
-                formatDateTimeYmdHm(now_epoch).c_str());
+  if (kDebugLogs) {
+    Serial.printf("[CALSYNC] window start=%s end=%s now=%s\n",
+                  formatDateTimeYmdHm(window_start).c_str(),
+                  formatDateTimeYmdHm(window_end).c_str(),
+                  formatDateTimeYmdHm(now_epoch).c_str());
+  }
 
   std::vector<IcsOverride> override_metadata;
   collectOverrideMetadata(override_events, override_metadata);
-  Serial.printf("[CALSYNC] override metadata entries=%u\n",
-                static_cast<unsigned>(override_metadata.size()));
+  if (kDebugLogs) {
+    Serial.printf("[CALSYNC] override metadata entries=%u\n",
+                  static_cast<unsigned>(override_metadata.size()));
+  }
 
   std::vector<ImportedCalendarEvent> imported_items;
   imported_items.reserve(master_events.size() + override_events.size());
@@ -1566,20 +1621,22 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
       static_cast<uint16_t>(std::min<size_t>(imported_items.size(), 65535u));
   Serial.printf("[CALSYNC] expanded imported=%u\n",
                 static_cast<unsigned>(imported_items.size()));
-  for (size_t i = 0; i < imported_items.size() && i < 8; ++i) {
-    const CalendarEvent &event = imported_items[i].event;
-    Serial.printf("[CALSYNC] item[%u] date=%s time=%s end=%s title=%s source=%s external=%s\n",
-                  static_cast<unsigned>(i),
-                  event.date.c_str(),
-                  event.time_hhmm.c_str(),
-                  event.end_time_hhmm.c_str(),
-                  event.title.c_str(),
-                  event.source.c_str(),
-                  event.external_id.c_str());
-  }
-  if (imported_items.size() > 8u) {
-    Serial.printf("[CALSYNC] item listing truncated remaining=%u\n",
-                  static_cast<unsigned>(imported_items.size() - 8u));
+  if (kDebugLogs) {
+    for (size_t i = 0; i < imported_items.size() && i < 8; ++i) {
+      const CalendarEvent &event = imported_items[i].event;
+      Serial.printf("[CALSYNC] item[%u] date=%s time=%s end=%s title=%s source=%s external=%s\n",
+                    static_cast<unsigned>(i),
+                    event.date.c_str(),
+                    event.time_hhmm.c_str(),
+                    event.end_time_hhmm.c_str(),
+                    event.title.c_str(),
+                    event.source.c_str(),
+                    event.external_id.c_str());
+    }
+    if (imported_items.size() > 8u) {
+      Serial.printf("[CALSYNC] item listing truncated remaining=%u\n",
+                    static_cast<unsigned>(imported_items.size() - 8u));
+    }
   }
 
   calendar_month_summary_count_ = 0;
@@ -1740,20 +1797,12 @@ void WifiManager::markActivity(uint32_t now_ms) {
 }
 
 void WifiManager::initSD() {
-  if (sd_ready_) {
-    return;
-  }
-  if (!sd_spi_started_) {
-    sd_spi_.begin(kSdSckPin, kSdMisoPin, kSdMosiPin, kSdCsPin);
-    sd_spi_started_ = true;
-  }
-  sd_ready_ = SD.begin(kSdCsPin, sd_spi_);
-  Serial.printf("[SD] init %s\n", sd_ready_ ? "ok" : "failed");
+  sd_ready_ = mountSdCard("wifi_manager");
 }
 
 void WifiManager::deinitSD() {
   if (sd_ready_) {
-    SD.end();
+    unmountSdCard("wifi_manager");
     sd_ready_ = false;
   }
 }
@@ -2067,8 +2116,10 @@ void WifiManager::handleRoot() {
   const String mode = (state_ == State::ApRunning)
                           ? "AP"
                           : ((state_ == State::StaRunning) ? "STA" : "IDLE");
-  Serial.printf("[HTTP] GET / from %s mode=%s\n", server_->client().remoteIP().toString().c_str(),
-                mode.c_str());
+  if (kDebugLogs) {
+    Serial.printf("[HTTP] GET / from %s mode=%s\n",
+                  server_->client().remoteIP().toString().c_str(), mode.c_str());
+  }
   if (serveWebAsset(kPortalHtmlPath, "text/html; charset=utf-8")) {
     return;
   }
@@ -2990,8 +3041,10 @@ void WifiManager::handleRoot() {
 
 void WifiManager::handleStatus() {
   markActivity(millis());
-  Serial.printf("[HTTP] GET /api/status from %s\n",
-                server_->client().remoteIP().toString().c_str());
+  if (kDebugLogs) {
+    Serial.printf("[HTTP] GET /api/status from %s\n",
+                  server_->client().remoteIP().toString().c_str());
+  }
   sampleSensorsNow();
   const char *state_str = "idle";
   if (state_ == State::ApRunning) state_str = "ap_running";
@@ -3098,8 +3151,10 @@ void WifiManager::handleStatus() {
 
 void WifiManager::handleSettingsGet() {
   markActivity(millis());
-  Serial.printf("[HTTP] GET /api/settings from %s\n",
-                server_->client().remoteIP().toString().c_str());
+  if (kDebugLogs) {
+    Serial.printf("[HTTP] GET /api/settings from %s\n",
+                  server_->client().remoteIP().toString().c_str());
+  }
   String json = "{";
   json += "\"sta_ssid\":\"" + jsonEscape(settings_.sta_ssid) + "\",";
   json += "\"sta_user\":\"" + jsonEscape(settings_.sta_user) + "\",";
@@ -3210,54 +3265,20 @@ void WifiManager::handleSettingsPost() {
     last_calendar_sync_ms_ = 0;
   }
 
-  saveSettings();
-  if (settings_.calendar_enabled && settings_.calendar_url.startsWith("/") &&
-      (settings_.calendar_enabled != previous_calendar_enabled ||
-       settings_.calendar_url != previous_calendar_url ||
-       settings_.calendar_refresh_sec != previous_calendar_refresh_sec)) {
-    String calendar_error;
-    if (syncCalendarFromUrl(calendar_error)) {
-      calendar_sync_pending_ = false;
-      Serial.printf("[CALSYNC] settings local sync ok url=%s\n", settings_.calendar_url.c_str());
-    } else {
-      Serial.printf("[CALSYNC] settings local sync failed err=%s url=%s\n",
-                    calendar_error.c_str(), settings_.calendar_url.c_str());
-    }
+  if (!saveSettings()) {
+    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"save_failed\"}");
+    return;
   }
-  if (state_ == State::StaRunning && settings_.weather_url != previous_weather_url) {
-    String resolved_timezone;
-    bool timezone_updated = false;
-    String local_time;
-    String time_sync_error;
-    String preview;
-    int http_status = 0;
-    String request_error;
-    if (syncClockFromWeather(resolved_timezone, timezone_updated, local_time, time_sync_error,
-                             preview, http_status, request_error)) {
-      writeClockToRtc("settings_weather_update");
-      Serial.printf("[WEATHER] settings update ok code=%d city=%s\n",
-                    weather_code_, settings_.weather_city.c_str());
-    } else {
-      Serial.printf("[WEATHER] settings update failed status=%d err=%s code=%d\n",
-                    http_status, request_error.c_str(), weather_code_);
-    }
-  }
-  settings_saved_refresh_requested_ = true;
-  if (isApSessionActive()) {
-    if (hasStaCredentials()) {
-      Serial.println("[WIFI] settings saved during AP session -> restart STA background");
-      startSTAWithTimeout(kStaConnectTimeoutManualMs, "settings_saved_background");
-    } else if (isStaActive()) {
-      stopStaOnly("settings_saved_no_sta_credentials");
-    }
-  }
+  settings_apply_refresh_pending_ = true;
   server_->send(200, "application/json", "{\"ok\":true}");
 }
 
 void WifiManager::handleCalendarEventsGet() {
   markActivity(millis());
-  Serial.printf("[HTTP] GET /api/calendar/events from %s\n",
-                server_->client().remoteIP().toString().c_str());
+  if (kDebugLogs) {
+    Serial.printf("[HTTP] GET /api/calendar/events from %s\n",
+                  server_->client().remoteIP().toString().c_str());
+  }
   constexpr size_t kMaxUpcomingEvents = 5u;
   std::vector<UpcomingCalendarEvent> upcoming;
   upcoming.reserve(kMaxUpcomingEvents + calendar_store_.count());
@@ -3317,6 +3338,9 @@ void WifiManager::handleCalendarEventsPost() {
   }
   if (e.title.length() > 32) {
     e.title = e.title.substring(0, 32);
+  }
+  if (server_->hasArg("location")) {
+    e.title = buildImportedTitle(e.title, server_->arg("location"), "");
   }
   if (!server_->hasArg("time")) {
     server_->send(400, "application/json", "{\"ok\":false,\"error\":\"missing_time\"}");
@@ -3392,14 +3416,23 @@ void WifiManager::handleCalendarEventsPost() {
     e.date = "";
   }
   const int existing_idx = calendar_store_.findIndexByExternal(e.source, e.external_id);
+  CalendarEvent previous_event;
+  CalendarEvent evicted_event;
+  bool updated_existing = false;
+  bool evicted_ics = false;
+  bool inserted_new = false;
   if (existing_idx >= 0) {
+    previous_event = calendar_store_.data()[existing_idx];
     e.id = calendar_store_.data()[existing_idx].id;
     calendar_store_.data()[existing_idx] = e;
+    updated_existing = true;
   } else {
     if (calendar_store_.count() >= static_cast<size_t>(kMaxCalendarEvents)) {
       const int evict_ics_index = calendar_store_.findLastIndexBySource("ics");
       if (evict_ics_index >= 0) {
+        calendar_store_.eventAt(static_cast<size_t>(evict_ics_index), evicted_event);
         calendar_store_.removeAt(static_cast<size_t>(evict_ics_index));
+        evicted_ics = true;
         Serial.println("[CAL] evicted one cached ICS event to add manual event");
       } else {
         server_->send(409, "application/json",
@@ -3408,10 +3441,34 @@ void WifiManager::handleCalendarEventsPost() {
       }
     }
     e.id = calendar_store_.allocateId();
-    calendar_store_.push(e);
+    if (!calendar_store_.push(e)) {
+      if (evicted_ics) {
+        calendar_store_.push(evicted_event);
+      }
+      server_->send(500, "application/json", "{\"ok\":false,\"error\":\"store_push_failed\"}");
+      return;
+    }
+    inserted_new = true;
   }
-  saveSettings();
-  server_->send(200, "application/json", calendar_store_.toJson());
+  if (!saveSettings()) {
+    if (updated_existing && existing_idx >= 0) {
+      calendar_store_.data()[existing_idx] = previous_event;
+    } else if (inserted_new) {
+      const int inserted_idx = calendar_store_.findIndexById(e.id);
+      if (inserted_idx >= 0) {
+        calendar_store_.removeAt(static_cast<size_t>(inserted_idx));
+      }
+      if (evicted_ics) {
+        calendar_store_.push(evicted_event);
+      }
+    }
+    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"save_failed\"}");
+    return;
+  }
+  String json = "{\"ok\":true,\"id\":";
+  json += String(e.id);
+  json += "}";
+  server_->send(200, "application/json", json);
 }
 
 void WifiManager::handleCalendarEventsDelete() {
@@ -3440,9 +3497,17 @@ void WifiManager::handleCalendarEventsDelete() {
     return;
   }
 
+  const uint16_t deleted_id = target.id;
   calendar_store_.removeAt(static_cast<size_t>(idx));
-  saveSettings();
-  server_->send(200, "application/json", calendar_store_.toJson());
+  if (!saveSettings()) {
+    calendar_store_.push(target);
+    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"save_failed\"}");
+    return;
+  }
+  String json = "{\"ok\":true,\"id\":";
+  json += String(deleted_id);
+  json += "}";
+  server_->send(200, "application/json", json);
 }
 
 void WifiManager::handleGeocode() {

@@ -30,7 +30,7 @@ constexpr uint16_t kScheduleStartMinute = 8u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
 constexpr uint8_t kScheduleSlotCount = 28u;
 constexpr uint16_t kMonthSummaryCircleGap = 3u;
-constexpr uint16_t kMonthSummaryOffsetUp = 2u;
+constexpr uint16_t kMonthSummaryOffsetUp = 3u;
 
 struct HeaderMetrics {
   uint16_t card_x = 0;
@@ -336,9 +336,9 @@ void emitDitheredText(SceneSink &sink, uint16_t x, uint16_t y, const String &tex
   freeTextCoverageMap(map);
 }
 
-constexpr uint8_t kScheduleTitleLinePx = 12u;
 constexpr uint8_t kScheduleTitleAsciiPx = 10u;
 constexpr uint8_t kScheduleTitleCjkPx = 12u;
+constexpr uint16_t kScheduleEventMinVisualH = kScheduleTitleCjkPx + 4u;
 
 uint16_t scheduleTitleRunWidth(const String &run, bool ascii_run) {
   return textWidthPx(run, ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx,
@@ -359,6 +359,10 @@ uint16_t scheduleTitleWidth(const String &text) {
         total + scheduleTitleRunWidth(text.substring(run_start, byte_index), ascii_run));
   }
   return total;
+}
+
+uint16_t scheduleTitleHeight(const String &text) {
+  return isAsciiOnlyText(text) ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
 }
 
 String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
@@ -383,6 +387,7 @@ String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
 
 void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String &text,
                            uint8_t color_nibble, bool dithered) {
+  const uint16_t line_h = scheduleTitleHeight(text);
   uint16_t pen_x = x;
   size_t byte_index = 0;
   while (byte_index < text.length()) {
@@ -397,7 +402,7 @@ void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String
     const uint8_t px = ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
     const TextFont font = ascii_run ? TextFont::Ascii10 : TextFont::Cjk10;
     const uint16_t run_y =
-        static_cast<uint16_t>(y + ((kScheduleTitleLinePx > px) ? (kScheduleTitleLinePx - px) : 0u));
+        static_cast<uint16_t>(y + ((line_h > px) ? ((line_h - px) / 2u) : 0u));
     if (dithered) {
       emitDitheredText(sink, pen_x, run_y, run, px, color_nibble, font);
     } else {
@@ -1128,7 +1133,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
           layout.grid.x + col * layout.cell_w +
           ((layout.cell_w > label_w) ? (layout.cell_w - label_w) / 2u : 0u));
       const TextFont label_font = preferredTextFont(label, weekday_font, weekday_px);
-      sink.text(label_x, layout.weekday_y, label, weekday_px, isWeekendColumn(col) ? blue : black,
+      sink.text(label_x, layout.weekday_y, label, weekday_px, isWeekendColumn(col) ? red : black,
                 label_font, preferredAsciiAAMode(label, label_font, weekday_px));
     }
   }
@@ -1194,8 +1199,8 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     const uint16_t y0 = timelineYForMinute(layout, start_minute);
     const uint16_t y1 = timelineYForMinute(layout, end_minute);
     uint16_t block_h = (y1 > y0) ? static_cast<uint16_t>(y1 - y0) : static_cast<uint16_t>(layout.row_h);
-    if (block_h < 10) {
-      block_h = 10;
+    if (block_h < kScheduleEventMinVisualH) {
+      block_h = kScheduleEventMinVisualH;
     }
 
     const uint8_t lane_count = (event.lane_count == 0) ? 1 : event.lane_count;
@@ -1234,10 +1239,13 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       continue;
     }
     const String visible_title = truncateScheduleTitleToWidth(event.title, text_space);
+    const uint16_t title_h = scheduleTitleHeight(visible_title);
+    const uint16_t content_y = static_cast<uint16_t>(block.y + 1u);
+    const uint16_t content_h = (block.h > 2u) ? static_cast<uint16_t>(block.h - 2u) : block.h;
     const uint16_t text_y = static_cast<uint16_t>(
-        block.y + ((block.h > kScheduleTitleLinePx) ? (block.h - kScheduleTitleLinePx) / 2u : 0u));
+        content_y + ((content_h > title_h) ? ((content_h - title_h) / 2u) : 0u));
     emitScheduleTitleText(sink, static_cast<uint16_t>(block.x + text_pad_x), text_y,
-                          visible_title, black, event_elapsed);
+                          visible_title, black, false);
   }
 
   if (!model.time_valid || !layout.has_grid) {
@@ -1278,8 +1286,19 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (today_radius > max_radius) {
       today_radius = max_radius;
     }
+    uint16_t today_marker_extent = today_radius;
     if (cell.is_today) {
-      emitFilledCircle(sink, text_cx, text_cy, today_radius, red);
+      const uint16_t circle_diameter = static_cast<uint16_t>(today_radius * 2u);
+      const uint16_t marker_side =
+          (circle_diameter > 2u) ? static_cast<uint16_t>(circle_diameter - 2u) : circle_diameter;
+      today_marker_extent = static_cast<uint16_t>((marker_side + 1u) / 2u);
+      const uint16_t marker_x = static_cast<uint16_t>(
+          text_cx > marker_side / 2u ? text_cx - marker_side / 2u : 0u);
+      const uint16_t marker_y = static_cast<uint16_t>(
+          text_cy > marker_side / 2u ? text_cy - marker_side / 2u : 0u);
+      const uint16_t corner_radius = std::max<uint16_t>(2u, marker_side / 5u);
+      emitFilledRoundedRect(sink, makeRect(marker_x, marker_y, marker_side, marker_side),
+                            corner_radius, red);
     }
     sink.text(text_x, text_y, label, day_px, cell.text_color, day_font, TextAAMode::Threshold);
 
@@ -1289,7 +1308,7 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     }
     const uint8_t visible_limit = (layout.grid_rows >= 6u) ? 2u : 3u;
     const uint8_t shown_count = std::min(summary.item_count, visible_limit);
-    const uint16_t summary_y_base_raw = static_cast<uint16_t>(text_cy + today_radius +
+    const uint16_t summary_y_base_raw = static_cast<uint16_t>(text_cy + today_marker_extent +
                                                               kMonthSummaryCircleGap);
     const uint16_t summary_y_base =
         (summary_y_base_raw > kMonthSummaryOffsetUp)

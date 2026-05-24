@@ -79,7 +79,8 @@ struct CalendarModel {
 
 void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool time_valid,
                         LayoutMode layout_mode, const String &ui_language,
-                        const appfw::WifiManager &wifi_manager);
+                        const appfw::WifiManager &wifi_manager,
+                        bool force_header_wifi_connected = false);
 
 }  // namespace calendar
 

@@ -7,7 +7,7 @@ void InputManager::begin(uint8_t up_pin, uint8_t mid_pin, uint8_t down_pin) {
   mid_.pin = mid_pin;
   down_.pin = down_pin;
 
-  pinMode(up_.pin, INPUT);
+  pinMode(up_.pin, INPUT_PULLUP);
   pinMode(mid_.pin, INPUT);
   pinMode(down_.pin, INPUT);
 
@@ -62,6 +62,13 @@ bool InputManager::pollEvent(InputEvent &event) {
   return true;
 }
 
+void InputManager::recoverWakePress(bool up_pressed, bool mid_pressed, bool down_pressed,
+                                    uint32_t now_ms) {
+  recoverKeyWakePress(up_, up_pressed, now_ms);
+  recoverKeyWakePress(mid_, mid_pressed, now_ms);
+  recoverKeyWakePress(down_, down_pressed, now_ms);
+}
+
 void InputManager::pushEvent(InputEvent event) {
   const uint8_t next_tail = static_cast<uint8_t>((q_tail_ + 1) % kQueueSize);
   if (next_tail == q_head_) {
@@ -69,6 +76,17 @@ void InputManager::pushEvent(InputEvent event) {
   }
   queue_[q_tail_] = event;
   q_tail_ = next_tail;
+}
+
+void InputManager::recoverKeyWakePress(KeyState &key, bool pressed, uint32_t now_ms) {
+  if (!pressed) {
+    return;
+  }
+  key.raw_pressed = true;
+  key.stable_pressed = true;
+  key.long_sent = false;
+  key.pressed_at_ms = now_ms;
+  key.last_raw_change_ms = now_ms;
 }
 
 void InputManager::updateKey(KeyState &key, uint32_t now_ms, InputEvent short_evt) {

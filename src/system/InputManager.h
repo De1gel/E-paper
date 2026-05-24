@@ -18,6 +18,7 @@ class InputManager {
   void begin(uint8_t up_pin, uint8_t mid_pin, uint8_t down_pin);
   void update(uint32_t now_ms);
   bool pollEvent(InputEvent &event);
+  void recoverWakePress(bool up_pressed, bool mid_pressed, bool down_pressed, uint32_t now_ms);
 
  private:
   struct KeyState {
@@ -30,6 +31,7 @@ class InputManager {
   };
 
   void pushEvent(InputEvent event);
+  void recoverKeyWakePress(KeyState &key, bool pressed, uint32_t now_ms);
   void updateKey(KeyState &key, uint32_t now_ms, InputEvent short_evt);
   bool isPressed(int level) const;
 

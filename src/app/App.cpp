@@ -19,6 +19,8 @@
 #include "calendar/CalendarText.h"
 #include "display/PartialRefresh.h"
 #include "render/SceneRasterizer.h"
+#include "system/LogConfig.h"
+#include "system/SdCard.h"
 
 namespace {
 constexpr uint8_t kKeyUpPin = 0;
@@ -26,10 +28,6 @@ constexpr uint8_t kKeyMidPin = 35;
 constexpr uint8_t kKeyDownPin = 34;
 constexpr uint8_t kIndicatorLedPin = 2;
 constexpr uint8_t kPowerCtrlPin = 32;
-constexpr uint8_t kSdCsPin = 5;
-constexpr uint8_t kSdSckPin = 18;
-constexpr uint8_t kSdMisoPin = 19;
-constexpr uint8_t kSdMosiPin = 23;
 constexpr size_t kEpd4Bytes = (800 * 480) / 2;
 constexpr uint16_t kPhotoCount = 1;
 constexpr uint16_t kScreenWidth = 800;
@@ -93,6 +91,29 @@ const char *eventName(appfw::InputEvent event) {
     default:
       return "None";
   }
+}
+
+const char *opModeName(appfw::OperationMode mode) {
+  switch (mode) {
+    case appfw::OperationMode::Normal:
+      return "Normal";
+    case appfw::OperationMode::ConfigWait:
+      return "ConfigWait";
+    case appfw::OperationMode::ConfigAP:
+      return "ConfigAP";
+    case appfw::OperationMode::ConfigSTA:
+      return "ConfigSTA";
+    default:
+      return "Unknown";
+  }
+}
+
+const char *appStateName(AppState state) {
+  return state == AppState::Photo ? "Photo" : "Calendar";
+}
+
+const char *appStateLogTag(AppState state) {
+  return state == AppState::Photo ? "[PHOTO]" : "[CAL]";
 }
 
 uint32_t largest8BitHeap() {
@@ -584,9 +605,6 @@ void App::begin() {
   clock_anchor_epoch_ = 0;
   clock_anchor_ms_ = 0;
   sleep_inhibit_until_ms_ = saturatingAddMs(last_photo_switch_ms_, kLightSleepWakeInhibitMs);
-  ensureCalendarFrameBuffer("boot");
-  clearCalendarFrame(white);
-
   input_.begin(kKeyUpPin, kKeyMidPin, kKeyDownPin);
   mode_manager_.begin(last_photo_switch_ms_);
   led_manager_.begin(kIndicatorLedPin);
@@ -601,13 +619,50 @@ void App::begin() {
   initPhotoStorage();
   refreshPhotoFileCount();
 
-  Serial.println("[APP] begin");
+  Serial.println("[SYSTEM] begin");
   Serial.printf("[INPUT] key pins up=%u mid=%u down=%u\n", kKeyUpPin, kKeyMidPin,
                 kKeyDownPin);
   Serial.printf("[POWER] epd rail pin=%u default=OFF\n", kPowerCtrlPin);
   Serial.printf("[PHOTO] interval=%lus\n", static_cast<unsigned long>(photo_interval_ms_ / 1000UL));
   Serial.printf("[PHOTO] /pic epd4 count=%u\n", photo_file_count_);
-  Serial.println("[APP] boot render queued");
+  Serial.println("[SYSTEM] boot render queued");
+}
+
+void App::startOperationTrace(const char *source, const char *action, uint32_t now_ms) {
+  if (operation_trace_active_) {
+    finishOperationTrace("preempted", now_ms);
+  }
+  operation_trace_active_ = true;
+  ++operation_trace_id_;
+  operation_trace_start_ms_ = now_ms;
+  operation_trace_source_ = source ? source : "unknown";
+  operation_trace_action_ = action ? action : "unknown";
+  Serial.printf("\n\n[OP][START] id=%lu source=%s action=%s state=%s mode=%s t=%lums\n",
+                static_cast<unsigned long>(operation_trace_id_),
+                operation_trace_source_.c_str(),
+                operation_trace_action_.c_str(),
+                appStateName(state_),
+                opModeName(mode_manager_.mode()),
+                static_cast<unsigned long>(now_ms));
+}
+
+void App::finishOperationTrace(const char *result, uint32_t now_ms, const char *reason) {
+  if (!operation_trace_active_) {
+    return;
+  }
+  if (reason && reason[0] != '\0') {
+    Serial.printf("[OP][END] id=%lu result=%s reason=%s elapsed=%lums\n\n",
+                  static_cast<unsigned long>(operation_trace_id_),
+                  result ? result : "done",
+                  reason,
+                  static_cast<unsigned long>(now_ms - operation_trace_start_ms_));
+  } else {
+    Serial.printf("[OP][END] id=%lu result=%s elapsed=%lums\n\n",
+                  static_cast<unsigned long>(operation_trace_id_),
+                  result ? result : "done",
+                  static_cast<unsigned long>(now_ms - operation_trace_start_ms_));
+  }
+  operation_trace_active_ = false;
 }
 
 void App::logCalendarHeap(const char *tag) const {
@@ -622,6 +677,17 @@ bool App::ensureCalendarFrameBuffer(const char *reason) {
   }
 
   const char *why = reason ? reason : "unknown";
+  const size_t largest = largest8BitHeap();
+  if (largest < kCalendarFrameBytes) {
+    if (!calendar_frame_unavailable_logged_) {
+      calendar_frame_unavailable_logged_ = true;
+      Serial.printf("[CAL] framebuffer unavailable bytes=%u largest=%lu mode=striped\n",
+                    static_cast<unsigned>(kCalendarFrameBytes),
+                    static_cast<unsigned long>(largest));
+    }
+    return false;
+  }
+
   logCalendarHeap("before_alloc");
   for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
     calendar_frame_ = static_cast<uint8_t *>(
@@ -668,10 +734,12 @@ void App::setPeripheralPower(bool enabled) {
   if (peripheral_power_on_ == enabled) {
     return;
   }
-  if (!enabled && photo_sd_ready_) {
-    SD.end();
-    photo_sd_ready_ = false;
-    Serial.println("[PHOTO] SD unmounted (power off)");
+  if (!enabled && appfw::isSdCardMounted()) {
+    if (wifi_manager_.blocksLightSleep()) {
+      Serial.println("[POWER] peripheral rail kept ON for active WiFi/SD");
+      return;
+    }
+    appfw::unmountSdCard("peripheral_power_off");
   }
   digitalWrite(kPowerCtrlPin, enabled ? HIGH : LOW);
   peripheral_power_on_ = enabled;
@@ -772,12 +840,14 @@ void App::updateCalendarAutoRefresh(uint32_t now_ms) {
     last_calendar_day_key_ = key;
     force_calendar_full_refresh_ = true;
     needs_render_ = true;
-    Serial.printf("[CAL] day changed key=%ld -> render\n", static_cast<long>(key));
+    startOperationTrace("auto", "CalendarDay", now_ms);
+    Serial.printf("[AUTO] trigger=calendar_day key=%ld\n", static_cast<long>(key));
     return;
   }
   if (minute_key != last_calendar_render_minute_key_ && time_slot_changed) {
     needs_render_ = true;
-    Serial.printf("[CAL] time slot changed key=%ld interval=%lus -> header refresh\n",
+    startOperationTrace("auto", "CalendarTick", now_ms);
+    Serial.printf("[AUTO] trigger=calendar_time_bucket key=%ld interval=%lus\n",
                   static_cast<long>(minute_key),
                   static_cast<unsigned long>(time_refresh_sec));
     return;
@@ -796,7 +866,9 @@ void App::updateCalendarAutoRefresh(uint32_t now_ms) {
   }
   last_calendar_check_ms_ = now_ms;
   needs_render_ = true;
-  Serial.printf("[CAL] periodic refresh epoch=%lu\n", static_cast<unsigned long>(local_epoch));
+  startOperationTrace("auto", "CalendarPeriodic", now_ms);
+  Serial.printf("[AUTO] trigger=calendar_periodic epoch=%lu\n",
+                static_cast<unsigned long>(local_epoch));
 }
 
 void App::updateAppAutoSwitch(uint32_t now_ms) {
@@ -825,9 +897,10 @@ void App::updateAppAutoSwitch(uint32_t now_ms) {
     return;
   }
   last_app_switch_ms_ = now_ms;
+  startOperationTrace("auto", "AppAutoSwitch", now_ms);
   setState((state_ == AppState::Photo) ? AppState::Calendar : AppState::Photo);
-  Serial.printf("[APP] auto switch -> %s interval=%lus\n",
-                (state_ == AppState::Photo) ? "Photo" : "Calendar",
+  Serial.printf("[AUTO] trigger=app_auto_switch state=%s interval=%lus\n",
+                appStateName(state_),
                 static_cast<unsigned long>(interval_ms / 1000UL));
 }
 
@@ -956,6 +1029,21 @@ void App::applyCalendarLayoutFromConfig(bool force_apply) {
   }
 }
 
+void App::queueSettingsApplyFullRefresh(uint32_t now_ms, const char *reason) {
+  if (!wifi_manager_.consumeSettingsApplyRefreshRequested()) {
+    Serial.printf("[CONFIG] WiFi exited without saved settings reason=%s\n",
+                  reason ? reason : "unknown");
+    finishOperationTrace("ok", now_ms, reason);
+    return;
+  }
+  force_calendar_full_refresh_ = true;
+  calendar_partial_refresh_count_ = 0;
+  needs_render_ = true;
+  last_app_switch_ms_ = now_ms;
+  Serial.printf("[CONFIG] WiFi exited with saved settings -> full refresh queued reason=%s\n",
+                reason ? reason : "unknown");
+}
+
 void App::update(uint32_t now_ms) {
   input_.update(now_ms);
 
@@ -970,14 +1058,9 @@ void App::update(uint32_t now_ms) {
   updateCalendarBackgroundSync(now_ms);
   updateClockAnchor(now_ms);
   applyCalendarLayoutFromConfig(false);
-  if (wifi_manager_.consumeSettingsSavedRefreshRequested()) {
-    force_calendar_full_refresh_ = true;
-    calendar_partial_refresh_count_ = 0;
-    needs_render_ = true;
-    last_app_switch_ms_ = now_ms;
-    Serial.println("[APP] settings saved -> full refresh queued");
+  if (wifi_manager_.consumeStaConnectFailed() && calendar_pre_refresh_sync_waiting_) {
+    calendar_pre_refresh_failed_ = true;
   }
-  wifi_manager_.consumeStaConnectFailed();
   const uint32_t latest_interval_ms = wifi_manager_.settings().photo_interval_sec * 1000UL;
   if (latest_interval_ms >= 30000UL && latest_interval_ms != photo_interval_ms_) {
     photo_interval_ms_ = latest_interval_ms;
@@ -987,6 +1070,7 @@ void App::update(uint32_t now_ms) {
 
   if (wifi_manager_.consumeAutoExitRequested()) {
     mode_manager_.forceNormal(now_ms, "wifi_session_timeout");
+    queueSettingsApplyFullRefresh(now_ms, "auto_exit");
   }
 
   if (mode_manager_.consumeApRequest()) {
@@ -994,9 +1078,11 @@ void App::update(uint32_t now_ms) {
   }
   if (mode_manager_.consumeStaRequest()) {
     wifi_manager_.startSTA();
+    led_manager_.triggerDoubleBlink("sta_connecting");
   }
   if (mode_manager_.consumeStopWifiRequest()) {
     wifi_manager_.stop("manual_key_exit_config");
+    queueSettingsApplyFullRefresh(now_ms, "manual_key_exit_config");
   }
   if (mode_manager_.consumeWhiteScreenRequest()) {
     renderWhiteScreen();
@@ -1015,6 +1101,7 @@ void App::update(uint32_t now_ms) {
 }
 
 void App::handleInputEvent(appfw::InputEvent event, uint32_t now_ms) {
+  startOperationTrace("user", eventName(event), now_ms);
   Serial.printf("[INPUT] event=%s\n", eventName(event));
   sleep_inhibit_until_ms_ = saturatingAddMs(now_ms, kLightSleepWakeInhibitMs);
   const appfw::OperationMode previous_mode = mode_manager_.mode();
@@ -1028,16 +1115,24 @@ void App::handleInputEvent(appfw::InputEvent event, uint32_t now_ms) {
       current_mode == appfw::OperationMode::Normal) {
     if (event == appfw::InputEvent::MidShort) {
       led_manager_.triggerDoubleBlink("page_switch");
+      const AppState previous_state = state_;
       const AppState next_state =
           (state_ == AppState::Photo) ? AppState::Calendar : AppState::Photo;
       setState(next_state);
-      Serial.printf("[APP] page switch -> %s\n",
-                    next_state == AppState::Photo ? "Photo" : "Calendar");
+      Serial.printf("%s page switch %s->%s\n",
+                    appStateLogTag(next_state),
+                    appStateName(previous_state),
+                    appStateName(next_state));
     } else if (state_ == AppState::Photo && event == appfw::InputEvent::UpShort) {
       prevPhoto("key_up", now_ms);
     } else if (state_ == AppState::Photo && event == appfw::InputEvent::DownShort) {
       nextPhoto("key_down", now_ms);
     }
+  }
+  if (!needs_render_ &&
+      current_mode != appfw::OperationMode::ConfigAP &&
+      current_mode != appfw::OperationMode::ConfigSTA) {
+    finishOperationTrace("ok", millis());
   }
 }
 
@@ -1052,12 +1147,12 @@ void App::render() {
       !ensureCalendarSyncBeforeFullRefresh(now_ms)) {
     return;
   }
+  const uint32_t render_begin_ms = millis();
   led_manager_.startBreath(state_ == AppState::Photo ? "photo_render" : "calendar_render");
 
-  Serial.printf("[APP] render begin state=%s partial=%s led=%s\n",
-                state_ == AppState::Photo ? "Photo" : "Calendar",
-                partial_refresh ? "true" : "false",
-                led_manager_.currentStateName());
+  Serial.printf("%s render begin partial=%s\n",
+                appStateLogTag(state_),
+                partial_refresh ? "true" : "false");
   beginDisplaySession(partial_refresh);
   if (!partial_refresh) {
     wifi_manager_.sampleSensorsNow(true);
@@ -1078,10 +1173,14 @@ void App::render() {
   }
   if (calendar_stop_sta_after_render_) {
     wifi_manager_.stop("calendar_post_refresh_sync_done");
+    peripheral_power_on_ = false;
     calendar_stop_sta_after_render_ = false;
   }
   led_manager_.stopEffects("render_done");
-  Serial.printf("[APP] render done, epd sleep led=%s\n", led_manager_.currentStateName());
+  Serial.printf("%s render done elapsed=%lums led=%s\n",
+                appStateLogTag(state_),
+                static_cast<unsigned long>(millis() - render_begin_ms),
+                led_manager_.currentStateName());
   needs_render_ = false;
   led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
 }
@@ -1090,6 +1189,10 @@ bool App::isAnyWakeKeyPressed() const {
   return digitalRead(kKeyUpPin) == LOW ||
          digitalRead(kKeyMidPin) == LOW ||
          digitalRead(kKeyDownPin) == LOW;
+}
+
+bool App::shouldWakeFromSideKeys() const {
+  return state_ == AppState::Photo || mode_manager_.mode() != appfw::OperationMode::Normal;
 }
 
 bool App::canEnterLightSleep(uint32_t now_ms) const {
@@ -1193,34 +1296,47 @@ uint32_t App::nextWakeDeadlineMs(uint32_t now_ms) const {
   return deadline_ms;
 }
 
-void App::onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio) {
+void App::onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio, bool wake_up_pressed,
+                               bool wake_mid_pressed, bool wake_down_pressed) {
   const uint32_t now_ms = millis();
   led_manager_.setSleeping(false, "wake");
   led_manager_.update(mode_manager_.mode(), now_ms, wifi_manager_.isStaConnected());
   if (woke_from_gpio) {
     sleep_inhibit_until_ms_ = saturatingAddMs(now_ms, kLightSleepWakeInhibitMs);
+    input_.recoverWakePress(wake_up_pressed, wake_mid_pressed, wake_down_pressed, now_ms);
   }
-  Serial.printf("[SLEEP] wake source=%s slept=%lums led=%s\n",
-                woke_from_gpio ? "gpio" : "timer_or_other",
-                static_cast<unsigned long>(slept_us / 1000ULL),
-                led_manager_.currentStateName());
+  if (!appfw::kSleepQuietLogs) {
+    Serial.printf("[SLEEP] wake source=%s slept=%lums keys up=%d mid=%d down=%d led=%s\n",
+                  woke_from_gpio ? "gpio" : "timer_or_other",
+                  static_cast<unsigned long>(slept_us / 1000ULL),
+                  wake_up_pressed ? 1 : 0,
+                  wake_mid_pressed ? 1 : 0,
+                  wake_down_pressed ? 1 : 0,
+                  led_manager_.currentStateName());
+  }
 }
 
 void App::onEnterLightSleep(uint32_t deadline_ms) {
   const uint32_t now_ms = millis();
   led_manager_.setSleeping(true, "light_sleep_enter");
-  Serial.printf("[SLEEP] enter deadline_in=%lums led=%s\n",
-                static_cast<unsigned long>(deadline_ms - now_ms),
-                led_manager_.currentStateName());
+  if (!appfw::kSleepQuietLogs) {
+    Serial.printf("[SLEEP] enter deadline_in=%lums\n",
+                  static_cast<unsigned long>(deadline_ms - now_ms));
+  }
+  finishOperationTrace("ok", now_ms);
   Serial.flush();
+  delay(200);
 }
 
 void App::cancelLightSleepEntry(const char *reason) {
   led_manager_.setSleeping(false, reason ? reason : "sleep_cancel");
   led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
-  Serial.printf("[SLEEP] cancel reason=%s led=%s\n",
-                reason ? reason : "sleep_cancel",
-                led_manager_.currentStateName());
+  if (!appfw::kSleepQuietLogs) {
+    Serial.printf("[SLEEP] cancel reason=%s led=%s\n",
+                  reason ? reason : "sleep_cancel",
+                  led_manager_.currentStateName());
+  }
+  finishOperationTrace("degraded", millis(), reason ? reason : "sleep_cancel");
 }
 
 void App::updatePhotoCarousel(uint32_t now_ms) {
@@ -1233,6 +1349,9 @@ void App::updatePhotoCarousel(uint32_t now_ms) {
   if ((now_ms - last_photo_switch_ms_) < photo_interval_ms_) {
     return;
   }
+  startOperationTrace("auto", "PhotoInterval", now_ms);
+  Serial.printf("[AUTO] trigger=photo_interval interval=%lus\n",
+                static_cast<unsigned long>(photo_interval_ms_ / 1000UL));
   nextPhoto("auto", now_ms);
 }
 
@@ -1302,6 +1421,8 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
     calendar_pre_refresh_sync_waiting_ = false;
     calendar_pre_refresh_sync_started_session_ = false;
     calendar_pre_refresh_led_active_ = false;
+    calendar_pre_refresh_wifi_connected_ = false;
+    calendar_pre_refresh_failed_ = false;
     Serial.println("[CAL] pre-refresh sync skipped: fast calendar render");
     return true;
   }
@@ -1313,6 +1434,8 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
     calendar_background_sync_started_session_ = false;
     calendar_stop_sta_after_render_ = false;
     calendar_pre_refresh_led_active_ = false;
+    calendar_pre_refresh_wifi_connected_ = false;
+    calendar_pre_refresh_failed_ = false;
     static bool logged_missing_credentials = false;
     if (!logged_missing_credentials) {
       logged_missing_credentials = true;
@@ -1323,12 +1446,13 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
 
   if (!calendar_pre_refresh_sync_waiting_) {
     calendar_pre_refresh_sync_waiting_ = true;
+    calendar_pre_refresh_wifi_connected_ = wifi_manager_.isStaConnected();
+    calendar_pre_refresh_failed_ = false;
     if (!calendar_pre_refresh_led_active_) {
-      led_manager_.startBreath("calendar_pre_refresh_sync");
+      led_manager_.startBreath("calendar_render");
       calendar_pre_refresh_led_active_ = true;
     }
     if (wifi_manager_.isStaConnected()) {
-      wifi_manager_.syncWeatherNow("calendar_pre_refresh");
       wifi_manager_.requestCalendarSyncNow();
       calendar_pre_refresh_sync_started_session_ = false;
       Serial.println("[CAL] pre-refresh sync requested on active STA");
@@ -1340,16 +1464,26 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
     return false;
   }
 
+  if (wifi_manager_.isStaConnected()) {
+    calendar_pre_refresh_wifi_connected_ = true;
+  }
+
   if (wifi_manager_.isStaConnecting() || wifi_manager_.isCalendarSyncBusy()) {
     led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
     return false;
   }
 
+  if (wifi_manager_.isStaConnected()) {
+    calendar_pre_refresh_wifi_connected_ = true;
+  }
   calendar_stop_sta_after_render_ = calendar_pre_refresh_sync_started_session_;
   calendar_pre_refresh_sync_waiting_ = false;
   calendar_pre_refresh_sync_started_session_ = false;
   calendar_pre_refresh_led_active_ = false;
-  Serial.println("[CAL] pre-refresh sync settled -> proceed render");
+  Serial.printf("[CAL] pre-refresh sync %s -> proceed render wifi_seen=%s\n",
+                calendar_pre_refresh_failed_ ? "failed" : "settled",
+                calendar_pre_refresh_wifi_connected_ ? "true" : "false");
+  calendar_pre_refresh_failed_ = false;
   return true;
 }
 
@@ -1381,16 +1515,17 @@ void App::setState(AppState next) {
   calendar_background_sync_started_session_ = false;
   calendar_stop_sta_after_render_ = false;
   calendar_pre_refresh_led_active_ = false;
+  calendar_pre_refresh_wifi_connected_ = false;
+  calendar_pre_refresh_failed_ = false;
   state_ = next;
   last_app_switch_ms_ = millis();
   if (state_ == AppState::Calendar) {
     force_calendar_full_refresh_ = true;
-    calendar_skip_presync_once_ = true;
-    calendar_start_background_sync_after_render_ = true;
+    calendar_skip_presync_once_ = false;
+    calendar_start_background_sync_after_render_ = false;
     last_calendar_day_key_ = -1;
     last_calendar_render_minute_key_ = -1;
     last_calendar_check_ms_ = 0;
-    ensureCalendarFrameBuffer("switch_to_calendar");
   }
   sleep_inhibit_until_ms_ = saturatingAddMs(millis(), kLightSleepWakeInhibitMs);
   needs_render_ = true;
@@ -1422,18 +1557,14 @@ void App::initPhotoStorage() {
 }
 
 bool App::ensurePhotoStorageMounted() {
-  if (!photo_sd_spi_started_) {
-    photo_sd_spi_.begin(kSdSckPin, kSdMisoPin, kSdMosiPin, kSdCsPin);
-    photo_sd_spi_started_ = true;
+  if (!appfw::mountSdCard("photo")) {
+    Serial.println("[PHOTO] SD not_ready");
+    return false;
   }
-  if (!photo_sd_ready_) {
-    photo_sd_ready_ = SD.begin(kSdCsPin, photo_sd_spi_);
-    if (photo_sd_ready_ && !SD.exists("/pic")) {
-      SD.mkdir("/pic");
-    }
-    Serial.printf("[PHOTO] SD %s\n", photo_sd_ready_ ? "ready" : "not_ready");
+  if (!SD.exists("/pic")) {
+    SD.mkdir("/pic");
   }
-  return photo_sd_ready_;
+  return true;
 }
 
 bool App::isEpd4Name(const String &name) const {
@@ -1459,7 +1590,6 @@ void App::refreshPhotoFileCount() {
     if (dir) {
       dir.close();
     }
-    photo_sd_ready_ = false;
     photo_file_count_ = 0;
     if (auto_power_cycle) {
       setPeripheralPower(false);
@@ -1502,7 +1632,6 @@ bool App::renderEpd4PhotoAtIndex(uint16_t index) {
     if (dir) {
       dir.close();
     }
-    photo_sd_ready_ = false;
     Serial.println("[PHOTO] epd4 render skip: /pic unavailable");
     if (auto_power_cycle) {
       setPeripheralPower(false);
@@ -2128,8 +2257,11 @@ void App::rebuildCalendarSceneCache(const struct tm &local_tm, bool time_valid) 
       (calendar_layout_ == CalendarLayout::LandscapeSplit)
           ? calendar::LayoutMode::LandscapeSplit
           : calendar::LayoutMode::PortraitSplit;
+  const bool force_header_wifi_connected =
+      force_calendar_full_refresh_ && calendar_pre_refresh_wifi_connected_;
   calendar::buildCalendarModel(calendar_model_cache_, local_tm, time_valid, layout_mode,
-                               wifi_manager_.settings().ui_language, wifi_manager_);
+                               wifi_manager_.settings().ui_language, wifi_manager_,
+                               force_header_wifi_connected);
   if (kDebugForcedCalendarRows >= 4 && kDebugForcedCalendarRows <= 6) {
     calendar_model_cache_.month_row_count = kDebugForcedCalendarRows;
   }
@@ -2251,7 +2383,9 @@ void App::renderCalendarPage(uint32_t now_ms) {
   if (refresh_plan.mode == appfw::CalendarRefreshMode::Full) {
     pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
     force_calendar_full_refresh_ = false;
+    calendar_pre_refresh_wifi_connected_ = false;
     calendar_partial_refresh_count_ = 0;
+    last_calendar_check_ms_ = millis();
     Serial.printf("[CAL] full refresh layout=%s reason=%s\n",
                   (calendar_layout_ == CalendarLayout::LandscapeSplit) ? "landscape_split"
                                                                         : "portrait_split",
@@ -2281,6 +2415,7 @@ void App::renderCalendarPage(uint32_t now_ms) {
     if (!ok) {
       pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
       force_calendar_full_refresh_ = false;
+      calendar_pre_refresh_wifi_connected_ = false;
       calendar_partial_refresh_count_ = 0;
       Serial.println("[CAL] header partial unavailable -> full striped refresh");
       last_calendar_render_minute_key_ = minute_key;
@@ -2307,6 +2442,7 @@ void App::renderCalendarPage(uint32_t now_ms) {
     } else {
       pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
       force_calendar_full_refresh_ = false;
+      calendar_pre_refresh_wifi_connected_ = false;
       calendar_partial_refresh_count_ = 0;
       Serial.println("[CAL] partial path unavailable -> full striped refresh");
     }

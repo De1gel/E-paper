@@ -2,7 +2,6 @@
 #define WIFI_MANAGER_H
 
 #include <Arduino.h>
-#include <SPI.h>
 #include <WiFi.h>
 #include <math.h>
 
@@ -28,7 +27,7 @@ class WifiManager {
   void stop(const char *reason);
 
   bool consumeAutoExitRequested();
-  bool consumeSettingsSavedRefreshRequested();
+  bool consumeSettingsApplyRefreshRequested();
   bool consumeStaConnectFailed();
   bool isStaConnecting() const;
   bool isStaConnected() const;
@@ -60,7 +59,7 @@ class WifiManager {
   };
 
   void loadSettings();
-  void saveSettings();
+  bool saveSettings();
   void applyDefaultSettings();
   void maybeSyncCalendarUrl(uint32_t now_ms);
   bool syncCalendarFromUrl(String &error_msg);
@@ -132,7 +131,7 @@ class WifiManager {
   size_t calendar_month_summary_count_ = 0;
   uint32_t calendar_month_summary_signature_ = 0;
   bool auto_exit_requested_ = false;
-  bool settings_saved_refresh_requested_ = false;
+  bool settings_apply_refresh_pending_ = false;
   bool sta_connect_failed_ = false;
   bool upload_ok_ = true;
   String upload_error_{};
@@ -163,18 +162,11 @@ class WifiManager {
 
   WebServer *server_ = nullptr;
   Preferences *prefs_ = nullptr;
-  SPIClass sd_spi_{HSPI};
   bool sd_ready_ = false;
-  bool sd_spi_started_ = false;
   bool web_fs_ready_ = false;
   bool wifi_events_registered_ = false;
   bool rtc_time_trusted_ = false;
   static constexpr uint8_t kPeripheralPowerPin = 32;
-
-  static constexpr uint8_t kSdCsPin = 5;
-  static constexpr uint8_t kSdSckPin = 18;
-  static constexpr uint8_t kSdMisoPin = 19;
-  static constexpr uint8_t kSdMosiPin = 23;
 
   static constexpr uint32_t kStaConnectTimeoutManualMs = 30000;
   static constexpr uint32_t kStaConnectTimeoutAutoSyncMs = 8000;

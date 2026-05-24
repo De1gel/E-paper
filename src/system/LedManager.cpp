@@ -43,14 +43,14 @@ void LedManager::triggerBreath(uint8_t cycles, const char *reason) {
     return;
   }
   sleeping_ = false;
-  state_on_ = false;
-  writeLevel(0);
   breath_active_ = true;
   breath_hold_ = false;
   blink_mode_ = BlinkMode::None;
   breath_cycles_ = (cycles == 0) ? 1 : cycles;
   breath_cycles_done_ = 0;
-  breath_start_ms_ = millis();
+  breath_start_ms_ = millis() - (kBreathPeriodMs / 4u);
+  writeLevel(kBreathInitialLevel);
+  state_on_ = true;
   reportState(TraceState::Breath, reason ? reason : "trigger_breath");
 }
 
@@ -59,14 +59,14 @@ void LedManager::startBreath(const char *reason) {
     return;
   }
   sleeping_ = false;
-  state_on_ = false;
-  writeLevel(0);
   breath_active_ = true;
   breath_hold_ = true;
   blink_mode_ = BlinkMode::None;
   breath_cycles_ = 1;
   breath_cycles_done_ = 0;
-  breath_start_ms_ = millis();
+  breath_start_ms_ = millis() - (kBreathPeriodMs / 4u);
+  writeLevel(kBreathInitialLevel);
+  state_on_ = true;
   reportState(TraceState::Breath, reason ? reason : "start_breath");
 }
 

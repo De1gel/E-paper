@@ -45,6 +45,7 @@ const weatherLon = document.getElementById("weatherLon");
 const wurl = document.getElementById("wurl");
 const cfgBox = document.getElementById("cfgBox");
 const scheduleTitle = document.getElementById("scheduleTitle");
+const scheduleLocation = document.getElementById("scheduleLocation");
 const scheduleTime = document.getElementById("scheduleTime");
 const scheduleColor = document.getElementById("scheduleColor");
 const scheduleRepeat = document.getElementById("scheduleRepeat");
@@ -146,6 +147,8 @@ const I18N = {
     "cfg.schedule.title": "日程管理",
     "cfg.schedule.name": "日程标题",
     "cfg.schedule.name_ph": "例如：团队周会",
+    "cfg.schedule.location": "地点",
+    "cfg.schedule.location_ph": "例如：A101",
     "cfg.schedule.time": "时间",
     "cfg.schedule.color": "颜色",
     "cfg.schedule.color_red": "红色（重要提醒）",
@@ -228,7 +231,12 @@ const I18N = {
     "common.schedule_loaded_fmt": "已加载 {count} 条日程",
     "common.schedule_loaded_limited_fmt": "显示即将生效的前 {shown} 条，共 {total} 条",
     "common.schedule_read_failed": "日程读取失败",
+    "common.add_success": "添加成功",
     "common.add_failed": "添加失败",
+    "common.delete_success": "删除成功",
+    "common.err_bad_json_response": "设备返回不是合法 JSON",
+    "common.err_save_failed": "持久化保存失败",
+    "common.err_store_push_failed": "日程写入内存失败",
     "common.err_calendar_events_full": "日程数量已满，请先删除部分日程",
     "common.err_manual_calendar_events_full": "手动日程数量已满，请先删除部分手动日程",
     "common.delete_failed": "删除失败",
@@ -249,6 +257,7 @@ const I18N = {
     "common.request_done": "请求已完成。",
     "common.saved": "设置已保存。",
     "common.rebooting": "重启请求已发送。",
+    "common.rebooted": "设备已重启。",
     "common.reboot_confirm": "确认立即重启设备吗？",
     "common.new_folder_prompt": "新建文件夹名称",
     "common.del_dir_confirm": "确认删除目录及其内容？\n{path}",
@@ -357,6 +366,8 @@ const I18N = {
     "cfg.schedule.title": "Schedule",
     "cfg.schedule.name": "Title",
     "cfg.schedule.name_ph": "Example: Team Weekly Meeting",
+    "cfg.schedule.location": "Location",
+    "cfg.schedule.location_ph": "Example: A101",
     "cfg.schedule.time": "Time",
     "cfg.schedule.color": "Color",
     "cfg.schedule.color_red": "Red (important)",
@@ -439,7 +450,12 @@ const I18N = {
     "common.schedule_loaded_fmt": "Loaded {count} schedule item(s)",
     "common.schedule_loaded_limited_fmt": "Showing next {shown} of {total} schedule item(s)",
     "common.schedule_read_failed": "Failed to load schedule",
+    "common.add_success": "Added",
     "common.add_failed": "Add failed",
+    "common.delete_success": "Deleted",
+    "common.err_bad_json_response": "Device returned invalid JSON",
+    "common.err_save_failed": "Persistent save failed",
+    "common.err_store_push_failed": "Failed to store schedule in memory",
     "common.err_calendar_events_full": "Schedule list is full. Delete some events first.",
     "common.err_manual_calendar_events_full": "Manual schedule list is full. Delete some manual events first.",
     "common.delete_failed": "Delete failed",
@@ -460,6 +476,7 @@ const I18N = {
     "common.request_done": "Request completed.",
     "common.saved": "Settings saved.",
     "common.rebooting": "Reboot request sent.",
+    "common.rebooted": "Device rebooted.",
     "common.reboot_confirm": "Reboot device now?",
     "common.new_folder_prompt": "New folder name",
     "common.del_dir_confirm": "Delete folder and all contents?\n{path}",
@@ -568,6 +585,8 @@ const I18N = {
     "cfg.schedule.title": "Planning",
     "cfg.schedule.name": "Titre",
     "cfg.schedule.name_ph": "Exemple : reunion hebdo equipe",
+    "cfg.schedule.location": "Lieu",
+    "cfg.schedule.location_ph": "Exemple : A101",
     "cfg.schedule.time": "Heure",
     "cfg.schedule.color": "Couleur",
     "cfg.schedule.color_red": "Rouge (important)",
@@ -650,7 +669,12 @@ const I18N = {
     "common.schedule_loaded_fmt": "{count} planning(s) charge(s)",
     "common.schedule_loaded_limited_fmt": "{shown} sur {total} planning(s) a venir",
     "common.schedule_read_failed": "Chargement du planning echoue",
+    "common.add_success": "Ajout reussi",
     "common.add_failed": "Ajout echoue",
+    "common.delete_success": "Suppression reussie",
+    "common.err_bad_json_response": "Reponse JSON invalide",
+    "common.err_save_failed": "Enregistrement persistant echoue",
+    "common.err_store_push_failed": "Ecriture du planning en memoire echouee",
     "common.err_calendar_events_full": "Planning plein. Supprimez d abord quelques evenements.",
     "common.err_manual_calendar_events_full": "Planning manuel plein. Supprimez d abord quelques evenements manuels.",
     "common.delete_failed": "Suppression echouee",
@@ -671,6 +695,7 @@ const I18N = {
     "common.request_done": "Requete terminee.",
     "common.saved": "Parametres enregistres.",
     "common.rebooting": "Requete de redemarrage envoyee.",
+    "common.rebooted": "Appareil redemarre.",
     "common.reboot_confirm": "Redemarrer l appareil maintenant ?",
     "common.new_folder_prompt": "Nom du nouveau dossier",
     "common.del_dir_confirm": "Supprimer le dossier et son contenu ?\n{path}",
@@ -1181,16 +1206,18 @@ async function saveCfg() {
     });
     const txt = await r.text();
     let j = null;
-    try { j = JSON.parse(txt); } catch {}
+    let parseError = false;
+    try { j = JSON.parse(txt); } catch { parseError = true; }
     if (j && j.ok) {
       loadedWeatherCity = city;
       cfgBox.textContent = t("common.saved");
       window.alert(t("common.saved"));
-      if (scheduleRows && scheduleSummary) {
-        await loadSchedules();
-      }
     } else {
-      cfgBox.textContent = txt || t("common.request_failed");
+      cfgBox.textContent = responseErrorText(
+        parseError ? { error: "bad_json_response" } : j,
+        t("common.save_failed"),
+        r.status
+      );
     }
   } catch {
     cfgBox.textContent = t("common.save_failed");
@@ -1242,11 +1269,21 @@ async function stopPortal() {
 async function rebootDevice() {
   const confirmed = window.confirm(t("common.reboot_confirm"));
   if (!confirmed) return;
-  const r = await fetch("/api/reboot", { method: "POST" });
-  const txt = await r.text();
-  let j = null;
-  try { j = JSON.parse(txt); } catch {}
-  cfgBox.textContent = (j && j.ok) ? t("common.rebooting") : (txt || t("common.request_failed"));
+  try {
+    const r = await fetch("/api/reboot", { method: "POST" });
+    const txt = await r.text();
+    let j = null;
+    try { j = JSON.parse(txt); } catch {}
+    if (j && j.ok) {
+      cfgBox.textContent = t("common.rebooted");
+      window.alert(t("common.rebooted"));
+    } else {
+      cfgBox.textContent = responseErrorText(j, t("common.request_failed"), r.status);
+    }
+  } catch {
+    cfgBox.textContent = t("common.rebooting");
+    window.alert(t("common.rebooting"));
+  }
 }
 
 function normalizeHm(text) {
@@ -1360,7 +1397,8 @@ function responseErrorText(j, fallback, status) {
     const detail = j.msg || j.message || j.error;
     if (detail) {
       const key = `common.err_${String(detail)}`;
-      parts.push(I18N[currentLang] && I18N[currentLang][key] ? t(key) : String(detail));
+      const translated = I18N[currentLang] && I18N[currentLang][key] ? t(key) : "";
+      parts.push(translated ? `${String(detail)}: ${translated}` : String(detail));
     }
   } else if (status && status >= 400) {
     parts.push(`HTTP ${status}`);
@@ -1407,6 +1445,7 @@ async function loadSchedules() {
 
 async function addSchedule() {
   const title = (scheduleTitle?.value || "").trim();
+  const location = (scheduleLocation?.value || "").trim();
   const time = normalizeHm(scheduleTime?.value || "");
   const color = (scheduleColor?.value || "blue").trim();
   const repeat = normalizeRepeat(scheduleRepeat?.value || "weekly");
@@ -1430,7 +1469,7 @@ async function addSchedule() {
     return;
   }
 
-  let body = `title=${encodeURIComponent(title)}&time=${encodeURIComponent(time)}&color=${encodeURIComponent(color)}&repeat=${encodeURIComponent(repeat)}`;
+  let body = `title=${encodeURIComponent(title)}&location=${encodeURIComponent(location)}&time=${encodeURIComponent(time)}&color=${encodeURIComponent(color)}&repeat=${encodeURIComponent(repeat)}`;
   if (repeat === "once") body += `&date=${encodeURIComponent(date)}`;
   if (repeat === "weekly") body += `&weekday=${encodeURIComponent(String(weekday))}`;
 
@@ -1442,13 +1481,20 @@ async function addSchedule() {
     });
     const txt = await r.text();
     let j = null;
-    try { j = JSON.parse(txt); } catch {}
+    let parseError = false;
+    try { j = JSON.parse(txt); } catch { parseError = true; }
     if (!j || !j.ok) {
-      scheduleSummary.textContent = responseErrorText(j, t("common.add_failed"), r.status);
+      scheduleSummary.textContent = responseErrorText(
+        parseError ? { error: "bad_json_response" } : j,
+        t("common.add_failed"),
+        r.status
+      );
       return;
     }
     if (scheduleTitle) scheduleTitle.value = "";
+    if (scheduleLocation) scheduleLocation.value = "";
     await loadSchedules();
+    scheduleSummary.textContent = t("common.add_success");
   } catch {
     scheduleSummary.textContent = t("common.add_failed_check");
   }
@@ -1465,12 +1511,18 @@ async function deleteSchedule(id) {
     });
     const txt = await r.text();
     let j = null;
-    try { j = JSON.parse(txt); } catch {}
+    let parseError = false;
+    try { j = JSON.parse(txt); } catch { parseError = true; }
     if (!j || !j.ok) {
-      scheduleSummary.textContent = responseErrorText(j, t("common.delete_failed"), r.status);
+      scheduleSummary.textContent = responseErrorText(
+        parseError ? { error: "bad_json_response" } : j,
+        t("common.delete_failed"),
+        r.status
+      );
       return;
     }
     await loadSchedules();
+    scheduleSummary.textContent = t("common.delete_success");
   } catch {
     scheduleSummary.textContent = t("common.del_failed_check");
   }

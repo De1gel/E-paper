@@ -2,7 +2,6 @@
 #define APP_H
 
 #include <Arduino.h>
-#include <SPI.h>
 #include <time.h>
 
 #include "calendar/CalendarLayout.h"
@@ -28,9 +27,11 @@ class App {
   void render();
   bool canEnterLightSleep(uint32_t now_ms) const;
   uint32_t nextWakeDeadlineMs(uint32_t now_ms) const;
+  bool shouldWakeFromSideKeys() const;
   void onEnterLightSleep(uint32_t deadline_ms);
   void cancelLightSleepEntry(const char *reason);
-  void onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio);
+  void onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio, bool wake_up_pressed,
+                            bool wake_mid_pressed, bool wake_down_pressed);
 
  private:
   enum class CalendarLayout : uint8_t {
@@ -39,6 +40,8 @@ class App {
   };
 
   void handleInputEvent(appfw::InputEvent event, uint32_t now_ms);
+  void startOperationTrace(const char *source, const char *action, uint32_t now_ms);
+  void finishOperationTrace(const char *result, uint32_t now_ms, const char *reason = nullptr);
   void setPeripheralPower(bool enabled);
   void updateClockAnchor(uint32_t now_ms);
   bool getLocalTimeSnapshot(uint32_t now_ms, struct tm &local_tm, time_t &local_epoch) const;
@@ -46,6 +49,7 @@ class App {
   void updateAppAutoSwitch(uint32_t now_ms);
   void updateCalendarBackgroundSync(uint32_t now_ms);
   void applyCalendarLayoutFromConfig(bool force_apply);
+  void queueSettingsApplyFullRefresh(uint32_t now_ms, const char *reason);
   void updatePhotoCarousel(uint32_t now_ms);
   void nextPhoto(const char *reason, uint32_t now_ms);
   void prevPhoto(const char *reason, uint32_t now_ms);
@@ -135,6 +139,8 @@ class App {
   bool calendar_background_sync_started_session_ = false;
   bool calendar_stop_sta_after_render_ = false;
   bool calendar_pre_refresh_led_active_ = false;
+  bool calendar_pre_refresh_wifi_connected_ = false;
+  bool calendar_pre_refresh_failed_ = false;
   uint32_t calendar_background_sync_signature_ = 0;
   uint32_t last_calendar_check_ms_ = 0;
   int32_t last_calendar_day_key_ = -1;
@@ -143,10 +149,13 @@ class App {
   time_t clock_anchor_epoch_ = 0;
   uint32_t clock_anchor_ms_ = 0;
   uint32_t sleep_inhibit_until_ms_ = 0;
+  bool operation_trace_active_ = false;
+  uint32_t operation_trace_id_ = 0;
+  uint32_t operation_trace_start_ms_ = 0;
+  String operation_trace_source_;
+  String operation_trace_action_;
   String calendar_layout_cfg_cache_;
-  SPIClass photo_sd_spi_{HSPI};
-  bool photo_sd_ready_ = false;
-  bool photo_sd_spi_started_ = false;
+  bool calendar_frame_unavailable_logged_ = false;
 
   appfw::InputManager input_;
   appfw::ModeManager mode_manager_;

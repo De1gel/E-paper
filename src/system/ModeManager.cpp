@@ -26,13 +26,13 @@ void ModeManager::begin(uint32_t now_ms) {
   sta_request_ = false;
   white_screen_request_ = false;
   stop_wifi_request_ = false;
-  Serial.println("[MODE] init -> Normal");
+  Serial.println("[CONFIG] init -> Normal");
 }
 
 void ModeManager::update(uint32_t now_ms) {
   if (mode_ == OperationMode::ConfigWait &&
       (now_ms - mode_enter_ms_) >= kConfigWaitTimeoutMs) {
-    Serial.println("[MODE] config timeout(60s) -> Normal");
+    Serial.println("[CONFIG] config timeout(60s) -> Normal");
     setMode(OperationMode::Normal, now_ms);
   }
 }
@@ -50,9 +50,9 @@ void ModeManager::onInputEvent(InputEvent event, uint32_t now_ms) {
         (mode_ == OperationMode::ConfigAP || mode_ == OperationMode::ConfigSTA);
     if (need_stop_wifi) {
       stop_wifi_request_ = true;
-      Serial.println("[MODE] long press exit config + stop wifi");
+      Serial.println("[CONFIG] long press exit config + stop wifi");
     } else {
-      Serial.println("[MODE] long press exit config -> Normal");
+      Serial.println("[CONFIG] long press exit config -> Normal");
     }
     setMode(OperationMode::Normal, now_ms);
     return;
@@ -61,15 +61,15 @@ void ModeManager::onInputEvent(InputEvent event, uint32_t now_ms) {
   if (mode_ == OperationMode::ConfigWait) {
     if (event == InputEvent::UpShort) {
       ap_request_ = true;
-      Serial.println("[MODE] request AP");
+      Serial.println("[CONFIG] request AP");
       setMode(OperationMode::ConfigAP, now_ms);
     } else if (event == InputEvent::DownShort) {
       sta_request_ = true;
-      Serial.println("[MODE] request STA");
+      Serial.println("[CONFIG] request STA");
       setMode(OperationMode::ConfigSTA, now_ms);
     } else if (event == InputEvent::MidShort) {
       white_screen_request_ = true;
-      Serial.println("[MODE] request white screen -> Normal");
+      Serial.println("[CONFIG] request white screen -> Normal");
       setMode(OperationMode::Normal, now_ms);
     }
   }
@@ -105,7 +105,7 @@ bool ModeManager::consumeStopWifiRequest() {
 
 void ModeManager::setMode(OperationMode next, uint32_t now_ms) {
   if (mode_ != next) {
-    Serial.printf("[MODE] %s -> %s\n", modeName(mode_), modeName(next));
+    Serial.printf("[CONFIG] %s -> %s\n", modeName(mode_), modeName(next));
   }
   mode_ = next;
   mode_enter_ms_ = now_ms;
@@ -113,7 +113,7 @@ void ModeManager::setMode(OperationMode next, uint32_t now_ms) {
 
 void ModeManager::forceNormal(uint32_t now_ms, const char *reason) {
   if (mode_ != OperationMode::Normal) {
-    Serial.printf("[MODE] force normal (%s)\n", reason ? reason : "no_reason");
+    Serial.printf("[CONFIG] force normal (%s)\n", reason ? reason : "no_reason");
     setMode(OperationMode::Normal, now_ms);
   }
 }
