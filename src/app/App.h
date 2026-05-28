@@ -53,9 +53,8 @@ class App {
   void updatePhotoCarousel(uint32_t now_ms);
   void nextPhoto(const char *reason, uint32_t now_ms);
   void prevPhoto(const char *reason, uint32_t now_ms);
-  bool willUseCalendarPartialRefresh(uint32_t now_ms) const;
   bool ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms);
-  void beginDisplaySession(bool partial_refresh = false);
+  void beginDisplaySession();
   void endDisplaySession();
   void setState(AppState next);
   bool ensureCalendarFrameBuffer(const char *reason);
@@ -86,25 +85,9 @@ class App {
   void drawCalendarNumberInCell(uint16_t x, uint16_t y, uint16_t w, uint16_t h, int day_number,
                                 uint8_t scale, uint8_t color_nibble);
   void drawCalendarScene(const struct tm &local_tm, bool time_valid);
-  calendar::Rect calendarHeaderTimeRect(const calendar::CalendarModel &model,
-                                        const calendar::CalendarLayout &layout) const;
-  calendar::Rect calendarHeaderWeatherRect(const calendar::CalendarModel &model,
-                                           const calendar::CalendarLayout &layout) const;
-  calendar::Rect calendarHeaderSensorsRect(const calendar::CalendarModel &model,
-                                           const calendar::CalendarLayout &layout) const;
-  bool redrawCalendarHeaderTime(const calendar::CalendarModel &model,
-                                const calendar::CalendarLayout &layout,
-                                calendar::Rect &physical_area);
-  bool redrawCalendarHeaderWeather(const calendar::CalendarModel &model,
-                                   const calendar::CalendarLayout &layout,
-                                   calendar::Rect &physical_area);
-  bool redrawCalendarHeaderSensors(const calendar::CalendarModel &model,
-                                   const calendar::CalendarLayout &layout,
-                                   calendar::Rect &physical_area);
   void pushCalendarFullRefresh();
   void pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
                                       const calendar::CalendarLayout &layout);
-  void pushCalendarPartialRefresh(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void renderWhiteScreen();
   void waitEpdReadyWithLed();
   bool isAnyWakeKeyPressed() const;
@@ -124,13 +107,10 @@ class App {
   static constexpr uint16_t kCalendarStripeRows = 32u;
   uint8_t *calendar_frame_ = nullptr;
   render::StripeBuffer calendar_stripe_;
-  render::StripeBuffer calendar_window_buffer_;
   CalendarLayout calendar_layout_ = CalendarLayout::LandscapeSplit;
   calendar::CalendarModel calendar_model_cache_{};
-  calendar::CalendarModel previous_calendar_model_cache_{};
   calendar::CalendarLayout calendar_layout_cache_{};
   bool force_calendar_full_refresh_ = true;
-  uint16_t calendar_partial_refresh_count_ = 0;
   bool calendar_pre_refresh_sync_waiting_ = false;
   bool calendar_pre_refresh_sync_started_session_ = false;
   bool calendar_skip_presync_once_ = false;

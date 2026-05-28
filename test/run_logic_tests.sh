@@ -9,8 +9,6 @@ g++ -std=c++17 -Wall -Wextra -pedantic \
   -I"${repo_root}/test/support" \
   -I"${repo_root}/src" \
   "${repo_root}/src/app/RefreshPolicy.cpp" \
-  "${repo_root}/src/app/CalendarRefreshPlanner.cpp" \
-  "${repo_root}/src/display/PartialRefreshGeometry.cpp" \
   "${repo_root}/src/calendar/CalendarLogic.cpp" \
   "${repo_root}/src/system/CalendarStore.cpp" \
   "${repo_root}/src/system/CalendarSyncService.cpp" \

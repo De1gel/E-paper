@@ -11,13 +11,11 @@
 
 #include "Display_EPD_W21.h"
 #include "Display_EPD_W21_spi.h"
-#include "app/CalendarRefreshPlanner.h"
 #include "app/RefreshPolicy.h"
 #include "calendar/CalendarLayout.h"
 #include "calendar/CalendarModel.h"
 #include "calendar/CalendarScene.h"
 #include "calendar/CalendarText.h"
-#include "display/PartialRefresh.h"
 #include "render/SceneRasterizer.h"
 #include "system/LogConfig.h"
 #include "system/SdCard.h"
@@ -34,42 +32,8 @@ constexpr uint16_t kScreenWidth = 800;
 constexpr uint16_t kScreenHeight = 480;
 constexpr uint32_t kClockMinValidEpoch = 1700000000UL;
 constexpr uint32_t kCalendarCheckIntervalMs = 60000UL;
-constexpr uint8_t kCalendarPartialBeforeFull = 7;
 constexpr AppState kDebugBootState = AppState::Calendar;
 constexpr uint8_t kDebugForcedCalendarRows = 0;
-constexpr bool kDebugCalendarHeaderPartialPattern = false;
-constexpr uint16_t kPartialAlignPx = 4u;
-constexpr uint8_t kHeaderDatePx = 20u;
-constexpr uint8_t kHeaderTimePx = 26u;
-constexpr uint8_t kHeaderWeatherPx = 30u;
-constexpr uint8_t kHeaderSensorsPx = 20u;
-constexpr uint16_t kHeaderWeatherIconSize = 24u;
-constexpr uint16_t kHeaderWeatherIconGap = 6u;
-constexpr uint16_t kHeaderWeatherIconOffsetX = 12u;
-constexpr uint16_t kHeaderStatusIconSize = 16u;
-constexpr uint16_t kHeaderBatteryIconW = 22u;
-constexpr uint16_t kHeaderStatusIconGap = 5u;
-constexpr uint16_t kHeaderMetaBlockLandscapeW = 168u;
-constexpr uint16_t kHeaderMetaBlockPortraitW = 136u;
-
-struct HeaderSensorTextParts {
-  String temperature;
-  String humidity;
-};
-
-HeaderSensorTextParts splitHeaderSensors(const String &text) {
-  HeaderSensorTextParts parts;
-  const int split = text.indexOf(' ');
-  if (split < 0) {
-    parts.temperature = text;
-    return parts;
-  }
-  parts.temperature = text.substring(0, split);
-  parts.humidity = text.substring(split + 1);
-  parts.temperature.trim();
-  parts.humidity.trim();
-  return parts;
-}
 
 String twoDigits(int value) {
   if (value < 10) {
@@ -118,36 +82,6 @@ const char *appStateLogTag(AppState state) {
 
 uint32_t largest8BitHeap() {
   return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-}
-
-bool isAsciiOnlyText(const String &text) {
-  for (size_t i = 0; i < text.length(); ++i) {
-    if (static_cast<uint8_t>(text.charAt(i)) >= 0x80u) {
-      return false;
-    }
-  }
-  return true;
-}
-
-calendar::TextFont preferredTextFont(const String &text, calendar::TextFont fallback_font,
-                                     uint8_t pixel_height) {
-  if (isAsciiOnlyText(text) && pixel_height >= 14u) {
-    return calendar::TextFont::AsciiSmooth;
-  }
-  return fallback_font;
-}
-
-calendar::TextFont dynamicTextFont(const String &text, calendar::TextFont cjk_font,
-                                   calendar::TextFont ascii_font, uint8_t pixel_height) {
-  return isAsciiOnlyText(text) ? preferredTextFont(text, ascii_font, pixel_height) : cjk_font;
-}
-
-calendar::TextAAMode preferredAsciiAAMode(const String &text, calendar::TextFont font,
-                                          uint8_t pixel_height) {
-  (void)text;
-  (void)font;
-  (void)pixel_height;
-  return calendar::TextAAMode::Threshold;
 }
 
 uint16_t minuteOfDay(const struct tm &local_tm) {
@@ -204,165 +138,6 @@ uint32_t deadlineFromEpoch(uint32_t now_ms, time_t local_epoch, time_t deadline_
   return now_ms + static_cast<uint32_t>((delta_ms > max_delta) ? max_delta : delta_ms);
 }
 
-void setPackedBufferPixel(uint8_t *buffer, uint16_t buffer_width_px, uint16_t buffer_rows,
-                          uint16_t x, uint16_t y, uint8_t color_nibble) {
-  if (buffer == nullptr || x >= buffer_width_px || y >= buffer_rows) {
-    return;
-  }
-  const uint32_t pixel_index = static_cast<uint32_t>(y) * buffer_width_px + x;
-  const uint32_t byte_index = pixel_index >> 1;
-  const uint8_t nib = static_cast<uint8_t>(color_nibble & 0x0Fu);
-  if ((pixel_index & 0x01u) == 0u) {
-    buffer[byte_index] = static_cast<uint8_t>((buffer[byte_index] & 0x0Fu) | (nib << 4));
-  } else {
-    buffer[byte_index] = static_cast<uint8_t>((buffer[byte_index] & 0xF0u) | nib);
-  }
-}
-
-void fillPackedBufferRect(uint8_t *buffer, uint16_t buffer_width_px, uint16_t buffer_rows,
-                          uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble) {
-  if (buffer == nullptr || w == 0 || h == 0 || x >= buffer_width_px || y >= buffer_rows) {
-    return;
-  }
-  const uint16_t x_end =
-      static_cast<uint16_t>(((x + w) > buffer_width_px) ? buffer_width_px : (x + w));
-  const uint16_t y_end =
-      static_cast<uint16_t>(((y + h) > buffer_rows) ? buffer_rows : (y + h));
-  for (uint16_t yy = y; yy < y_end; ++yy) {
-    for (uint16_t xx = x; xx < x_end; ++xx) {
-      setPackedBufferPixel(buffer, buffer_width_px, buffer_rows, xx, yy, color_nibble);
-    }
-  }
-}
-
-void drawPackedBufferText(uint8_t *buffer, uint16_t buffer_width_px, uint16_t buffer_rows,
-                          uint16_t x, uint16_t y, const String &text, uint8_t pixel_height,
-                          uint8_t color_nibble, calendar::TextFont font,
-                          calendar::TextAAMode aa_mode) {
-  if (buffer == nullptr || pixel_height == 0 || text.length() == 0) {
-    return;
-  }
-  if (aa_mode != calendar::TextAAMode::Threshold) {
-    calendar::TextCoverageMap map;
-    if (!calendar::buildTextCoverageMap(text, pixel_height, font, map)) {
-      return;
-    }
-    for (uint16_t row = 0; row < map.height; ++row) {
-      for (uint16_t col = 0; col < map.width; ++col) {
-        const uint32_t idx = static_cast<uint32_t>(row) * map.width + col;
-        if (map.alpha[idx] >= 128u) {
-          fillPackedBufferRect(buffer, buffer_width_px, buffer_rows,
-                               static_cast<uint16_t>(x + col), static_cast<uint16_t>(y + row),
-                               1, 1, color_nibble);
-        }
-      }
-    }
-    calendar::freeTextCoverageMap(map);
-    return;
-  }
-
-  const calendar::TextStyle style = calendar::resolveTextStyle(pixel_height, font);
-  if (style.pixel_height == 0 || style.base_height == 0) {
-    return;
-  }
-  const uint8_t coverage_threshold =
-      (style.font == calendar::TextFont::AsciiSmooth) ? static_cast<uint8_t>(6u)
-                                                      : static_cast<uint8_t>(8u);
-  uint16_t pen_x = x;
-  size_t byte_index = 0;
-  calendar::GlyphBitmap glyph;
-  while (calendar::nextTextGlyph(text, byte_index, glyph, style.font)) {
-    if (glyph.rows == nullptr || glyph.width == 0 || glyph.height == 0) {
-      continue;
-    }
-    const uint16_t draw_w = calendar::glyphWidthPx(glyph, style);
-    const uint16_t draw_h = calendar::glyphHeightPx(glyph, style);
-    const uint8_t src_top = (glyph.bits_per_pixel > 1u) ? style.box_top : 0u;
-    const uint8_t src_left = (glyph.bits_per_pixel > 1u) ? style.box_left : 0u;
-    const uint8_t src_h = (glyph.bits_per_pixel > 1u && style.box_height > 0u) ? style.box_height
-                                                                                 : glyph.height;
-    const uint8_t src_w = (glyph.bits_per_pixel > 1u && style.box_width > 0u) ? style.box_width
-                                                                               : glyph.width;
-    for (uint16_t dy = 0; dy < draw_h; ++dy) {
-      const uint8_t src_row =
-          static_cast<uint8_t>(src_top + ((static_cast<uint32_t>(dy) * src_h) / draw_h));
-      for (uint16_t dx = 0; dx < draw_w; ++dx) {
-        const uint8_t src_col =
-            static_cast<uint8_t>(src_left + ((static_cast<uint32_t>(dx) * src_w) / draw_w));
-        const uint8_t coverage = calendar::glyphCoverage(glyph, src_row, src_col);
-        if (coverage == 0u) {
-          continue;
-        }
-        if (glyph.bits_per_pixel > 1u && coverage < coverage_threshold) {
-          continue;
-        }
-        fillPackedBufferRect(buffer, buffer_width_px, buffer_rows,
-                             static_cast<uint16_t>(pen_x + dx), static_cast<uint16_t>(y + dy),
-                             1, 1, color_nibble);
-      }
-    }
-    pen_x = static_cast<uint16_t>(pen_x + draw_w + calendar::glyphLetterSpacingPx(glyph, style));
-  }
-}
-
-void drawPackedBufferLine(uint8_t *buffer, uint16_t buffer_width_px, uint16_t buffer_rows,
-                          uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
-                          uint8_t color_nibble) {
-  int x = static_cast<int>(x0);
-  int y = static_cast<int>(y0);
-  const int tx = static_cast<int>(x1);
-  const int ty = static_cast<int>(y1);
-  const int dx = abs(tx - x);
-  const int sx = (x < tx) ? 1 : -1;
-  const int dy = -abs(ty - y);
-  const int sy = (y < ty) ? 1 : -1;
-  int err = dx + dy;
-  while (true) {
-    fillPackedBufferRect(buffer, buffer_width_px, buffer_rows, static_cast<uint16_t>(x),
-                         static_cast<uint16_t>(y), 1, 1, color_nibble);
-    if (x == tx && y == ty) {
-      break;
-    }
-    const int e2 = err * 2;
-    if (e2 >= dy) {
-      err += dy;
-      x += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      y += sy;
-    }
-  }
-}
-
-calendar::Rect alignRectToPartialGrid(const calendar::Rect &rect,
-                                      const calendar::Rect &bounds) {
-  if (rect.w == 0 || rect.h == 0 || bounds.w == 0 || bounds.h == 0) {
-    return calendar::makeRect(0, 0, 0, 0);
-  }
-  const uint16_t bounds_x1 = static_cast<uint16_t>(bounds.x + bounds.w);
-  const uint16_t bounds_y1 = static_cast<uint16_t>(bounds.y + bounds.h);
-  uint16_t x0 = rect.x;
-  uint16_t y0 = rect.y;
-  uint16_t x1 = static_cast<uint16_t>(rect.x + rect.w);
-  uint16_t y1 = static_cast<uint16_t>(rect.y + rect.h);
-  if (x0 < bounds.x) x0 = bounds.x;
-  if (y0 < bounds.y) y0 = bounds.y;
-  if (x1 > bounds_x1) x1 = bounds_x1;
-  if (y1 > bounds_y1) y1 = bounds_y1;
-  x0 = static_cast<uint16_t>((x0 / kPartialAlignPx) * kPartialAlignPx);
-  y0 = static_cast<uint16_t>((y0 / kPartialAlignPx) * kPartialAlignPx);
-  x1 = static_cast<uint16_t>(((x1 + kPartialAlignPx - 1u) / kPartialAlignPx) * kPartialAlignPx);
-  y1 = static_cast<uint16_t>(((y1 + kPartialAlignPx - 1u) / kPartialAlignPx) * kPartialAlignPx);
-  if (x1 > bounds_x1) x1 = bounds_x1;
-  if (y1 > bounds_y1) y1 = bounds_y1;
-  if (x1 <= x0 || y1 <= y0) {
-    return calendar::makeRect(0, 0, 0, 0);
-  }
-  return calendar::makeRect(x0, y0, static_cast<uint16_t>(x1 - x0),
-                            static_cast<uint16_t>(y1 - y0));
-}
-
 }  // namespace
 
 class CalendarFrameSink : public calendar::SceneSink {
@@ -386,200 +161,7 @@ class CalendarFrameSink : public calendar::SceneSink {
   App &app_;
 };
 
-class PackedBufferSceneSink : public calendar::SceneSink {
- public:
-  PackedBufferSceneSink(uint8_t *buffer, uint16_t width_px, uint16_t rows, uint16_t origin_x,
-                        uint16_t origin_y)
-      : buffer_(buffer), width_px_(width_px), rows_(rows), origin_x_(origin_x), origin_y_(origin_y) {}
-
-  void fillRect(const calendar::Rect &rect, uint8_t color_nibble) override {
-    if (buffer_ == nullptr) {
-      return;
-    }
-    fillPackedBufferRect(buffer_, width_px_, rows_,
-                         static_cast<uint16_t>(rect.x - origin_x_),
-                         static_cast<uint16_t>(rect.y - origin_y_), rect.w, rect.h, color_nibble);
-  }
-
-  void strokeRect(const calendar::Rect &rect, uint8_t color_nibble) override {
-    if (buffer_ == nullptr || rect.w == 0 || rect.h == 0) {
-      return;
-    }
-    const uint16_t x0 = static_cast<uint16_t>(rect.x - origin_x_);
-    const uint16_t y0 = static_cast<uint16_t>(rect.y - origin_y_);
-    const uint16_t x1 = static_cast<uint16_t>(x0 + rect.w - 1u);
-    const uint16_t y1 = static_cast<uint16_t>(y0 + rect.h - 1u);
-    drawPackedBufferLine(buffer_, width_px_, rows_, x0, y0, x1, y0, color_nibble);
-    drawPackedBufferLine(buffer_, width_px_, rows_, x0, y1, x1, y1, color_nibble);
-    drawPackedBufferLine(buffer_, width_px_, rows_, x0, y0, x0, y1, color_nibble);
-    drawPackedBufferLine(buffer_, width_px_, rows_, x1, y0, x1, y1, color_nibble);
-  }
-
-  void text(uint16_t x, uint16_t y, const String &text, uint8_t pixel_height, uint8_t color_nibble,
-            calendar::TextFont font, calendar::TextAAMode aa_mode) override {
-    if (buffer_ == nullptr) {
-      return;
-    }
-    drawPackedBufferText(buffer_, width_px_, rows_, static_cast<uint16_t>(x - origin_x_),
-                         static_cast<uint16_t>(y - origin_y_), text, pixel_height, color_nibble,
-                         font, aa_mode);
-  }
-
- private:
-  uint8_t *buffer_ = nullptr;
-  uint16_t width_px_ = 0;
-  uint16_t rows_ = 0;
-  uint16_t origin_x_ = 0;
-  uint16_t origin_y_ = 0;
-};
-
 namespace {
-
-bool sameVisibleEvent(const calendar::VisibleEvent &a, const calendar::VisibleEvent &b) {
-  return a.id == b.id && a.title == b.title && a.time_hhmm == b.time_hhmm &&
-         a.end_time_hhmm == b.end_time_hhmm && a.start_minute == b.start_minute &&
-         a.end_minute == b.end_minute && a.lane == b.lane && a.lane_count == b.lane_count &&
-         a.color_nibble == b.color_nibble;
-}
-
-bool sameScheduleGroup(const calendar::ScheduleGroup &a, const calendar::ScheduleGroup &b) {
-  if (a.time_hhmm != b.time_hhmm || a.event_count != b.event_count) {
-    return false;
-  }
-  for (uint8_t i = 0; i < a.event_count; ++i) {
-    if (a.event_indices[i] != b.event_indices[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool sameDateCell(const calendar::DateCell &a, const calendar::DateCell &b) {
-  return a.day == b.day && a.in_current == b.in_current && a.is_today == b.is_today &&
-         a.text_color == b.text_color;
-}
-
-bool sameDaySummary(const calendar::DaySummary &a, const calendar::DaySummary &b) {
-  if (a.item_count != b.item_count || a.hidden_count != b.hidden_count) {
-    return false;
-  }
-  for (uint8_t i = 0; i < a.item_count; ++i) {
-    if (a.items[i].color_nibble != b.items[i].color_nibble ||
-        strcmp(a.items[i].label, b.items[i].label) != 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
-struct HeaderMetrics {
-  uint16_t card_x = 0;
-  uint16_t card_y = 0;
-  uint16_t card_w = 0;
-  uint16_t card_h = 0;
-  uint16_t date_x = 0;
-  uint16_t date_y = 0;
-  uint16_t time_x = 0;
-  uint16_t time_y = 0;
-  uint16_t meta_x = 0;
-  uint16_t meta_w = 0;
-  uint16_t weather_y = 0;
-  uint16_t sensors_y = 0;
-};
-
-uint16_t weatherHeaderIconX(const HeaderMetrics &header, const String &weather_text,
-                            calendar::TextFont weather_font) {
-  (void)weather_text;
-  (void)weather_font;
-  const uint16_t status_group_w =
-      static_cast<uint16_t>(kHeaderWeatherIconSize + kHeaderStatusIconGap +
-                            kHeaderStatusIconSize + kHeaderStatusIconGap +
-                            kHeaderBatteryIconW + 2u);
-  const uint16_t row_right = static_cast<uint16_t>(header.meta_x + header.meta_w);
-  return (row_right > status_group_w)
-             ? static_cast<uint16_t>(row_right - status_group_w)
-             : header.meta_x;
-}
-
-HeaderMetrics computeHeaderMetrics(const calendar::CalendarModel &model,
-                                   const calendar::CalendarLayout &layout,
-                                   calendar::TextFont header_date_font) {
-  HeaderMetrics metrics;
-  metrics.card_x = layout.header_bar.x;
-  metrics.card_y = layout.header_bar.y;
-  metrics.card_w = layout.header_bar.w;
-  metrics.card_h = layout.header_bar.h;
-  const uint16_t left_pad =
-      (layout.mode == calendar::LayoutMode::LandscapeSplit) ? 14u : 12u;
-  const uint16_t top_pad =
-      (layout.mode == calendar::LayoutMode::LandscapeSplit) ? 10u : 8u;
-  const uint16_t right_pad = left_pad;
-  const uint16_t meta_block_w = (layout.mode == calendar::LayoutMode::LandscapeSplit)
-                                    ? kHeaderMetaBlockLandscapeW
-                                    : kHeaderMetaBlockPortraitW;
-  metrics.meta_x =
-      (metrics.card_w > meta_block_w + right_pad)
-          ? static_cast<uint16_t>(metrics.card_x + metrics.card_w - meta_block_w - right_pad)
-          : metrics.date_x;
-  metrics.meta_w =
-      static_cast<uint16_t>(metrics.card_x + metrics.card_w > metrics.meta_x + right_pad
-                                ? (metrics.card_x + metrics.card_w - metrics.meta_x - right_pad)
-                                : 0u);
-  const uint16_t left_x = static_cast<uint16_t>(metrics.card_x + left_pad);
-  const uint16_t left_w =
-      (metrics.meta_x > left_x + right_pad)
-          ? static_cast<uint16_t>(metrics.meta_x - left_x - right_pad)
-          : static_cast<uint16_t>(metrics.card_w > left_pad + right_pad
-                                      ? metrics.card_w - left_pad - right_pad
-                                      : 0u);
-  const uint16_t date_w =
-      calendar::textWidthPx(model.header_date, kHeaderDatePx, header_date_font);
-  const uint16_t time_w =
-      calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
-  metrics.date_x =
-      static_cast<uint16_t>(left_x + ((left_w > date_w) ? (left_w - date_w) / 2u : 0u));
-  metrics.date_y = static_cast<uint16_t>(metrics.card_y + top_pad);
-  metrics.time_x =
-      static_cast<uint16_t>(left_x + ((left_w > time_w) ? (left_w - time_w) / 2u : 0u));
-  metrics.time_y = static_cast<uint16_t>(
-      metrics.date_y +
-      calendar::textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
-  metrics.weather_y = (metrics.date_y > 2u) ? static_cast<uint16_t>(metrics.date_y - 2u) : metrics.date_y;
-  metrics.sensors_y = static_cast<uint16_t>(metrics.weather_y + kHeaderWeatherPx + 6u);
-  return metrics;
-}
-
-bool calendarBodyEquivalentForHeaderRefresh(const calendar::CalendarModel &previous_model,
-                                            const calendar::CalendarModel &current_model) {
-  if (previous_model.layout_mode != current_model.layout_mode ||
-      previous_model.ui_language != current_model.ui_language ||
-      previous_model.title != current_model.title ||
-      previous_model.header_date != current_model.header_date ||
-      previous_model.month_row_count != current_model.month_row_count ||
-      previous_model.visible_event_count != current_model.visible_event_count ||
-      previous_model.schedule_group_count != current_model.schedule_group_count) {
-    return false;
-  }
-  for (size_t i = 0; i < current_model.visible_event_count; ++i) {
-    if (!sameVisibleEvent(previous_model.visible_events[i], current_model.visible_events[i])) {
-      return false;
-    }
-  }
-  for (size_t i = 0; i < current_model.schedule_group_count; ++i) {
-    if (!sameScheduleGroup(previous_model.schedule_groups[i], current_model.schedule_groups[i])) {
-      return false;
-    }
-  }
-  for (size_t i = 0; i < 42; ++i) {
-    if (!sameDateCell(previous_model.date_cells[i], current_model.date_cells[i])) {
-      return false;
-    }
-    if (!sameDaySummary(previous_model.day_summaries[i], current_model.day_summaries[i])) {
-      return false;
-    }
-  }
-  return true;
-}
 
 uint32_t saturatingAddMs(uint32_t base_ms, uint32_t delta_ms) {
   const uint64_t sum = static_cast<uint64_t>(base_ms) + delta_ms;
@@ -597,7 +179,6 @@ void App::begin() {
   needs_render_ = true;
   calendar_layout_ = CalendarLayout::LandscapeSplit;
   force_calendar_full_refresh_ = true;
-  calendar_partial_refresh_count_ = 0;
   last_calendar_check_ms_ = 0;
   last_calendar_day_key_ = -1;
   last_calendar_render_minute_key_ = -1;
@@ -845,26 +426,12 @@ void App::updateCalendarAutoRefresh(uint32_t now_ms) {
     return;
   }
   const int32_t key = appfw::dayKeyFromTm(local_tm);
-  const int32_t minute_key = appfw::minuteKeyFromTm(local_tm);
-  const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
-  const bool time_slot_changed =
-      (time_refresh_sec != 0u) &&
-      (appfw::refreshBucketKey(minute_key, time_refresh_sec) !=
-       appfw::refreshBucketKey(last_calendar_render_minute_key_, time_refresh_sec));
   if (key != last_calendar_day_key_) {
     last_calendar_day_key_ = key;
     force_calendar_full_refresh_ = true;
     needs_render_ = true;
     startOperationTrace("auto", "CalendarDay", now_ms);
     Serial.printf("[AUTO] trigger=calendar_day key=%ld\n", static_cast<long>(key));
-    return;
-  }
-  if (minute_key != last_calendar_render_minute_key_ && time_slot_changed) {
-    needs_render_ = true;
-    startOperationTrace("auto", "CalendarTick", now_ms);
-    Serial.printf("[AUTO] trigger=calendar_time_bucket key=%ld interval=%lus\n",
-                  static_cast<long>(minute_key),
-                  static_cast<unsigned long>(time_refresh_sec));
     return;
   }
 
@@ -999,7 +566,6 @@ void App::updateCalendarBackgroundSync(uint32_t now_ms) {
 
   if (changed && state_ == AppState::Calendar) {
     force_calendar_full_refresh_ = true;
-    calendar_partial_refresh_count_ = 0;
     needs_render_ = true;
     calendar_skip_presync_once_ = true;
     calendar_start_background_sync_after_render_ = false;
@@ -1034,7 +600,6 @@ void App::applyCalendarLayoutFromConfig(bool force_apply) {
   if (force_apply || next != calendar_layout_) {
     calendar_layout_ = next;
     force_calendar_full_refresh_ = true;
-    calendar_partial_refresh_count_ = 0;
     if (state_ == AppState::Calendar) {
       needs_render_ = true;
     }
@@ -1052,7 +617,6 @@ void App::queueSettingsApplyFullRefresh(uint32_t now_ms, const char *reason) {
     return;
   }
   force_calendar_full_refresh_ = true;
-  calendar_partial_refresh_count_ = 0;
   needs_render_ = true;
   last_app_switch_ms_ = now_ms;
   Serial.printf("[CONFIG] WiFi exited with saved settings -> full refresh queued reason=%s\n",
@@ -1189,22 +753,15 @@ void App::render() {
     return;
   }
   const uint32_t now_ms = millis();
-  const bool partial_refresh =
-      (state_ == AppState::Calendar) && willUseCalendarPartialRefresh(now_ms);
-  if (state_ == AppState::Calendar && !partial_refresh &&
-      !ensureCalendarSyncBeforeFullRefresh(now_ms)) {
+  if (state_ == AppState::Calendar && !ensureCalendarSyncBeforeFullRefresh(now_ms)) {
     return;
   }
   const uint32_t render_begin_ms = millis();
   led_manager_.startBreath(state_ == AppState::Photo ? "photo_render" : "calendar_render");
 
-  Serial.printf("%s render begin partial=%s\n",
-                appStateLogTag(state_),
-                partial_refresh ? "true" : "false");
-  beginDisplaySession(partial_refresh);
-  if (!partial_refresh) {
-    wifi_manager_.sampleSensorsNow(true);
-  }
+  Serial.printf("%s render begin\n", appStateLogTag(state_));
+  beginDisplaySession();
+  wifi_manager_.sampleSensorsNow(true);
 
   if (state_ == AppState::Photo) {
     renderPhotoPage();
@@ -1293,18 +850,6 @@ uint32_t App::nextWakeDeadlineMs(uint32_t now_ms) const {
         (last_calendar_check_ms_ == 0u) ? saturatingAddMs(now_ms, check_interval_ms)
                                         : saturatingAddMs(last_calendar_check_ms_, check_interval_ms);
 
-    const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
-    if (time_valid && time_refresh_sec != 0u) {
-      const time_t next_time_bucket =
-          ((local_epoch / static_cast<time_t>(time_refresh_sec)) + 1) *
-          static_cast<time_t>(time_refresh_sec);
-      if (next_time_bucket > local_epoch) {
-        const uint32_t time_deadline = deadlineFromEpoch(now_ms, local_epoch, next_time_bucket);
-        if (time_deadline < deadline_ms) {
-          deadline_ms = time_deadline;
-        }
-      }
-    }
   }
 
   if (wifi_manager_.settings().app_auto_switch_enabled) {
@@ -1435,32 +980,6 @@ void App::prevPhoto(const char *reason, uint32_t now_ms) {
                 reason, (photo_file_count_ > 0) ? "epd4" : "clear");
 }
 
-bool App::willUseCalendarPartialRefresh(uint32_t now_ms) const {
-  if (state_ != AppState::Calendar) {
-    return false;
-  }
-
-  struct tm local_tm {};
-  time_t local_epoch = 0;
-  const bool time_valid = getLocalTimeSnapshot(now_ms, local_tm, local_epoch);
-  (void)local_epoch;
-  const int32_t minute_key = time_valid ? appfw::minuteKeyFromTm(local_tm) : -1;
-  const uint32_t time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
-  const bool time_only_refresh =
-      time_valid &&
-      !force_calendar_full_refresh_ &&
-      (minute_key != -1) &&
-      (minute_key != last_calendar_render_minute_key_) &&
-      (time_refresh_sec != 0u) &&
-      (appfw::refreshBucketKey(minute_key, time_refresh_sec) !=
-       appfw::refreshBucketKey(last_calendar_render_minute_key_, time_refresh_sec));
-  bool use_full = force_calendar_full_refresh_;
-  if (!use_full && calendar_partial_refresh_count_ >= kCalendarPartialBeforeFull) {
-    use_full = true;
-  }
-  return !use_full || time_only_refresh;
-}
-
 bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
   (void)now_ms;
   if (state_ != AppState::Calendar || !force_calendar_full_refresh_) {
@@ -1537,8 +1056,7 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
   return true;
 }
 
-void App::beginDisplaySession(bool partial_refresh) {
-  (void)partial_refresh;
+void App::beginDisplaySession() {
   setPeripheralPower(true);
   EPD_init_fast();
 }
@@ -1972,340 +1490,6 @@ void App::drawCalendarScene(const struct tm &local_tm, bool time_valid) {
   calendar::emitCalendarScene(calendar_model_cache_, calendar_layout_cache_, sink);
 }
 
-calendar::Rect App::calendarHeaderTimeRect(const calendar::CalendarModel &model,
-                                           const calendar::CalendarLayout &layout) const {
-  const String kTimeWindowSample = "88:88";
-  const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const uint16_t sample_w = calendar::textWidthPx(kTimeWindowSample, kHeaderTimePx,
-                                                  calendar::TextFont::Digit26);
-  const uint16_t time_w = calendar::textWidthPx(model.header_time, kHeaderTimePx,
-                                                calendar::TextFont::Digit26);
-  const uint16_t time_h = calendar::textHeightPx(kTimeWindowSample, kHeaderTimePx,
-                                                 calendar::TextFont::Digit26);
-  constexpr uint16_t kPadX = 2u;
-  constexpr uint16_t kPadTop = 2u;
-  constexpr uint16_t kPadBottom = 2u;
-  const uint16_t sample_offset =
-      (sample_w > time_w) ? static_cast<uint16_t>((sample_w - time_w) / 2u) : 0u;
-  const uint16_t rect_x = (header.time_x > sample_offset + kPadX)
-                              ? static_cast<uint16_t>(header.time_x - sample_offset - kPadX)
-                              : layout.header_bar.x;
-  const uint16_t rect_y = (header.time_y > kPadTop)
-                              ? static_cast<uint16_t>(header.time_y - kPadTop)
-                              : layout.header_bar.y;
-  const calendar::Rect raw = calendar::makeRect(
-      rect_x, rect_y, static_cast<uint16_t>(sample_w + kPadX * 2u),
-      static_cast<uint16_t>(time_h + kPadTop + kPadBottom));
-  return alignRectToPartialGrid(raw, layout.header_bar);
-}
-
-calendar::Rect App::calendarHeaderWeatherRect(const calendar::CalendarModel &model,
-                                              const calendar::CalendarLayout &layout) const {
-  const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const calendar::TextFont weather_font =
-      dynamicTextFont(model.header_weather, calendar::TextFont::Cjk30,
-                      calendar::TextFont::Auto, kHeaderWeatherPx);
-  const uint16_t right_x = header.meta_x;
-  const uint16_t status_group_w =
-      static_cast<uint16_t>(kHeaderWeatherIconSize + kHeaderStatusIconGap +
-                            kHeaderStatusIconSize + kHeaderStatusIconGap +
-                            kHeaderBatteryIconW + 2u);
-  const uint16_t icon_right =
-      static_cast<uint16_t>(weatherHeaderIconX(header, model.header_weather, weather_font) +
-                            status_group_w + 4u);
-  const uint16_t desired_w =
-      (icon_right > right_x) ? static_cast<uint16_t>(icon_right - right_x) : 0u;
-  const uint16_t available_w =
-      static_cast<uint16_t>(layout.header_bar.x + layout.header_bar.w > right_x
-                                ? (layout.header_bar.x + layout.header_bar.w - right_x)
-                                : 0u);
-  const uint16_t clamped_w =
-      (desired_w < available_w) ? desired_w : available_w;
-  const uint16_t text_h =
-      calendar::textHeightPx(model.header_weather, kHeaderWeatherPx, weather_font);
-  const calendar::Rect raw = calendar::makeRect(
-      right_x, (header.weather_y > 3u) ? static_cast<uint16_t>(header.weather_y - 3u)
-                                       : layout.header_bar.y,
-      clamped_w, static_cast<uint16_t>((text_h > kHeaderWeatherIconSize ? text_h : kHeaderWeatherIconSize) + 10u));
-  return alignRectToPartialGrid(raw, layout.header_bar);
-}
-
-calendar::Rect App::calendarHeaderSensorsRect(const calendar::CalendarModel &model,
-                                              const calendar::CalendarLayout &layout) const {
-  const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const uint16_t right_x = header.meta_x;
-  const uint16_t right_w =
-      static_cast<uint16_t>(layout.header_bar.x + layout.header_bar.w > right_x + 12u
-                                ? (layout.header_bar.x + layout.header_bar.w - right_x - 12u)
-                                : 0u);
-  const uint16_t text_h =
-      calendar::textHeightPx(model.header_sensors, kHeaderSensorsPx, calendar::TextFont::AsciiSmooth);
-  const calendar::Rect raw = calendar::makeRect(
-      right_x, (header.sensors_y > 3u) ? static_cast<uint16_t>(header.sensors_y - 3u)
-                                       : layout.header_bar.y,
-      right_w, static_cast<uint16_t>(text_h + 10u));
-  return alignRectToPartialGrid(raw, layout.header_bar);
-}
-
-bool App::redrawCalendarHeaderTime(const calendar::CalendarModel &model,
-                                   const calendar::CalendarLayout &layout,
-                                   calendar::Rect &physical_area) {
-  calendar::Rect rect = calendarHeaderTimeRect(model, layout);
-  if (rect.w == 0 || rect.h == 0) {
-    return false;
-  }
-  if (calendarUsesPortraitRotation()) {
-    if (!ensureCalendarFrameBuffer("portrait_header_partial")) {
-      return false;
-    }
-    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    const uint16_t time_w =
-        calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
-    const uint16_t time_h =
-        calendar::textHeightPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
-    const uint16_t time_x =
-        static_cast<uint16_t>(rect.x + ((rect.w > time_w) ? (rect.w - time_w) / 2u : 0u));
-    const uint16_t time_y =
-        static_cast<uint16_t>(rect.y + ((rect.h > time_h) ? (rect.h - time_h) / 2u : 0u));
-    drawCalendarText3x5(time_x, time_y, model.header_time, kHeaderTimePx, black,
-                        calendar::TextFont::Digit26, calendar::TextAAMode::Threshold);
-    physical_area = calendarLogicalRectToPhysical(rect);
-    pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
-    return true;
-  }
-  if ((rect.x & 0x01u) != 0u) {
-    --rect.x;
-    ++rect.w;
-  }
-  if ((rect.w & 0x01u) != 0u) {
-    ++rect.w;
-  }
-  if ((rect.x + rect.w) > kScreenWidth) {
-    rect.w = static_cast<uint16_t>(kScreenWidth - rect.x);
-    rect.w &= static_cast<uint16_t>(~0x01u);
-  }
-  if (rect.w < 2u) {
-    return false;
-  }
-  physical_area = rect;
-
-  const uint16_t time_w =
-      calendar::textWidthPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
-  const uint16_t time_h =
-      calendar::textHeightPx(model.header_time, kHeaderTimePx, calendar::TextFont::Digit26);
-  const uint16_t time_x =
-      static_cast<uint16_t>(rect.x + ((rect.w > time_w) ? (rect.w - time_w) / 2u : 0u));
-  const uint16_t time_y =
-      static_cast<uint16_t>(rect.y + ((rect.h > time_h) ? (rect.h - time_h) / 2u : 0u));
-  if (!calendar_window_buffer_.ensure(rect.w, rect.h)) {
-    return false;
-  }
-  calendar_window_buffer_.clear(white);
-  if (kDebugCalendarHeaderPartialPattern) {
-    const uint16_t rw = calendar_window_buffer_.widthPx();
-    const uint16_t rh = calendar_window_buffer_.rows();
-    const uint16_t right = (rw > 0) ? static_cast<uint16_t>(rw - 1u) : 0u;
-    const uint16_t bottom = (rh > 0) ? static_cast<uint16_t>(rh - 1u) : 0u;
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, 0, 0, rw, 1, white);
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, 0, bottom, rw, 1, white);
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, 0, 0, 1, rh, white);
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, right, 0, 1, rh, white);
-
-    const uint16_t mid_x = rw / 2u;
-    const uint16_t mid_y = rh / 2u;
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, mid_x, 0, 1, rh, yellow);
-    fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh, 0, mid_y, rw, 1, green);
-    drawPackedBufferLine(calendar_window_buffer_.data(), rw, rh, 0, 0, right, bottom, red);
-    drawPackedBufferLine(calendar_window_buffer_.data(), rw, rh, 0, bottom, right, 0, black);
-
-    const uint16_t block_x = (rw > 56u) ? static_cast<uint16_t>(rw - 50u) : 6u;
-    const uint16_t block_y = 6u;
-    const uint16_t cell = 8u;
-    for (uint8_t row = 0; row < 3; ++row) {
-      for (uint8_t col = 0; col < 3; ++col) {
-        const uint8_t color = ((row + col) & 0x01u) ? white : black;
-        fillPackedBufferRect(calendar_window_buffer_.data(), rw, rh,
-                             static_cast<uint16_t>(block_x + col * cell),
-                             static_cast<uint16_t>(block_y + row * cell), cell, cell, color);
-      }
-    }
-    drawPackedBufferText(calendar_window_buffer_.data(), rw, rh, 8u,
-                         static_cast<uint16_t>((rh > 28u) ? (rh - 24u) : 4u),
-                         "88:88", 24, white, calendar::TextFont::AsciiSmooth,
-                         calendar::TextAAMode::Threshold);
-
-    if (calendar_frame_ != nullptr) {
-      fillCalendarRect(rect.x, rect.y, rect.w, rect.h, blue);
-      fillCalendarRect(rect.x, rect.y, rect.w, 1, white);
-      fillCalendarRect(rect.x, static_cast<uint16_t>(rect.y + rect.h - 1u), rect.w, 1, white);
-      fillCalendarRect(rect.x, rect.y, 1, rect.h, white);
-      fillCalendarRect(static_cast<uint16_t>(rect.x + rect.w - 1u), rect.y, 1, rect.h, white);
-      fillCalendarRect(static_cast<uint16_t>(rect.x + mid_x), rect.y, 1, rect.h, yellow);
-      fillCalendarRect(rect.x, static_cast<uint16_t>(rect.y + mid_y), rect.w, 1, green);
-      for (uint16_t i = 0; i < rect.w && i < rect.h; ++i) {
-        fillCalendarRect(static_cast<uint16_t>(rect.x + i), static_cast<uint16_t>(rect.y + i),
-                         1, 1, red);
-        fillCalendarRect(static_cast<uint16_t>(rect.x + i),
-                         static_cast<uint16_t>(rect.y + rect.h - 1u - i), 1, 1, black);
-      }
-      for (uint8_t row = 0; row < 3; ++row) {
-        for (uint8_t col = 0; col < 3; ++col) {
-          const uint8_t color = ((row + col) & 0x01u) ? white : black;
-          fillCalendarRect(static_cast<uint16_t>(rect.x + block_x + col * cell),
-                           static_cast<uint16_t>(rect.y + block_y + row * cell), cell, cell,
-                           color);
-        }
-      }
-      drawCalendarText3x5(static_cast<uint16_t>(rect.x + 8u),
-                          static_cast<uint16_t>(rect.y + ((rh > 28u) ? (rh - 24u) : 4u)),
-                          "88:88", 24, white, calendar::TextFont::AsciiSmooth,
-                          calendar::TextAAMode::Threshold);
-    }
-  } else {
-    drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
-                         calendar_window_buffer_.rows(),
-                         static_cast<uint16_t>(time_x - rect.x),
-                         static_cast<uint16_t>(time_y - rect.y),
-                         model.header_time, kHeaderTimePx, black, calendar::TextFont::Digit26,
-                         calendar::TextAAMode::Threshold);
-    if (calendar_frame_ != nullptr) {
-      fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-      drawCalendarText3x5(time_x, time_y, model.header_time, kHeaderTimePx, black,
-                          calendar::TextFont::Digit26, calendar::TextAAMode::Threshold);
-    }
-  }
-  partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),
-                                         calendar_window_buffer_.widthPx(),
-                                         rect.x, rect.y, rect.w, rect.h);
-  return true;
-}
-
-bool App::redrawCalendarHeaderWeather(const calendar::CalendarModel &model,
-                                      const calendar::CalendarLayout &layout,
-                                      calendar::Rect &physical_area) {
-  const calendar::Rect rect = calendarHeaderWeatherRect(model, layout);
-  if (rect.w == 0 || rect.h == 0) {
-    return false;
-  }
-  const calendar::TextFont font =
-      dynamicTextFont(model.header_weather, calendar::TextFont::Cjk30,
-                      calendar::TextFont::Auto, kHeaderWeatherPx);
-  const calendar::TextAAMode aa_mode =
-      preferredAsciiAAMode(model.header_weather, font, kHeaderWeatherPx);
-  const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-
-  if (calendarUsesPortraitRotation()) {
-    if (!ensureCalendarFrameBuffer("portrait_header_weather_partial")) {
-      return false;
-    }
-    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    CalendarFrameSink frame_sink(*this);
-    calendar::emitCalendarWeatherHeader(model, layout, frame_sink);
-    physical_area = calendarLogicalRectToPhysical(rect);
-    pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
-    return true;
-  }
-
-  if (!calendar_window_buffer_.ensure(rect.w, rect.h)) {
-    return false;
-  }
-  calendar_window_buffer_.clear(white);
-  PackedBufferSceneSink buffer_sink(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
-                                    calendar_window_buffer_.rows(), rect.x, rect.y);
-  calendar::emitCalendarWeatherHeader(model, layout, buffer_sink);
-  if (calendar_frame_ != nullptr) {
-    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    CalendarFrameSink frame_sink(*this);
-    calendar::emitCalendarWeatherHeader(model, layout, frame_sink);
-  }
-  physical_area = rect;
-  partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),
-                                         calendar_window_buffer_.widthPx(), rect.x, rect.y, rect.w,
-                                         rect.h);
-  return true;
-}
-
-bool App::redrawCalendarHeaderSensors(const calendar::CalendarModel &model,
-                                      const calendar::CalendarLayout &layout,
-                                      calendar::Rect &physical_area) {
-  const calendar::Rect rect = calendarHeaderSensorsRect(model, layout);
-  if (rect.w == 0 || rect.h == 0) {
-    return false;
-  }
-  const calendar::TextFont font =
-      preferredTextFont(model.header_sensors, calendar::TextFont::Auto, kHeaderSensorsPx);
-  const calendar::TextAAMode aa_mode =
-      preferredAsciiAAMode(model.header_sensors, font, kHeaderSensorsPx);
-  const calendar::TextFont header_date_font =
-      preferredTextFont(model.header_date, calendar::TextFont::Auto, kHeaderDatePx);
-  const HeaderMetrics header = computeHeaderMetrics(model, layout, header_date_font);
-  const uint16_t text_w = calendar::textWidthPx(model.header_sensors, kHeaderSensorsPx, font);
-  const uint16_t text_x =
-      (header.meta_w > text_w)
-          ? static_cast<uint16_t>(header.meta_x + header.meta_w - text_w)
-          : header.meta_x;
-  const uint16_t text_y = header.sensors_y;
-  const HeaderSensorTextParts sensor_parts = splitHeaderSensors(model.header_sensors);
-  const String temperature_with_space = sensor_parts.temperature + " ";
-  const uint16_t humidity_x =
-      static_cast<uint16_t>(text_x + calendar::textWidthPx(temperature_with_space,
-                                                           kHeaderSensorsPx, font));
-
-  if (calendarUsesPortraitRotation()) {
-    if (!ensureCalendarFrameBuffer("portrait_header_sensors_partial")) {
-      return false;
-    }
-    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    drawCalendarText3x5(text_x, text_y, sensor_parts.temperature, kHeaderSensorsPx, red, font,
-                        aa_mode);
-    if (sensor_parts.humidity.length() > 0) {
-      drawCalendarText3x5(humidity_x, text_y, sensor_parts.humidity, kHeaderSensorsPx, blue, font,
-                          aa_mode);
-    }
-    physical_area = calendarLogicalRectToPhysical(rect);
-    pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
-    return true;
-  }
-
-  if (!calendar_window_buffer_.ensure(rect.w, rect.h)) {
-    return false;
-  }
-  calendar_window_buffer_.clear(white);
-  drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
-                       calendar_window_buffer_.rows(), static_cast<uint16_t>(text_x - rect.x),
-                       static_cast<uint16_t>(text_y - rect.y), sensor_parts.temperature,
-                       kHeaderSensorsPx, red, font, aa_mode);
-  if (sensor_parts.humidity.length() > 0) {
-    drawPackedBufferText(calendar_window_buffer_.data(), calendar_window_buffer_.widthPx(),
-                         calendar_window_buffer_.rows(),
-                         static_cast<uint16_t>(humidity_x - rect.x),
-                         static_cast<uint16_t>(text_y - rect.y), sensor_parts.humidity,
-                         kHeaderSensorsPx, blue, font, aa_mode);
-  }
-  if (calendar_frame_ != nullptr) {
-    fillCalendarRect(rect.x, rect.y, rect.w, rect.h, white);
-    drawCalendarText3x5(text_x, text_y, sensor_parts.temperature, kHeaderSensorsPx, red, font,
-                        aa_mode);
-    if (sensor_parts.humidity.length() > 0) {
-      drawCalendarText3x5(humidity_x, text_y, sensor_parts.humidity, kHeaderSensorsPx, blue, font,
-                          aa_mode);
-    }
-  }
-  physical_area = rect;
-  partial_refresh::writeWindowFromBuffer(calendar_window_buffer_.data(),
-                                         calendar_window_buffer_.widthPx(), rect.x, rect.y, rect.w,
-                                         rect.h);
-  return true;
-}
-
 void App::rebuildCalendarSceneCache(const struct tm &local_tm, bool time_valid) {
   const calendar::LayoutMode layout_mode =
       (calendar_layout_ == CalendarLayout::LandscapeSplit)
@@ -2381,126 +1565,22 @@ void App::pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
   waitEpdReadyWithLed();
 }
 
-void App::pushCalendarPartialRefresh(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
-  if (calendar_frame_ == nullptr) {
-    return;
-  }
-  partial_refresh::writeWindowFromPacked(calendar_frame_, kScreenWidth, x, y, w, h);
-}
-
 void App::renderCalendarPage(uint32_t now_ms) {
   struct tm local_tm {};
   time_t local_epoch = 0;
   const bool time_valid = getLocalTimeSnapshot(now_ms, local_tm, local_epoch);
   const int32_t minute_key = time_valid ? appfw::minuteKeyFromTm(local_tm) : -1;
-  const int32_t previous_day_key = last_calendar_day_key_;
-  previous_calendar_model_cache_ = calendar_model_cache_;
-  const calendar::CalendarModel &previous_model = previous_calendar_model_cache_;
   if (time_valid) {
     last_calendar_day_key_ = appfw::dayKeyFromTm(local_tm);
   }
   rebuildCalendarSceneCache(local_tm, time_valid);
-  const bool body_changed =
-      !calendarBodyEquivalentForHeaderRefresh(previous_model, calendar_model_cache_);
-  const bool header_time_changed = previous_model.header_time != calendar_model_cache_.header_time;
-  // Right-side info fields are full-page-only. Partial refresh is reserved for time ticks.
-  const bool header_weather_changed = false;
-  const bool header_sensors_changed = false;
-  const calendar::Rect logical_full_screen = calendar_layout_cache_.screen;
-  const calendar::Rect logical_header_time =
-      calendarHeaderTimeRect(calendar_model_cache_, calendar_layout_cache_);
-  const calendar::Rect logical_header_weather =
-      calendarHeaderWeatherRect(calendar_model_cache_, calendar_layout_cache_);
-  const calendar::Rect logical_header_sensors =
-      calendarHeaderSensorsRect(calendar_model_cache_, calendar_layout_cache_);
-  appfw::CalendarRefreshInputs refresh_inputs;
-  refresh_inputs.force_full_refresh = force_calendar_full_refresh_;
-  refresh_inputs.time_valid = time_valid;
-  refresh_inputs.day_key = time_valid ? appfw::dayKeyFromTm(local_tm) : -1;
-  refresh_inputs.last_day_key = previous_day_key;
-  refresh_inputs.minute_key = minute_key;
-  refresh_inputs.last_render_minute_key = last_calendar_render_minute_key_;
-  refresh_inputs.time_refresh_sec = wifi_manager_.settings().calendar_time_refresh_sec;
-  refresh_inputs.partial_refresh_count = calendar_partial_refresh_count_;
-  refresh_inputs.partial_before_full = kCalendarPartialBeforeFull;
-  refresh_inputs.body_changed = body_changed;
-  refresh_inputs.header_time_changed = header_time_changed;
-  refresh_inputs.header_weather_changed = header_weather_changed;
-  refresh_inputs.header_sensors_changed = header_sensors_changed;
-  refresh_inputs.full_screen_rect = logical_full_screen;
-  refresh_inputs.header_time_rect = logical_header_time;
-  refresh_inputs.header_weather_rect = logical_header_weather;
-  refresh_inputs.header_sensors_rect = logical_header_sensors;
-  const appfw::CalendarRefreshPlan refresh_plan =
-      appfw::planCalendarRefresh(refresh_inputs);
-
-  if (refresh_plan.mode == appfw::CalendarRefreshMode::Full) {
-    pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
-    force_calendar_full_refresh_ = false;
-    calendar_pre_refresh_wifi_connected_ = false;
-    calendar_partial_refresh_count_ = 0;
-    last_calendar_check_ms_ = millis();
-    Serial.printf("[CAL] full refresh layout=%s reason=%s\n",
-                  (calendar_layout_ == CalendarLayout::LandscapeSplit) ? "landscape_split"
-                                                                        : "portrait_split",
-                  appfw::calendarRefreshReasonName(refresh_plan.reason));
-  } else if (refresh_plan.reason == appfw::CalendarRefreshReason::TimeTick ||
-             refresh_plan.reason == appfw::CalendarRefreshReason::HeaderFieldsChanged) {
-    const uint32_t partial_begin_ms = millis();
-    bool ok = true;
-    calendar::Rect last_area = calendar::makeRect(0, 0, 0, 0);
-    for (size_t i = 0; i < refresh_plan.dirty.count; ++i) {
-      const appfw::CalendarDirtyRegionKind kind = refresh_plan.dirty.kinds[i];
-      calendar::Rect area = calendar::makeRect(0, 0, 0, 0);
-      bool region_ok = false;
-      if (kind == appfw::CalendarDirtyRegionKind::HeaderTime) {
-        region_ok = redrawCalendarHeaderTime(calendar_model_cache_, calendar_layout_cache_, area);
-      } else if (kind == appfw::CalendarDirtyRegionKind::HeaderWeather) {
-        region_ok = redrawCalendarHeaderWeather(calendar_model_cache_, calendar_layout_cache_, area);
-      } else if (kind == appfw::CalendarDirtyRegionKind::HeaderSensors) {
-        region_ok = redrawCalendarHeaderSensors(calendar_model_cache_, calendar_layout_cache_, area);
-      }
-      if (!region_ok) {
-        ok = false;
-        break;
-      }
-      last_area = area;
-    }
-    if (!ok) {
-      pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
-      force_calendar_full_refresh_ = false;
-      calendar_pre_refresh_wifi_connected_ = false;
-      calendar_partial_refresh_count_ = 0;
-      Serial.println("[CAL] header partial unavailable -> full striped refresh");
-      last_calendar_render_minute_key_ = minute_key;
-      return;
-    }
-    Serial.printf("[CAL] header partial reason=%s regions=%u last_area=(%u,%u,%u,%u) elapsed=%lums\n",
-                  appfw::calendarRefreshReasonName(refresh_plan.reason),
-                  static_cast<unsigned>(refresh_plan.dirty.count),
-                  last_area.x, last_area.y, last_area.w, last_area.h,
-                  static_cast<unsigned long>(millis() - partial_begin_ms));
-  } else {
-    if (ensureCalendarFrameBuffer("partial_refresh")) {
-      drawCalendarScene(local_tm, time_valid);
-      const calendar::Rect logical_area =
-          (refresh_plan.dirty.count > 0) ? refresh_plan.dirty.rects[0] : logical_full_screen;
-      const calendar::Rect physical_area = calendarLogicalRectToPhysical(logical_area);
-      pushCalendarPartialRefresh(physical_area.x, physical_area.y, physical_area.w, physical_area.h);
-      ++calendar_partial_refresh_count_;
-      Serial.printf("[CAL] partial refresh count=%u reason=%s logical=(%u,%u,%u,%u) physical=(%u,%u,%u,%u)\n",
-                    calendar_partial_refresh_count_,
-                    appfw::calendarRefreshReasonName(refresh_plan.reason),
-                    logical_area.x, logical_area.y, logical_area.w, logical_area.h,
-                    physical_area.x, physical_area.y, physical_area.w, physical_area.h);
-    } else {
-      pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
-      force_calendar_full_refresh_ = false;
-      calendar_pre_refresh_wifi_connected_ = false;
-      calendar_partial_refresh_count_ = 0;
-      Serial.println("[CAL] partial path unavailable -> full striped refresh");
-    }
-  }
+  pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
+  force_calendar_full_refresh_ = false;
+  calendar_pre_refresh_wifi_connected_ = false;
+  last_calendar_check_ms_ = millis();
+  Serial.printf("[CAL] full refresh layout=%s\n",
+                (calendar_layout_ == CalendarLayout::LandscapeSplit) ? "landscape_split"
+                                                                      : "portrait_split");
   last_calendar_render_minute_key_ = minute_key;
 }
 

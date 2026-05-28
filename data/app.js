@@ -33,7 +33,6 @@ const appAutoSwitch = document.getElementById("appAutoSwitch");
 const appSwitchSec = document.getElementById("appSwitchSec");
 const appSwitchSecField = document.getElementById("appSwitchSecField");
 const calendarSec = document.getElementById("calendarSec");
-const calendarTimeRefreshSec = document.getElementById("calendarTimeRefreshSec");
 const sleepStart = document.getElementById("sleepStart");
 const sleepEnd = document.getElementById("sleepEnd");
 const calendarUrl = document.getElementById("calendarUrl");
@@ -129,13 +128,6 @@ const I18N = {
     "cfg.calendar.layout_landscape": "横屏半屏（左日历 / 右日程）",
     "cfg.calendar.layout_portrait": "竖屏半屏（上日历 / 下日程）",
     "cfg.calendar.refresh_sec": "日历刷新间隔（小时）",
-    "cfg.calendar.time_refresh": "时间刷新间隔",
-    "cfg.calendar.time_refresh_10": "10 分钟",
-    "cfg.calendar.time_refresh_15": "15 分钟",
-    "cfg.calendar.time_refresh_20": "20 分钟",
-    "cfg.calendar.time_refresh_30": "30 分钟",
-    "cfg.calendar.time_refresh_60": "60 分钟",
-    "cfg.calendar.time_refresh_follow": "与日历页同时刷新",
     "cfg.calendar.sleep_start": "休眠开始",
     "cfg.calendar.sleep_end": "休眠结束",
     "cfg.calendar.url": "日历数据 URL",
@@ -346,13 +338,6 @@ const I18N = {
     "cfg.calendar.layout_landscape": "Landscape Split (calendar left / schedule right)",
     "cfg.calendar.layout_portrait": "Portrait Split (calendar top / schedule bottom)",
     "cfg.calendar.refresh_sec": "Refresh interval (hours)",
-    "cfg.calendar.time_refresh": "Time refresh interval",
-    "cfg.calendar.time_refresh_10": "10 minutes",
-    "cfg.calendar.time_refresh_15": "15 minutes",
-    "cfg.calendar.time_refresh_20": "20 minutes",
-    "cfg.calendar.time_refresh_30": "30 minutes",
-    "cfg.calendar.time_refresh_60": "60 minutes",
-    "cfg.calendar.time_refresh_follow": "Follow calendar page refresh",
     "cfg.calendar.sleep_start": "Sleep starts",
     "cfg.calendar.sleep_end": "Sleep ends",
     "cfg.calendar.url": "Calendar URL (reserved)",
@@ -563,13 +548,6 @@ const I18N = {
     "cfg.calendar.layout_landscape": "Partage paysage (calendrier gauche / planning droite)",
     "cfg.calendar.layout_portrait": "Partage portrait (calendrier haut / planning bas)",
     "cfg.calendar.refresh_sec": "Intervalle de rafraichissement (heures)",
-    "cfg.calendar.time_refresh": "Intervalle d actualisation de l heure",
-    "cfg.calendar.time_refresh_10": "10 minutes",
-    "cfg.calendar.time_refresh_15": "15 minutes",
-    "cfg.calendar.time_refresh_20": "20 minutes",
-    "cfg.calendar.time_refresh_30": "30 minutes",
-    "cfg.calendar.time_refresh_60": "60 minutes",
-    "cfg.calendar.time_refresh_follow": "Suivre le rafraichissement du calendrier",
     "cfg.calendar.sleep_start": "Debut veille",
     "cfg.calendar.sleep_end": "Fin veille",
     "cfg.calendar.url": "URL calendrier (reserve)",
@@ -728,11 +706,6 @@ const I18N = {
 function normalizeLang(raw) {
   const lang = String(raw || "").trim().toLowerCase();
   return (lang === "en" || lang === "fr") ? lang : "zh";
-}
-
-function normalizeCalendarTimeRefreshSec(raw) {
-  const value = Number(raw);
-  return [0, 600, 900, 1200, 1800, 3600].includes(value) ? value : 900;
 }
 
 function secondsToHoursValue(seconds, fallbackSeconds) {
@@ -1143,9 +1116,6 @@ async function loadCfg() {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
   calendarSec.value = secondsToHoursValue(j.calendar_refresh_sec, 3600);
-  if (calendarTimeRefreshSec) {
-    calendarTimeRefreshSec.value = String(normalizeCalendarTimeRefreshSec(j.calendar_time_refresh_sec));
-  }
   if (sleepStart) sleepStart.value = j.sleep_start || "22:00";
   if (sleepEnd) sleepEnd.value = j.sleep_end || "08:00";
   calendarUrl.value = j.calendar_url || "";
@@ -1170,9 +1140,6 @@ async function saveCfg() {
     }
 
     const calendarLayoutValue = calendarLayout ? calendarLayout.value : "landscape_split";
-    const calendarTimeRefreshValue = calendarTimeRefreshSec
-      ? normalizeCalendarTimeRefreshSec(calendarTimeRefreshSec.value)
-      : 900;
     const sleepStartValue = sleepStart ? sleepStart.value : "22:00";
     const sleepEndValue = sleepEnd ? sleepEnd.value : "08:00";
     const appSwitchEnabled = appAutoSwitch && appAutoSwitch.checked ? "1" : "0";
@@ -1183,7 +1150,7 @@ async function saveCfg() {
     const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
       ? normalizeAuthMode(staAuthMode.value)
       : "auto";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarRefreshInterval)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarRefreshInterval)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",

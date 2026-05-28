@@ -3,10 +3,29 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <string>
+
+#if defined(_WIN32)
+inline tm *localtime_r(const time_t *timep, tm *result) {
+  return (localtime_s(result, timep) == 0) ? result : nullptr;
+}
+
+inline int setenv(const char *name, const char *value, int overwrite) {
+  if (!overwrite && std::getenv(name) != nullptr) {
+    return 0;
+  }
+  return _putenv_s(name, value ? value : "");
+}
+
+inline int unsetenv(const char *name) {
+  return _putenv_s(name, "");
+}
+#endif
 
 class String {
  public:
@@ -47,6 +66,8 @@ class String {
   bool operator==(const char *other) const { return value_ == (other ? other : ""); }
   bool operator!=(const String &other) const { return value_ != other.value_; }
   bool operator!=(const char *other) const { return value_ != (other ? other : ""); }
+  int compareTo(const String &other) const { return value_.compare(other.value_); }
+  int compareTo(const char *other) const { return value_.compare(other ? other : ""); }
 
   char operator[](size_t index) const { return value_[index]; }
 

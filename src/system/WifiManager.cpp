@@ -19,7 +19,6 @@
 #include <esp_wifi.h>
 #include <esp_wpa2.h>
 
-#include "system/CalendarSettings.h"
 #include "system/CalendarEventNormalize.h"
 #include "system/CalendarIcsCore.h"
 #include "system/CalendarSyncService.h"
@@ -3312,7 +3311,6 @@ void WifiManager::handleSettingsGet() {
   json += settings_.calendar_enabled ? "true," : "false,";
   json += "\"calendar_layout\":\"" + jsonEscape(settings_.calendar_layout) + "\",";
   json += "\"calendar_refresh_sec\":" + String(settings_.calendar_refresh_sec) + ",";
-  json += "\"calendar_time_refresh_sec\":" + String(settings_.calendar_time_refresh_sec) + ",";
   json += "\"sleep_start\":\"" + formatMinuteHm(settings_.sleep_start_minute) + "\",";
   json += "\"sleep_end\":\"" + formatMinuteHm(settings_.sleep_end_minute) + "\",";
   json += "\"calendar_url\":\"" + jsonEscape(settings_.calendar_url) + "\",";
@@ -3365,10 +3363,6 @@ void WifiManager::handleSettingsPost() {
         static_cast<uint32_t>(server_->arg("calendar_refresh_sec").toInt());
     if (settings_.calendar_refresh_sec < 60) settings_.calendar_refresh_sec = 60;
     if (settings_.calendar_refresh_sec > 86400) settings_.calendar_refresh_sec = 86400;
-  }
-  if (server_->hasArg("calendar_time_refresh_sec")) {
-    settings_.calendar_time_refresh_sec = normalizeCalendarTimeRefreshSec(
-        static_cast<uint32_t>(server_->arg("calendar_time_refresh_sec").toInt()));
   }
   if (server_->hasArg("sleep_start")) {
     uint16_t minute = settings_.sleep_start_minute;

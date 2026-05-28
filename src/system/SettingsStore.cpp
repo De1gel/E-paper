@@ -34,7 +34,6 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
   settings.calendar_enabled = false;
   settings.calendar_layout = "landscape_split";
   settings.calendar_refresh_sec = 3600;
-  settings.calendar_time_refresh_sec = 900;
   settings.sleep_start_minute = 22 * 60;
   settings.sleep_end_minute = 8 * 60;
   settings.calendar_url = kDefaultCalendarUrl;
@@ -74,8 +73,6 @@ void SettingsStore::normalize(WifiSettings &settings) {
     settings.ui_language = kDefaultUiLanguage;
   }
 
-  settings.calendar_time_refresh_sec =
-      normalizeCalendarTimeRefreshSec(settings.calendar_time_refresh_sec);
   if (settings.app_switch_interval_sec < 60) settings.app_switch_interval_sec = 60;
   if (settings.app_switch_interval_sec > 86400) settings.app_switch_interval_sec = 86400;
   settings.sleep_start_minute = normalizeSleepWindowMinute(settings.sleep_start_minute, 22 * 60);
@@ -130,10 +127,6 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   if (prefs.isKey("cal_en")) settings.calendar_enabled = prefs.getBool("cal_en", false);
   if (prefs.isKey("cal_layout")) settings.calendar_layout = prefs.getString("cal_layout", "landscape_split");
   if (prefs.isKey("cal_sec")) settings.calendar_refresh_sec = prefs.getUInt("cal_sec", 3600);
-  if (prefs.isKey("cal_time_sec")) {
-    settings.calendar_time_refresh_sec =
-        prefs.getUInt("cal_time_sec", settings.calendar_time_refresh_sec);
-  }
   if (prefs.isKey("sleep_start")) {
     settings.sleep_start_minute =
         static_cast<uint16_t>(prefs.getUInt("sleep_start", settings.sleep_start_minute));
@@ -184,7 +177,6 @@ bool SettingsStore::save(Preferences &prefs, const WifiSettings &settings,
   prefs.putBool("cal_en", settings.calendar_enabled);
   prefs.putString("cal_layout", settings.calendar_layout);
   prefs.putUInt("cal_sec", settings.calendar_refresh_sec);
-  prefs.putUInt("cal_time_sec", settings.calendar_time_refresh_sec);
   prefs.putUInt("sleep_start", settings.sleep_start_minute);
   prefs.putUInt("sleep_end", settings.sleep_end_minute);
   prefs.putString("cal_url", settings.calendar_url);

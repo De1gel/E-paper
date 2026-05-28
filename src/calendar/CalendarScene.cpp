@@ -10,11 +10,9 @@ namespace {
 
 constexpr uint8_t kAsciiBasePx = 7;
 constexpr uint8_t kZhWeekdayPx = 26;
-constexpr uint8_t kHeaderDatePx = 20;
-constexpr uint8_t kHeaderTimePx = 26;
+constexpr uint8_t kHeaderDatePx = 24;
 constexpr uint8_t kHeaderWeatherPx = 30;
 constexpr uint8_t kHeaderSensorsPx = 20;
-constexpr uint16_t kPartialAlignPx = 4u;
 constexpr uint16_t kHeaderWeatherIconSize = 24u;
 constexpr uint16_t kHeaderWeatherIconGap = 6u;
 constexpr uint16_t kHeaderWeatherIconOffsetX = 12u;
@@ -39,8 +37,6 @@ struct HeaderMetrics {
   uint16_t card_h = 0;
   uint16_t date_x = 0;
   uint16_t date_y = 0;
-  uint16_t time_x = 0;
-  uint16_t time_y = 0;
   uint16_t meta_x = 0;
   uint16_t meta_w = 0;
   uint16_t weather_y = 0;
@@ -503,77 +499,13 @@ HeaderMetrics computeHeaderMetrics(const CalendarLayout &layout, const CalendarM
                                       ? metrics.card_w - left_pad - right_pad
                                       : 0u);
   const uint16_t date_w = textWidthPx(model.header_date, kHeaderDatePx, header_date_font);
-  const uint16_t time_w = textWidthPx(model.header_time, kHeaderTimePx, TextFont::Digit26);
+  const uint16_t date_h = textHeightPx(model.header_date, kHeaderDatePx, header_date_font);
   metrics.date_x = static_cast<uint16_t>(left_x + ((left_w > date_w) ? (left_w - date_w) / 2u : 0u));
-  metrics.date_y = static_cast<uint16_t>(metrics.card_y + top_pad);
-  metrics.time_x = static_cast<uint16_t>(left_x + ((left_w > time_w) ? (left_w - time_w) / 2u : 0u));
-  metrics.time_y = static_cast<uint16_t>(
-      metrics.date_y + textHeightPx(model.header_date, kHeaderDatePx, header_date_font) + 7u);
-  metrics.weather_y = (metrics.date_y > 2u) ? static_cast<uint16_t>(metrics.date_y - 2u) : metrics.date_y;
+  metrics.date_y = static_cast<uint16_t>(
+      metrics.card_y + ((metrics.card_h > date_h) ? (metrics.card_h - date_h) / 2u : 0u));
+  metrics.weather_y = static_cast<uint16_t>(metrics.card_y + top_pad);
   metrics.sensors_y = static_cast<uint16_t>(metrics.weather_y + kHeaderWeatherPx + 6u);
   return metrics;
-}
-
-Rect alignHeaderRectToPartialGrid(const Rect &rect, const Rect &bounds) {
-  if (rect.w == 0 || rect.h == 0 || bounds.w == 0 || bounds.h == 0) {
-    return makeRect(0, 0, 0, 0);
-  }
-  uint16_t x0 = rect.x;
-  uint16_t y0 = rect.y;
-  uint16_t x1 = static_cast<uint16_t>(rect.x + rect.w);
-  uint16_t y1 = static_cast<uint16_t>(rect.y + rect.h);
-  const uint16_t bounds_x1 = static_cast<uint16_t>(bounds.x + bounds.w);
-  const uint16_t bounds_y1 = static_cast<uint16_t>(bounds.y + bounds.h);
-  if (x0 < bounds.x) x0 = bounds.x;
-  if (y0 < bounds.y) y0 = bounds.y;
-  if (x1 > bounds_x1) x1 = bounds_x1;
-  if (y1 > bounds_y1) y1 = bounds_y1;
-  x0 = static_cast<uint16_t>((x0 / kPartialAlignPx) * kPartialAlignPx);
-  y0 = static_cast<uint16_t>((y0 / kPartialAlignPx) * kPartialAlignPx);
-  x1 = static_cast<uint16_t>(((x1 + kPartialAlignPx - 1u) / kPartialAlignPx) * kPartialAlignPx);
-  y1 = static_cast<uint16_t>(((y1 + kPartialAlignPx - 1u) / kPartialAlignPx) * kPartialAlignPx);
-  if (x1 > bounds_x1) x1 = bounds_x1;
-  if (y1 > bounds_y1) y1 = bounds_y1;
-  if (x1 <= x0 || y1 <= y0) {
-    return makeRect(0, 0, 0, 0);
-  }
-  return makeRect(x0, y0, static_cast<uint16_t>(x1 - x0), static_cast<uint16_t>(y1 - y0));
-}
-
-Rect headerTimeRefreshRect(const CalendarLayout &layout, const CalendarModel &model,
-                           TextFont header_date_font) {
-  const HeaderMetrics header = computeHeaderMetrics(layout, model, header_date_font);
-  const String kTimeWindowSample = "88:88";
-  const uint16_t sample_w = textWidthPx(kTimeWindowSample, kHeaderTimePx, TextFont::Digit26);
-  const uint16_t time_w = textWidthPx(model.header_time, kHeaderTimePx, TextFont::Digit26);
-  const uint16_t time_h = textHeightPx(kTimeWindowSample, kHeaderTimePx, TextFont::Digit26);
-  constexpr uint16_t kPadX = 2u;
-  constexpr uint16_t kPadTop = 2u;
-  constexpr uint16_t kPadBottom = 2u;
-  const uint16_t sample_offset =
-      (sample_w > time_w) ? static_cast<uint16_t>((sample_w - time_w) / 2u) : 0u;
-  const uint16_t rect_x = (header.time_x > sample_offset + kPadX)
-                              ? static_cast<uint16_t>(header.time_x - sample_offset - kPadX)
-                              : layout.header_bar.x;
-  const uint16_t rect_y = (header.time_y > kPadTop)
-                              ? static_cast<uint16_t>(header.time_y - kPadTop)
-                              : layout.header_bar.y;
-  return alignHeaderRectToPartialGrid(
-      makeRect(rect_x, rect_y, static_cast<uint16_t>(sample_w + kPadX * 2u),
-               static_cast<uint16_t>(time_h + kPadTop + kPadBottom)),
-      layout.header_bar);
-}
-
-uint16_t headerTimeTextX(const Rect &screen, const CalendarModel &model) {
-  const uint16_t time_w = textWidthPx(model.header_time, kHeaderTimePx, TextFont::Digit26);
-  return static_cast<uint16_t>(screen.x + ((screen.w > time_w) ? (screen.w - time_w) / 2u : 0u));
-}
-
-uint16_t headerTimeTextY(const Rect &screen, const CalendarModel &model) {
-  (void)model;
-  const String kTimeWindowSample = "88:88";
-  const uint16_t time_h = textHeightPx(kTimeWindowSample, kHeaderTimePx, TextFont::Digit26);
-  return static_cast<uint16_t>(screen.y + ((screen.h > time_h) ? (screen.h - time_h) / 2u : 0u));
 }
 
 enum class WeatherIconKind : uint8_t {
@@ -1137,7 +1069,6 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
             : static_cast<uint8_t>(asciiPixelHeight(layout.weekday_scale) +
                                    (layout.mode == LayoutMode::LandscapeSplit ? 2 : 1));
   const uint8_t header_date_px = kHeaderDatePx;
-  const uint8_t header_time_px = kHeaderTimePx;
   const uint8_t header_weather_px = kHeaderWeatherPx;
   const uint8_t header_sensors_px = kHeaderSensorsPx;
   const uint8_t day_px =
@@ -1148,18 +1079,10 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       dynamicTextFont(model.header_weather, TextFont::Cjk30, TextFont::Auto, header_weather_px);
   const TextFont header_date_font =
       preferredTextFont(model.header_date, header_font, header_date_px);
-  const TextFont header_time_font =
-      TextFont::Digit26;
-  const TextFont header_weather_font =
-      preferredTextFont(model.header_weather, header_font, header_weather_px);
   const TextFont header_sensors_font =
       preferredTextFont(model.header_sensors, header_font, header_sensors_px);
   const TextAAMode header_date_aa =
       preferredAsciiAAMode(model.header_date, header_date_font, header_date_px);
-  const TextAAMode header_time_aa =
-      preferredAsciiAAMode(model.header_time, header_time_font, header_time_px);
-  const TextAAMode header_weather_aa =
-      preferredAsciiAAMode(model.header_weather, header_weather_font, header_weather_px);
   const TextAAMode header_sensors_aa =
       preferredAsciiAAMode(model.header_sensors, header_sensors_font, header_sensors_px);
   const HeaderMetrics header = computeHeaderMetrics(layout, model, header_date_font);
@@ -1167,9 +1090,6 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
   emitRoundedOutline(sink, header_card, 12u, black, white, 2u);
   sink.text(header.date_x, header.date_y, model.header_date, header_date_px, black, header_date_font,
             header_date_aa);
-  const Rect header_time_screen = headerTimeRefreshRect(layout, model, header_date_font);
-  sink.text(headerTimeTextX(header_time_screen, model), headerTimeTextY(header_time_screen, model),
-            model.header_time, header_time_px, black, header_time_font, header_time_aa);
   emitCalendarWeatherHeader(model, layout, sink);
   const uint16_t sensors_w = textWidthPx(model.header_sensors, header_sensors_px, header_sensors_font);
   const uint16_t sensors_x =

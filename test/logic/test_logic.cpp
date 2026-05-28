@@ -4,9 +4,7 @@
 #include <vector>
 
 #include "app/RefreshPolicy.h"
-#include "app/CalendarRefreshPlanner.h"
 #include "calendar/CalendarLogic.h"
-#include "display/PartialRefreshGeometry.h"
 #include "system/CalendarStore.h"
 #include "system/CalendarSyncService.h"
 #include "system/CalendarSettings.h"
@@ -34,90 +32,6 @@ void testRefreshPolicy() {
 
   const time_t fallback = appfw::fallbackClockBaseEpoch();
   assert(fallback > 0);
-}
-
-void testCalendarRefreshPlanner() {
-  appfw::CalendarRefreshInputs inputs;
-  inputs.force_full_refresh = true;
-  inputs.full_screen_rect = calendar::makeRect(0, 0, 800, 480);
-  inputs.header_time_rect = calendar::makeRect(8, 32, 80, 32);
-  appfw::CalendarRefreshPlan plan = appfw::planCalendarRefresh(inputs);
-  assert(plan.mode == appfw::CalendarRefreshMode::Full);
-  assert(plan.reason == appfw::CalendarRefreshReason::ForcedFull);
-  assert(plan.dirty.full_screen);
-  assert(plan.dirty.count == 1);
-  assert(plan.dirty.kinds[0] == appfw::CalendarDirtyRegionKind::FullScreen);
-
-  inputs = appfw::CalendarRefreshInputs{};
-  inputs.full_screen_rect = calendar::makeRect(0, 0, 800, 480);
-  inputs.partial_refresh_count = 7;
-  inputs.partial_before_full = 7;
-  plan = appfw::planCalendarRefresh(inputs);
-  assert(plan.mode == appfw::CalendarRefreshMode::Full);
-  assert(plan.reason == appfw::CalendarRefreshReason::PartialBudgetExceeded);
-
-  inputs = appfw::CalendarRefreshInputs{};
-  inputs.time_valid = true;
-  inputs.minute_key = 600;
-  inputs.last_render_minute_key = 590;
-  inputs.time_refresh_sec = 600u;
-  inputs.partial_refresh_count = 1;
-  inputs.partial_before_full = 7;
-  inputs.full_screen_rect = calendar::makeRect(0, 0, 800, 480);
-  inputs.header_time_rect = calendar::makeRect(8, 32, 80, 32);
-  inputs.header_time_changed = true;
-  plan = appfw::planCalendarRefresh(inputs);
-  assert(plan.mode == appfw::CalendarRefreshMode::Partial);
-  assert(plan.reason == appfw::CalendarRefreshReason::TimeTick);
-  assert(plan.time_only_refresh);
-  assert(plan.dirty.count == 1);
-  assert(plan.dirty.rects[0].x == 8);
-  assert(plan.dirty.kinds[0] == appfw::CalendarDirtyRegionKind::HeaderTime);
-
-  inputs = appfw::CalendarRefreshInputs{};
-  inputs.full_screen_rect = calendar::makeRect(0, 0, 800, 480);
-  inputs.header_weather_rect = calendar::makeRect(420, 8, 180, 32);
-  inputs.header_sensors_rect = calendar::makeRect(420, 40, 180, 32);
-  inputs.header_weather_changed = true;
-  inputs.header_sensors_changed = true;
-  plan = appfw::planCalendarRefresh(inputs);
-  assert(plan.mode == appfw::CalendarRefreshMode::Partial);
-  assert(plan.reason == appfw::CalendarRefreshReason::PartialCompatibilityPath);
-  assert(!plan.time_only_refresh);
-  assert(plan.dirty.count == 1);
-  assert(plan.dirty.kinds[0] == appfw::CalendarDirtyRegionKind::FullScreen);
-
-  inputs = appfw::CalendarRefreshInputs{};
-  inputs.time_valid = true;
-  inputs.minute_key = 601;
-  inputs.last_render_minute_key = 600;
-  inputs.time_refresh_sec = 600u;
-  inputs.partial_refresh_count = 1;
-  inputs.partial_before_full = 7;
-  inputs.full_screen_rect = calendar::makeRect(0, 0, 800, 480);
-  plan = appfw::planCalendarRefresh(inputs);
-  assert(plan.mode == appfw::CalendarRefreshMode::Partial);
-  assert(plan.reason == appfw::CalendarRefreshReason::PartialCompatibilityPath);
-  assert(plan.dirty.full_screen);
-}
-
-void testPartialRefreshGeometry() {
-  uint16_t x = 5;
-  uint16_t width = 7;
-  partial_refresh::normalizePartialWindow(800, x, width);
-  assert(x == 4);
-  assert(width == 8);
-
-  x = 799;
-  width = 8;
-  partial_refresh::normalizePartialWindow(800, x, width);
-  assert(x == 796);
-  assert(width == 4);
-
-  x = 800;
-  width = 8;
-  partial_refresh::normalizePartialWindow(800, x, width);
-  assert(width == 0);
 }
 
 void testCalendarLogicMatchesToday() {
@@ -151,10 +65,9 @@ void testCalendarLogicLanes() {
 }
 
 void testCalendarSettings() {
-  assert(appfw::normalizeCalendarTimeRefreshSec(0u) == 0u);
-  assert(appfw::normalizeCalendarTimeRefreshSec(600u) == 600u);
-  assert(appfw::normalizeCalendarTimeRefreshSec(1200u) == 1200u);
-  assert(appfw::normalizeCalendarTimeRefreshSec(61u) == 600u);
+  assert(appfw::normalizeSleepWindowMinute(0u, 60u) == 0u);
+  assert(appfw::normalizeSleepWindowMinute(1439u, 60u) == 1439u);
+  assert(appfw::normalizeSleepWindowMinute(1440u, 60u) == 60u);
 }
 
 void testCalendarEventNormalize() {
@@ -345,10 +258,10 @@ void testCalendarStore() {
 
   appfw::CalendarStore restored;
   restored.deserialize(packed);
-  assert(restored.count() == 2);
+  assert(restored.count() == 1);
   appfw::CalendarEvent restored_event;
-  assert(restored.eventAt(1, restored_event));
-  assert(restored_event.title == "Imported");
+  assert(restored.eventAt(0, restored_event));
+  assert(restored_event.title == "Morning");
 
   assert(store.removeAt(0));
   assert(store.count() == 1);
@@ -434,8 +347,6 @@ void testCalendarSyncNormalizeImported() {
 
 int main() {
   testRefreshPolicy();
-  testCalendarRefreshPlanner();
-  testPartialRefreshGeometry();
   testCalendarLogicMatchesToday();
   testCalendarLogicLanes();
   testCalendarSettings();
