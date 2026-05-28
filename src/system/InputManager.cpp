@@ -69,6 +69,14 @@ void InputManager::recoverWakePress(bool up_pressed, bool mid_pressed, bool down
   recoverKeyWakePress(down_, down_pressed, now_ms);
 }
 
+void InputManager::prepareForSleep(uint32_t now_ms) {
+  q_head_ = 0;
+  q_tail_ = 0;
+  resetKeyState(up_, now_ms);
+  resetKeyState(mid_, now_ms);
+  resetKeyState(down_, now_ms);
+}
+
 void InputManager::pushEvent(InputEvent event) {
   const uint8_t next_tail = static_cast<uint8_t>((q_tail_ + 1) % kQueueSize);
   if (next_tail == q_head_) {
@@ -89,6 +97,15 @@ void InputManager::recoverKeyWakePress(KeyState &key, bool pressed, uint32_t now
   key.last_raw_change_ms = now_ms;
 }
 
+void InputManager::resetKeyState(KeyState &key, uint32_t now_ms) {
+  const bool pressed = isPressed(digitalRead(key.pin));
+  key.raw_pressed = pressed;
+  key.stable_pressed = pressed;
+  key.long_sent = false;
+  key.pressed_at_ms = pressed ? now_ms : 0;
+  key.last_raw_change_ms = now_ms;
+}
+
 void InputManager::updateKey(KeyState &key, uint32_t now_ms, InputEvent short_evt) {
   const bool raw = isPressed(digitalRead(key.pin));
   if (raw != key.raw_pressed) {
@@ -99,6 +116,10 @@ void InputManager::updateKey(KeyState &key, uint32_t now_ms, InputEvent short_ev
     return;
   }
   if (key.stable_pressed == key.raw_pressed) {
+    if (key.stable_pressed && !key.long_sent &&
+        (now_ms - key.pressed_at_ms) >= kLongPressMs) {
+      key.long_sent = true;
+    }
     return;
   }
 
@@ -107,8 +128,11 @@ void InputManager::updateKey(KeyState &key, uint32_t now_ms, InputEvent short_ev
     key.pressed_at_ms = now_ms;
     key.long_sent = false;
   } else {
-    pushEvent(short_evt);
+    if (!key.long_sent) {
+      pushEvent(short_evt);
+    }
   }
+
 }
 
 bool InputManager::isPressed(int level) const {

@@ -637,13 +637,25 @@ void App::startOperationTrace(const char *source, const char *action, uint32_t n
   operation_trace_start_ms_ = now_ms;
   operation_trace_source_ = source ? source : "unknown";
   operation_trace_action_ = action ? action : "unknown";
-  Serial.printf("\n\n[OP][START] id=%lu source=%s action=%s state=%s mode=%s t=%lums\n",
+  Serial.printf("\n\n\n[OP][START] id=%lu source=%s action=%s state=%s mode=%s t=%lums\n",
                 static_cast<unsigned long>(operation_trace_id_),
                 operation_trace_source_.c_str(),
                 operation_trace_action_.c_str(),
                 appStateName(state_),
                 opModeName(mode_manager_.mode()),
                 static_cast<unsigned long>(now_ms));
+  if (pending_wake_log_) {
+    if ((now_ms - pending_wake_ms_) <= 5000u) {
+      Serial.printf("[SLEEP] wake source=%s slept=%lums keys up=%d mid=%d down=%d led=%s\n",
+                    pending_wake_gpio_ ? "gpio" : "timer_or_other",
+                    static_cast<unsigned long>(pending_wake_slept_ms_),
+                    pending_wake_up_pressed_ ? 1 : 0,
+                    pending_wake_mid_pressed_ ? 1 : 0,
+                    pending_wake_down_pressed_ ? 1 : 0,
+                    pending_wake_led_.c_str());
+    }
+    pending_wake_log_ = false;
+  }
 }
 
 void App::finishOperationTrace(const char *result, uint32_t now_ms, const char *reason) {
@@ -651,13 +663,13 @@ void App::finishOperationTrace(const char *result, uint32_t now_ms, const char *
     return;
   }
   if (reason && reason[0] != '\0') {
-    Serial.printf("[OP][END] id=%lu result=%s reason=%s elapsed=%lums\n\n",
+    Serial.printf("[OP][END] id=%lu result=%s reason=%s elapsed=%lums\n\n\n",
                   static_cast<unsigned long>(operation_trace_id_),
                   result ? result : "done",
                   reason,
                   static_cast<unsigned long>(now_ms - operation_trace_start_ms_));
   } else {
-    Serial.printf("[OP][END] id=%lu result=%s elapsed=%lums\n\n",
+    Serial.printf("[OP][END] id=%lu result=%s elapsed=%lums\n\n\n",
                   static_cast<unsigned long>(operation_trace_id_),
                   result ? result : "done",
                   static_cast<unsigned long>(now_ms - operation_trace_start_ms_));
@@ -666,6 +678,9 @@ void App::finishOperationTrace(const char *result, uint32_t now_ms, const char *
 }
 
 void App::logCalendarHeap(const char *tag) const {
+  if (!appfw::kDebugLogs) {
+    return;
+  }
   Serial.printf("[CAL] heap %s free=%lu largest=%lu\n", tag ? tag : "-",
                 static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(largest8BitHeap()));
@@ -1058,8 +1073,16 @@ void App::update(uint32_t now_ms) {
   updateCalendarBackgroundSync(now_ms);
   updateClockAnchor(now_ms);
   applyCalendarLayoutFromConfig(false);
-  if (wifi_manager_.consumeStaConnectFailed() && calendar_pre_refresh_sync_waiting_) {
+  const bool sta_connect_failed = wifi_manager_.consumeStaConnectFailed();
+  bool handled_manual_sta_failure = false;
+  if (sta_connect_failed && calendar_pre_refresh_sync_waiting_) {
     calendar_pre_refresh_failed_ = true;
+  }
+  if (sta_connect_failed && mode_manager_.mode() == appfw::OperationMode::ConfigSTA) {
+    mode_manager_.forceConfigWait(now_ms, "sta_connect_failed");
+    led_manager_.stopEffects("sta_connect_failed");
+    finishOperationTrace("failed", millis(), "sta_connect_failed");
+    handled_manual_sta_failure = true;
   }
   const uint32_t latest_interval_ms = wifi_manager_.settings().photo_interval_sec * 1000UL;
   if (latest_interval_ms >= 30000UL && latest_interval_ms != photo_interval_ms_) {
@@ -1068,24 +1091,46 @@ void App::update(uint32_t now_ms) {
                   static_cast<unsigned long>(photo_interval_ms_ / 1000UL));
   }
 
-  if (wifi_manager_.consumeAutoExitRequested()) {
+  const bool wifi_auto_exit = wifi_manager_.consumeAutoExitRequested();
+  if (wifi_auto_exit && !handled_manual_sta_failure) {
     mode_manager_.forceNormal(now_ms, "wifi_session_timeout");
     queueSettingsApplyFullRefresh(now_ms, "auto_exit");
   }
 
+  if (wifi_manager_.consumeManualStaSyncSettled()) {
+    last_app_switch_ms_ = now_ms;
+    led_manager_.showConfigSessionOn("manual_sta_ready");
+    finishOperationTrace("ok", millis(), "manual_sta_ready");
+  }
+
+  if (wifi_manager_.consumeApClientConnected()) {
+    led_manager_.showConfigSessionOn("ap_client_connected");
+    finishOperationTrace("ok", millis(), "ap_client_connected");
+  }
+
   if (mode_manager_.consumeApRequest()) {
+    led_manager_.startDoubleBlink("ap_wait_client");
     wifi_manager_.startAP();
+    if (operation_trace_active_) {
+      finishOperationTrace("ok", millis(), "ap_started");
+    }
   }
   if (mode_manager_.consumeStaRequest()) {
+    led_manager_.startDoubleBlink("sta_connecting");
     wifi_manager_.startSTA();
-    led_manager_.triggerDoubleBlink("sta_connecting");
   }
   if (mode_manager_.consumeStopWifiRequest()) {
     wifi_manager_.stop("manual_key_exit_config");
     queueSettingsApplyFullRefresh(now_ms, "manual_key_exit_config");
+    if (operation_trace_active_) {
+      finishOperationTrace("ok", millis(), "wifi_stopped");
+    }
   }
   if (mode_manager_.consumeWhiteScreenRequest()) {
     renderWhiteScreen();
+    if (operation_trace_active_) {
+      finishOperationTrace("ok", millis(), "white_screen_done");
+    }
   }
 
   if (mode_manager_.mode() == appfw::OperationMode::Normal) {
@@ -1107,9 +1152,6 @@ void App::handleInputEvent(appfw::InputEvent event, uint32_t now_ms) {
   const appfw::OperationMode previous_mode = mode_manager_.mode();
   mode_manager_.onInputEvent(event, now_ms);
   const appfw::OperationMode current_mode = mode_manager_.mode();
-  if (current_mode != previous_mode) {
-    led_manager_.triggerDoubleBlink("mode_change");
-  }
 
   if (previous_mode == appfw::OperationMode::Normal &&
       current_mode == appfw::OperationMode::Normal) {
@@ -1138,6 +1180,12 @@ void App::handleInputEvent(appfw::InputEvent event, uint32_t now_ms) {
 
 void App::render() {
   if (!needs_render_) {
+    return;
+  }
+  const appfw::OperationMode mode = mode_manager_.mode();
+  if (mode == appfw::OperationMode::ConfigWait ||
+      mode == appfw::OperationMode::ConfigAP ||
+      mode == appfw::OperationMode::ConfigSTA) {
     return;
   }
   const uint32_t now_ms = millis();
@@ -1299,25 +1347,27 @@ uint32_t App::nextWakeDeadlineMs(uint32_t now_ms) const {
 void App::onWakeFromLightSleep(uint64_t slept_us, bool woke_from_gpio, bool wake_up_pressed,
                                bool wake_mid_pressed, bool wake_down_pressed) {
   const uint32_t now_ms = millis();
+  led_manager_.setTraceMuted(true);
   led_manager_.setSleeping(false, "wake");
   led_manager_.update(mode_manager_.mode(), now_ms, wifi_manager_.isStaConnected());
+  led_manager_.setTraceMuted(false);
   if (woke_from_gpio) {
     sleep_inhibit_until_ms_ = saturatingAddMs(now_ms, kLightSleepWakeInhibitMs);
     input_.recoverWakePress(wake_up_pressed, wake_mid_pressed, wake_down_pressed, now_ms);
   }
-  if (!appfw::kSleepQuietLogs) {
-    Serial.printf("[SLEEP] wake source=%s slept=%lums keys up=%d mid=%d down=%d led=%s\n",
-                  woke_from_gpio ? "gpio" : "timer_or_other",
-                  static_cast<unsigned long>(slept_us / 1000ULL),
-                  wake_up_pressed ? 1 : 0,
-                  wake_mid_pressed ? 1 : 0,
-                  wake_down_pressed ? 1 : 0,
-                  led_manager_.currentStateName());
-  }
+  pending_wake_log_ = !appfw::kSleepQuietLogs;
+  pending_wake_gpio_ = woke_from_gpio;
+  pending_wake_up_pressed_ = wake_up_pressed;
+  pending_wake_mid_pressed_ = wake_mid_pressed;
+  pending_wake_down_pressed_ = wake_down_pressed;
+  pending_wake_ms_ = now_ms;
+  pending_wake_slept_ms_ = static_cast<uint32_t>(slept_us / 1000ULL);
+  pending_wake_led_ = led_manager_.currentStateName();
 }
 
 void App::onEnterLightSleep(uint32_t deadline_ms) {
   const uint32_t now_ms = millis();
+  input_.prepareForSleep(now_ms);
   led_manager_.setSleeping(true, "light_sleep_enter");
   if (!appfw::kSleepQuietLogs) {
     Serial.printf("[SLEEP] enter deadline_in=%lums\n",
@@ -1607,7 +1657,9 @@ void App::refreshPhotoFileCount() {
   dir.close();
   photo_file_count_ = count;
   if (photo_file_count_ != last_logged_photo_file_count_) {
-    Serial.printf("[PHOTO] epd4 scan count=%u\n", photo_file_count_);
+    if (appfw::kDebugLogs) {
+      Serial.printf("[PHOTO] epd4 scan count=%u\n", photo_file_count_);
+    }
     last_logged_photo_file_count_ = photo_file_count_;
   }
   if (auto_power_cycle) {
@@ -1661,7 +1713,9 @@ bool App::renderEpd4PhotoAtIndex(uint16_t index) {
     return false;
   }
 
-  Serial.printf("[PHOTO] render epd4 file=%s index=%u\n", selected.name(), index + 1);
+  if (appfw::kDebugLogs) {
+    Serial.printf("[PHOTO] render epd4 file=%s index=%u\n", selected.name(), index + 1);
+  }
   uint8_t buf[256];
   EPD_W21_WriteCMD(0x10);
   size_t total = 0;
@@ -2482,7 +2536,7 @@ void App::waitEpdReadyWithLed() {
   }
   led_manager_.update(mode_manager_.mode(), millis());
   const uint32_t elapsed_ms = millis() - start_ms;
-  if (elapsed_ms >= 200) {
+  if (appfw::kDebugLogs && elapsed_ms >= 200) {
     Serial.printf("[EPD] busy wait=%lums (led updated)\n", static_cast<unsigned long>(elapsed_ms));
   }
 }

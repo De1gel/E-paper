@@ -12,6 +12,8 @@ enum class TextFont : uint8_t {
   Ascii8 = 8,
   Ascii10 = 7,
   AsciiSmooth = 2,
+  AsciiSmooth14 = 14,
+  AsciiSmooth16 = 15,
   Digit10 = 20,
   Digit14 = 21,
   Digit16 = 22,

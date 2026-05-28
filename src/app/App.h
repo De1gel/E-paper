@@ -154,6 +154,14 @@ class App {
   uint32_t operation_trace_start_ms_ = 0;
   String operation_trace_source_;
   String operation_trace_action_;
+  bool pending_wake_log_ = false;
+  bool pending_wake_gpio_ = false;
+  bool pending_wake_up_pressed_ = false;
+  bool pending_wake_mid_pressed_ = false;
+  bool pending_wake_down_pressed_ = false;
+  uint32_t pending_wake_ms_ = 0;
+  uint32_t pending_wake_slept_ms_ = 0;
+  String pending_wake_led_;
   String calendar_layout_cfg_cache_;
   bool calendar_frame_unavailable_logged_ = false;
 

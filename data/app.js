@@ -26,7 +26,6 @@ const pass = document.getElementById("pass");
 const manualAuthToggle = document.getElementById("manualAuthToggle");
 const networkAdvanced = document.getElementById("networkAdvanced");
 const staAuthMode = document.getElementById("staAuthMode");
-const portalLoginUrl = document.getElementById("portalLoginUrl");
 const cfgStaStatus = document.getElementById("cfgStaStatus");
 const cfgStaDetail = document.getElementById("cfgStaDetail");
 const sec = document.getElementById("sec");
@@ -109,9 +108,6 @@ const I18N = {
     "cfg.network.auth_personal": "普通密码 WiFi",
     "cfg.network.auth_enterprise": "企业/校园网 802.1X",
     "cfg.network.auth_open": "开放网络",
-    "cfg.network.auth_portal": "网页登录认证",
-    "cfg.network.portal_url": "网页登录地址",
-    "cfg.network.portal_url_ph": "例如 http://10.0.0.1/login",
     "cfg.network.advanced_note": "自动模式会按账号和密码推断：有账号优先企业认证，只有密码使用普通 WiFi，无密码使用开放网络。",
     "cfg.network.sta_status": "STA 状态",
     "cfg.network.sta_connected": "已连接",
@@ -125,24 +121,25 @@ const I18N = {
     "cfg.network.lang_en": "English",
     "cfg.network.lang_fr": "Francais",
     "cfg.photo.title": "图片轮播",
-    "cfg.photo.interval": "轮播间隔（秒）",
+    "cfg.photo.interval": "轮播间隔（小时）",
     "cfg.photo.auto_switch": "相册日历自动切换",
-    "cfg.photo.switch_interval": "页面切换间隔（秒）",
+    "cfg.photo.switch_interval": "页面切换间隔（小时）",
     "cfg.calendar.title": "日历事件",
     "cfg.calendar.layout": "日历布局",
     "cfg.calendar.layout_landscape": "横屏半屏（左日历 / 右日程）",
     "cfg.calendar.layout_portrait": "竖屏半屏（上日历 / 下日程）",
-    "cfg.calendar.refresh_sec": "日历刷新间隔（秒）",
+    "cfg.calendar.refresh_sec": "日历刷新间隔（小时）",
     "cfg.calendar.time_refresh": "时间刷新间隔",
     "cfg.calendar.time_refresh_10": "10 分钟",
+    "cfg.calendar.time_refresh_15": "15 分钟",
     "cfg.calendar.time_refresh_20": "20 分钟",
     "cfg.calendar.time_refresh_30": "30 分钟",
     "cfg.calendar.time_refresh_60": "60 分钟",
     "cfg.calendar.time_refresh_follow": "与日历页同时刷新",
     "cfg.calendar.sleep_start": "休眠开始",
     "cfg.calendar.sleep_end": "休眠结束",
-    "cfg.calendar.url": "日历数据 URL（预留）",
-    "cfg.calendar.url_ph": "保留字段，当前离线日历不依赖该 URL",
+    "cfg.calendar.url": "日历数据 URL",
+    "cfg.calendar.url_ph": "可填写 http(s) 地址或本地路径，留空使用手动日程",
     "cfg.calendar.note": "默认 22:00-08:00 休眠；休眠期间日历和相册都停止定时刷新，只保留按键唤醒。",
     "cfg.schedule.title": "日程管理",
     "cfg.schedule.name": "日程标题",
@@ -180,7 +177,7 @@ const I18N = {
     "cfg.schedule.empty": "暂无日程",
     "cfg.weather.title": "天气与定位",
     "cfg.weather.city": "城市",
-    "cfg.weather.city_ph": "如 Shanghai 或 上海",
+    "cfg.weather.city_ph": "如 北京",
     "cfg.weather.lat": "纬度",
     "cfg.weather.lon": "经度",
     "cfg.weather.url": "天气接口 URL",
@@ -328,9 +325,6 @@ const I18N = {
     "cfg.network.auth_personal": "Password WiFi",
     "cfg.network.auth_enterprise": "Enterprise/campus 802.1X",
     "cfg.network.auth_open": "Open network",
-    "cfg.network.auth_portal": "Web portal login",
-    "cfg.network.portal_url": "Portal login URL",
-    "cfg.network.portal_url_ph": "e.g. http://10.0.0.1/login",
     "cfg.network.advanced_note": "Auto mode infers from account and password: account uses enterprise, password-only uses normal WiFi, no password uses open WiFi.",
     "cfg.network.sta_status": "STA Status",
     "cfg.network.sta_connected": "Connected",
@@ -344,16 +338,17 @@ const I18N = {
     "cfg.network.lang_en": "English",
     "cfg.network.lang_fr": "French",
     "cfg.photo.title": "Photo Slideshow",
-    "cfg.photo.interval": "Interval (seconds)",
+    "cfg.photo.interval": "Interval (hours)",
     "cfg.photo.auto_switch": "Auto switch photo/calendar",
-    "cfg.photo.switch_interval": "Page switch interval (seconds)",
+    "cfg.photo.switch_interval": "Page switch interval (hours)",
     "cfg.calendar.title": "Calendar",
     "cfg.calendar.layout": "Layout",
     "cfg.calendar.layout_landscape": "Landscape Split (calendar left / schedule right)",
     "cfg.calendar.layout_portrait": "Portrait Split (calendar top / schedule bottom)",
-    "cfg.calendar.refresh_sec": "Refresh interval (seconds)",
+    "cfg.calendar.refresh_sec": "Refresh interval (hours)",
     "cfg.calendar.time_refresh": "Time refresh interval",
     "cfg.calendar.time_refresh_10": "10 minutes",
+    "cfg.calendar.time_refresh_15": "15 minutes",
     "cfg.calendar.time_refresh_20": "20 minutes",
     "cfg.calendar.time_refresh_30": "30 minutes",
     "cfg.calendar.time_refresh_60": "60 minutes",
@@ -399,7 +394,7 @@ const I18N = {
     "cfg.schedule.empty": "No schedule",
     "cfg.weather.title": "Weather & Location",
     "cfg.weather.city": "City",
-    "cfg.weather.city_ph": "e.g. Shanghai",
+    "cfg.weather.city_ph": "e.g. Beijing",
     "cfg.weather.lat": "Latitude",
     "cfg.weather.lon": "Longitude",
     "cfg.weather.url": "Weather URL",
@@ -547,9 +542,6 @@ const I18N = {
     "cfg.network.auth_personal": "WiFi avec mot de passe",
     "cfg.network.auth_enterprise": "Entreprise/campus 802.1X",
     "cfg.network.auth_open": "Reseau ouvert",
-    "cfg.network.auth_portal": "Portail web",
-    "cfg.network.portal_url": "URL du portail",
-    "cfg.network.portal_url_ph": "ex. http://10.0.0.1/login",
     "cfg.network.advanced_note": "Le mode auto deduit le type avec compte et mot de passe : compte = entreprise, mot de passe seul = WiFi normal, aucun mot de passe = ouvert.",
     "cfg.network.sta_status": "Etat STA",
     "cfg.network.sta_connected": "Connecte",
@@ -563,16 +555,17 @@ const I18N = {
     "cfg.network.lang_en": "Anglais",
     "cfg.network.lang_fr": "Francais",
     "cfg.photo.title": "Diaporama",
-    "cfg.photo.interval": "Intervalle (secondes)",
+    "cfg.photo.interval": "Intervalle (heures)",
     "cfg.photo.auto_switch": "Alterner photo/calendrier",
-    "cfg.photo.switch_interval": "Intervalle de changement de page (secondes)",
+    "cfg.photo.switch_interval": "Intervalle de changement de page (heures)",
     "cfg.calendar.title": "Calendrier",
     "cfg.calendar.layout": "Disposition",
     "cfg.calendar.layout_landscape": "Partage paysage (calendrier gauche / planning droite)",
     "cfg.calendar.layout_portrait": "Partage portrait (calendrier haut / planning bas)",
-    "cfg.calendar.refresh_sec": "Intervalle de rafraichissement (secondes)",
+    "cfg.calendar.refresh_sec": "Intervalle de rafraichissement (heures)",
     "cfg.calendar.time_refresh": "Intervalle d actualisation de l heure",
     "cfg.calendar.time_refresh_10": "10 minutes",
+    "cfg.calendar.time_refresh_15": "15 minutes",
     "cfg.calendar.time_refresh_20": "20 minutes",
     "cfg.calendar.time_refresh_30": "30 minutes",
     "cfg.calendar.time_refresh_60": "60 minutes",
@@ -618,7 +611,7 @@ const I18N = {
     "cfg.schedule.empty": "Aucun planning",
     "cfg.weather.title": "Meteo et position",
     "cfg.weather.city": "Ville",
-    "cfg.weather.city_ph": "ex. Shanghai",
+    "cfg.weather.city_ph": "ex. Beijing",
     "cfg.weather.lat": "Latitude",
     "cfg.weather.lon": "Longitude",
     "cfg.weather.url": "URL meteo",
@@ -739,7 +732,25 @@ function normalizeLang(raw) {
 
 function normalizeCalendarTimeRefreshSec(raw) {
   const value = Number(raw);
-  return [0, 600, 1200, 1800, 3600].includes(value) ? value : 600;
+  return [0, 600, 900, 1200, 1800, 3600].includes(value) ? value : 900;
+}
+
+function secondsToHoursValue(seconds, fallbackSeconds) {
+  const sec = Number(seconds || fallbackSeconds || 0);
+  if (!Number.isFinite(sec) || sec <= 0) return "";
+  const hours = sec / 3600;
+  const rounded = Math.round(hours * 100) / 100;
+  return String(rounded);
+}
+
+function hoursToSecondsValue(value, fallbackSeconds, minSeconds, maxSeconds) {
+  const text = String(value || "").trim().replace(",", ".");
+  const hours = Number.parseFloat(text);
+  let seconds = Number.isFinite(hours) && hours > 0 ? Math.round(hours * 3600) : fallbackSeconds;
+  if (!Number.isFinite(seconds) || seconds <= 0) seconds = fallbackSeconds;
+  if (seconds < minSeconds) seconds = minSeconds;
+  if (seconds > maxSeconds) seconds = maxSeconds;
+  return String(seconds);
 }
 
 function t(key) {
@@ -825,7 +836,7 @@ function setNotice(text) {
 
 function normalizeAuthMode(value) {
   const mode = String(value || "auto").trim().toLowerCase();
-  if (["auto", "open", "personal", "enterprise", "portal"].includes(mode)) {
+  if (["auto", "open", "personal", "enterprise"].includes(mode)) {
     return mode;
   }
   return "auto";
@@ -836,9 +847,6 @@ function syncNetworkAdvanced() {
   const manual = !!manualAuthToggle.checked;
   networkAdvanced.classList.toggle("show", manual);
   staAuthMode.disabled = !manual;
-  if (portalLoginUrl) {
-    portalLoginUrl.disabled = !manual;
-  }
 }
 
 function renderStaStatus(status) {
@@ -910,7 +918,6 @@ async function resolveCity() {
     cfgBox.textContent = t("common.city_resolve_failed");
     return false;
   }
-  weatherLocation.value = j.city || city;
   weatherLat.value = j.lat || "";
   weatherLon.value = j.lon || "";
   wurl.value = j.weather_url || buildOpenMeteoUrl(j.lat, j.lon);
@@ -1118,9 +1125,8 @@ async function loadCfg() {
   pass.value = j.sta_pass || "";
   const authMode = normalizeAuthMode(j.sta_auth_mode);
   if (staAuthMode) staAuthMode.value = authMode;
-  if (portalLoginUrl) portalLoginUrl.value = j.portal_login_url || "";
   if (manualAuthToggle) {
-    manualAuthToggle.checked = authMode !== "auto" || !!(j.portal_login_url || "");
+    manualAuthToggle.checked = authMode !== "auto";
     syncNetworkAdvanced();
   }
   if (uiLanguage) {
@@ -1129,14 +1135,14 @@ async function loadCfg() {
   } else {
     applyI18n("zh");
   }
-  sec.value = j.photo_interval_sec || 300;
+  sec.value = secondsToHoursValue(j.photo_interval_sec, 3600);
   if (appAutoSwitch) appAutoSwitch.checked = !!j.app_auto_switch_enabled;
-  if (appSwitchSec) appSwitchSec.value = j.app_switch_interval_sec || 3600;
+  if (appSwitchSec) appSwitchSec.value = secondsToHoursValue(j.app_switch_interval_sec, 3600);
   syncAppAutoSwitchFields();
   if (calendarLayout) {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
-  calendarSec.value = j.calendar_refresh_sec || 900;
+  calendarSec.value = secondsToHoursValue(j.calendar_refresh_sec, 3600);
   if (calendarTimeRefreshSec) {
     calendarTimeRefreshSec.value = String(normalizeCalendarTimeRefreshSec(j.calendar_time_refresh_sec));
   }
@@ -1158,25 +1164,6 @@ async function saveCfg() {
     let lon = (weatherLon.value || "").trim();
     let weatherUrl = (wurl.value || "").trim();
 
-    const cityChanged = city && city !== loadedWeatherCity;
-    if (cityChanged) {
-      weatherLat.value = "";
-      weatherLon.value = "";
-      wurl.value = "";
-      lat = "";
-      lon = "";
-      weatherUrl = "";
-    }
-
-    if (city && (!lat || !lon || !weatherUrl)) {
-      const ok = await resolveCity();
-      if (!ok) return;
-      city = (weatherLocation.value || "").trim();
-      lat = (weatherLat.value || "").trim();
-      lon = (weatherLon.value || "").trim();
-      weatherUrl = (wurl.value || "").trim();
-    }
-
     if (lat && lon && !weatherUrl) {
       weatherUrl = buildOpenMeteoUrl(lat, lon);
       wurl.value = weatherUrl;
@@ -1185,19 +1172,18 @@ async function saveCfg() {
     const calendarLayoutValue = calendarLayout ? calendarLayout.value : "landscape_split";
     const calendarTimeRefreshValue = calendarTimeRefreshSec
       ? normalizeCalendarTimeRefreshSec(calendarTimeRefreshSec.value)
-      : 600;
+      : 900;
     const sleepStartValue = sleepStart ? sleepStart.value : "22:00";
     const sleepEndValue = sleepEnd ? sleepEnd.value : "08:00";
     const appSwitchEnabled = appAutoSwitch && appAutoSwitch.checked ? "1" : "0";
-    const appSwitchInterval = appSwitchSec ? appSwitchSec.value : "3600";
+    const photoInterval = sec ? hoursToSecondsValue(sec.value, 3600, 30, 86400) : "3600";
+    const appSwitchInterval = appSwitchSec ? hoursToSecondsValue(appSwitchSec.value, 3600, 60, 86400) : "3600";
+    const calendarRefreshInterval = calendarSec ? hoursToSecondsValue(calendarSec.value, 3600, 60, 86400) : "3600";
     const langValue = uiLanguage ? normalizeLang(uiLanguage.value) : "zh";
     const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
       ? normalizeAuthMode(staAuthMode.value)
       : "auto";
-    const portalUrl = manualAuthToggle && manualAuthToggle.checked && portalLoginUrl
-      ? portalLoginUrl.value
-      : "";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&portal_login_url=${encodeURIComponent(portalUrl)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(sec.value)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarSec.value)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarRefreshInterval)}&calendar_time_refresh_sec=${encodeURIComponent(calendarTimeRefreshValue)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",

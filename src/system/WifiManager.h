@@ -29,12 +29,15 @@ class WifiManager {
   bool consumeAutoExitRequested();
   bool consumeSettingsApplyRefreshRequested();
   bool consumeStaConnectFailed();
+  bool consumeManualStaSyncSettled();
+  bool consumeApClientConnected();
   bool isStaConnecting() const;
   bool isStaConnected() const;
   bool hasStaCredentials() const;
   bool isCalendarSyncBusy() const;
   bool blocksLightSleep() const;
   void requestCalendarSyncNow();
+  bool syncCalendarNow(const char *reason = nullptr);
   bool syncWeatherNow(const char *reason = nullptr);
   const Settings &settings() const;
   size_t calendarEventCount() const;
@@ -57,6 +60,13 @@ class WifiManager {
     StaConnecting,
     StaRunning,
   };
+  enum class StaSessionRole : uint8_t {
+    None = 0,
+    ManualConfig,
+    ApBackground,
+    CalendarPreRefresh,
+    AutoSync,
+  };
 
   void loadSettings();
   bool saveSettings();
@@ -71,6 +81,7 @@ class WifiManager {
   const char *disconnectReasonName(uint8_t reason) const;
   void logStaScanResults();
   void startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag);
+  void cleanupDisconnectedStaSession(const char *reason);
   String effectiveStaAuthMode() const;
   bool beginStaConnection();
   bool systemClockTrusted() const;
@@ -133,6 +144,10 @@ class WifiManager {
   bool auto_exit_requested_ = false;
   bool settings_apply_refresh_pending_ = false;
   bool sta_connect_failed_ = false;
+  bool manual_sta_sync_settled_ = false;
+  bool ap_client_connected_ = false;
+  bool sta_manual_session_ = false;
+  StaSessionRole sta_session_role_ = StaSessionRole::None;
   bool upload_ok_ = true;
   String upload_error_{};
   String upload_mode_{"normal"};
@@ -171,7 +186,7 @@ class WifiManager {
   static constexpr uint32_t kStaConnectTimeoutManualMs = 30000;
   static constexpr uint32_t kStaConnectTimeoutAutoSyncMs = 8000;
   static constexpr uint32_t kApIdleTimeoutMs = 300000;
-  static constexpr uint32_t kStaSessionTimeoutMs = 0;
+  static constexpr uint32_t kStaSessionTimeoutMs = 600000;
   static constexpr uint32_t kSensorPollIntervalMs = 10000;
   static constexpr uint32_t kCalendarSyncMinIntervalMs = 900000;
 };

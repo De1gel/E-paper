@@ -20,6 +20,7 @@ class ModeManager {
   void update(uint32_t now_ms);
   void onInputEvent(InputEvent event, uint32_t now_ms);
   void forceNormal(uint32_t now_ms, const char *reason);
+  void forceConfigWait(uint32_t now_ms, const char *reason);
 
   OperationMode mode() const;
   bool consumeApRequest();

@@ -323,12 +323,7 @@
                   <option value="personal" data-i18n="cfg.network.auth_personal">普通密码 WiFi</option>
                   <option value="enterprise" data-i18n="cfg.network.auth_enterprise">企业/校园网 802.1X</option>
                   <option value="open" data-i18n="cfg.network.auth_open">开放网络</option>
-                  <option value="portal" data-i18n="cfg.network.auth_portal">网页登录认证</option>
                 </select>
-              </div>
-              <div class="field">
-                <label data-i18n="cfg.network.portal_url">网页登录地址</label>
-                <input id="portalLoginUrl" inputmode="url" data-i18n-placeholder="cfg.network.portal_url_ph" placeholder="例如 http://10.0.0.1/login">
               </div>
             </div>
             <div class="mode-note" data-i18n="cfg.network.advanced_note">自动模式会按账号和密码推断：有账号优先企业认证，只有密码使用普通 WiFi，无密码使用开放网络。</div>
@@ -340,8 +335,8 @@
         <div class="section-head" data-i18n="cfg.photo.title">图片轮播</div>
         <div class="grid2">
           <div class="field">
-            <label data-i18n="cfg.photo.interval">轮播间隔（秒）</label>
-            <input id="sec" type="number" min="30">
+            <label data-i18n="cfg.photo.interval">轮播间隔（小时）</label>
+            <input id="sec" type="number" min="0.01" max="24" step="0.01" placeholder="1">
           </div>
           <div class="field">
             <label class="check-row">
@@ -350,8 +345,8 @@
             </label>
           </div>
           <div class="field conditional-field" id="appSwitchSecField">
-            <label data-i18n="cfg.photo.switch_interval">页面切换间隔（秒）</label>
-            <input id="appSwitchSec" type="number" min="60" placeholder="3600">
+            <label data-i18n="cfg.photo.switch_interval">页面切换间隔（小时）</label>
+            <input id="appSwitchSec" type="number" min="0.02" max="24" step="0.01" placeholder="1">
           </div>
         </div>
       </div>
@@ -367,13 +362,14 @@
             </select>
           </div>
           <div class="field">
-            <label data-i18n="cfg.calendar.refresh_sec">日历刷新间隔（秒）</label>
-            <input id="calendarSec" type="number" min="60" placeholder="900">
+            <label data-i18n="cfg.calendar.refresh_sec">日历刷新间隔（小时）</label>
+            <input id="calendarSec" type="number" min="0.02" max="24" step="0.01" placeholder="1">
           </div>
           <div class="field">
             <label data-i18n="cfg.calendar.time_refresh">时间刷新间隔</label>
             <select id="calendarTimeRefreshSec">
               <option value="600" data-i18n="cfg.calendar.time_refresh_10">10 分钟</option>
+              <option value="900" data-i18n="cfg.calendar.time_refresh_15">15 分钟</option>
               <option value="1200" data-i18n="cfg.calendar.time_refresh_20">20 分钟</option>
               <option value="1800" data-i18n="cfg.calendar.time_refresh_30">30 分钟</option>
               <option value="3600" data-i18n="cfg.calendar.time_refresh_60">60 分钟</option>
@@ -389,8 +385,8 @@
             <input id="sleepEnd" type="time" value="08:00">
           </div>
           <div class="field" style="grid-column:1 / -1;">
-            <label data-i18n="cfg.calendar.url">日历数据 URL（预留）</label>
-            <input id="calendarUrl" data-i18n-placeholder="cfg.calendar.url_ph" placeholder="保留字段，当前离线日历不依赖该 URL">
+            <label data-i18n="cfg.calendar.url">日历数据 URL</label>
+            <input id="calendarUrl" data-i18n-placeholder="cfg.calendar.url_ph" placeholder="可填写 http(s) 地址或本地路径，留空使用手动日程">
           </div>
         </div>
         <div class="small" style="margin-top:8px" data-i18n="cfg.calendar.note">离线日历仅依赖设备本地时间；联网后会自动校时。</div>
@@ -471,15 +467,15 @@
         <div class="grid2">
           <div class="field">
             <label data-i18n="cfg.weather.city">城市</label>
-            <input id="weatherLocation" data-i18n-placeholder="cfg.weather.city_ph" placeholder="如 Shanghai 或 上海">
+            <input id="weatherLocation" data-i18n-placeholder="cfg.weather.city_ph" placeholder="如 北京">
           </div>
           <div class="field">
             <label data-i18n="cfg.weather.lat">纬度</label>
-            <input id="weatherLat" placeholder="31.2304">
+            <input id="weatherLat" placeholder="39.9042">
           </div>
           <div class="field">
             <label data-i18n="cfg.weather.lon">经度</label>
-            <input id="weatherLon" placeholder="121.4737">
+            <input id="weatherLon" placeholder="116.4074">
           </div>
           <div class="field" style="grid-column:1 / -1;">
             <label data-i18n="cfg.weather.url">天气接口 URL</label>

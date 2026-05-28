@@ -12,6 +12,7 @@ void LedManager::begin(uint8_t pin) {
   sta_connected_prev_ = false;
   last_toggle_ms_ = millis();
   blink_mode_ = BlinkMode::None;
+  blink_hold_ = false;
   blink_step_ = 0;
   blink_next_ms_ = last_toggle_ms_;
   breath_active_ = false;
@@ -30,6 +31,7 @@ void LedManager::configure(bool enabled, uint8_t max_level, bool active_low) {
   if (!enabled_) {
     state_on_ = false;
     blink_mode_ = BlinkMode::None;
+    blink_hold_ = false;
     breath_active_ = false;
     writeLevel(0);
     reportState(TraceState::Off, "disabled");
@@ -46,6 +48,7 @@ void LedManager::triggerBreath(uint8_t cycles, const char *reason) {
   breath_active_ = true;
   breath_hold_ = false;
   blink_mode_ = BlinkMode::None;
+  blink_hold_ = false;
   breath_cycles_ = (cycles == 0) ? 1 : cycles;
   breath_cycles_done_ = 0;
   breath_start_ms_ = millis() - (kBreathPeriodMs / 4u);
@@ -62,6 +65,7 @@ void LedManager::startBreath(const char *reason) {
   breath_active_ = true;
   breath_hold_ = true;
   blink_mode_ = BlinkMode::None;
+  blink_hold_ = false;
   breath_cycles_ = 1;
   breath_cycles_done_ = 0;
   breath_start_ms_ = millis() - (kBreathPeriodMs / 4u);
@@ -72,6 +76,7 @@ void LedManager::startBreath(const char *reason) {
 
 void LedManager::stopEffects(const char *reason) {
   blink_mode_ = BlinkMode::None;
+  blink_hold_ = false;
   if (breath_active_) {
     const uint32_t elapsed = millis() - breath_start_ms_;
     const uint32_t done_cycles = elapsed / kBreathPeriodMs;
@@ -93,11 +98,28 @@ void LedManager::triggerDoubleBlink(const char *reason) {
   }
   sleeping_ = false;
   blink_mode_ = BlinkMode::Double;
-  blink_step_ = 0;
-  blink_next_ms_ = millis();
+  blink_hold_ = false;
+  blink_step_ = 1;
+  blink_next_ms_ = millis() + kDoubleBlinkOnMs;
   breath_active_ = false;
   breath_hold_ = false;
+  setStateOn(true);
   reportState(TraceState::DoubleBlink, reason ? reason : "double_blink");
+}
+
+void LedManager::startDoubleBlink(const char *reason) {
+  if (pin_ == 255) {
+    return;
+  }
+  sleeping_ = false;
+  blink_mode_ = BlinkMode::Double;
+  blink_hold_ = true;
+  blink_step_ = 1;
+  blink_next_ms_ = millis() + kDoubleBlinkOnMs;
+  breath_active_ = false;
+  breath_hold_ = false;
+  setStateOn(true);
+  reportState(TraceState::DoubleBlink, reason ? reason : "double_blink_hold");
 }
 
 void LedManager::triggerSingleBlink(const char *reason) {
@@ -106,6 +128,7 @@ void LedManager::triggerSingleBlink(const char *reason) {
   }
   sleeping_ = false;
   blink_mode_ = BlinkMode::Single;
+  blink_hold_ = false;
   blink_step_ = 0;
   blink_next_ms_ = millis();
   breath_active_ = false;
@@ -117,6 +140,7 @@ void LedManager::setSleeping(bool sleeping, const char *reason) {
   sleeping_ = sleeping;
   if (sleeping_) {
     blink_mode_ = BlinkMode::None;
+    blink_hold_ = false;
     breath_active_ = false;
     breath_hold_ = false;
     setStateOn(false);
@@ -124,6 +148,20 @@ void LedManager::setSleeping(bool sleeping, const char *reason) {
     return;
   }
   reportState(TraceState::Off, reason ? reason : "wake");
+}
+
+void LedManager::setTraceMuted(bool muted) {
+  trace_muted_ = muted;
+}
+
+void LedManager::showConfigSessionOn(const char *reason) {
+  blink_mode_ = BlinkMode::None;
+  blink_hold_ = false;
+  breath_active_ = false;
+  breath_hold_ = false;
+  sleeping_ = false;
+  setStateOn(true);
+  reportState(TraceState::ConfigSessionOn, reason ? reason : "config_session_on");
 }
 
 void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected) {
@@ -147,13 +185,13 @@ void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected)
     if (blink_mode_ == BlinkMode::Single) {
       switch (blink_step_) {
         case 0:
-          setStateOn(false);
-          blink_next_ms_ = now_ms + kSingleBlinkOffMs;
+          setStateOn(true);
+          blink_next_ms_ = now_ms + kSingleBlinkOnMs;
           blink_step_ = 1;
           break;
         case 1:
-          setStateOn(true);
-          blink_next_ms_ = now_ms + kSingleBlinkOnMs;
+          setStateOn(false);
+          blink_next_ms_ = now_ms + kSingleBlinkOffMs;
           blink_step_ = 2;
           break;
         default:
@@ -164,28 +202,33 @@ void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected)
     } else {
       switch (blink_step_) {
         case 0:
-          setStateOn(false);
-          blink_next_ms_ = now_ms + kDoubleBlinkOffMs;
+          setStateOn(true);
+          blink_next_ms_ = now_ms + kDoubleBlinkOnMs;
           blink_step_ = 1;
           break;
         case 1:
-          setStateOn(true);
-          blink_next_ms_ = now_ms + kDoubleBlinkOnMs;
+          setStateOn(false);
+          blink_next_ms_ = now_ms + kDoubleBlinkGapMs;
           blink_step_ = 2;
           break;
         case 2:
-          setStateOn(false);
-          blink_next_ms_ = now_ms + kDoubleBlinkOffMs;
+          setStateOn(true);
+          blink_next_ms_ = now_ms + kDoubleBlinkOnMs;
           blink_step_ = 3;
           break;
         case 3:
-          setStateOn(true);
-          blink_next_ms_ = now_ms + kDoubleBlinkOnMs;
+          setStateOn(false);
+          blink_next_ms_ = now_ms + kDoubleBlinkPauseMs;
           blink_step_ = 4;
           break;
         default:
-          blink_mode_ = BlinkMode::None;
-          reportState(TraceState::Off, "double_blink_done");
+          if (blink_hold_) {
+            blink_step_ = 0;
+            blink_next_ms_ = now_ms;
+          } else {
+            blink_mode_ = BlinkMode::None;
+            reportState(TraceState::Off, "double_blink_done");
+          }
           break;
       }
     }
@@ -216,7 +259,8 @@ void LedManager::update(OperationMode mode, uint32_t now_ms, bool sta_connected)
   }
 
   if (mode == OperationMode::ConfigWait) {
-    if ((now_ms - last_toggle_ms_) >= kFastBlinkMs) {
+    const uint32_t interval = state_on_ ? kConfigWaitOnMs : kConfigWaitOffMs;
+    if ((now_ms - last_toggle_ms_) >= interval) {
       setStateOn(!state_on_);
       last_toggle_ms_ = now_ms;
     }
@@ -249,6 +293,9 @@ void LedManager::reportState(TraceState state, const char *reason) {
     return;
   }
   trace_state_ = state;
+  if (trace_muted_) {
+    return;
+  }
   Serial.printf("[LED] state=%s reason=%s\n", stateName(state),
                 reason ? reason : "state_change");
 }

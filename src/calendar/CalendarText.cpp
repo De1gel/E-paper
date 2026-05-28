@@ -52,6 +52,10 @@ FontBoxMetrics fontBoxMetrics(TextFont font) {
       return FontBoxMetrics{0, 0, kAscii8GlyphWidth, kAscii8GlyphHeight};
     case TextFont::Ascii10:
       return FontBoxMetrics{0, 0, kAscii10GlyphWidth, kAscii10GlyphHeight};
+    case TextFont::AsciiSmooth16:
+      return FontBoxMetrics{0, 0, 0, fonts::kAsciiSmooth16FontPx};
+    case TextFont::AsciiSmooth14:
+      return FontBoxMetrics{0, 0, 0, fonts::kAsciiSmooth14FontPx};
     case TextFont::Digit10:
       return FontBoxMetrics{0, 0, 0, kDigit10GlyphHeight};
     case TextFont::Digit14:
@@ -909,6 +913,18 @@ bool nextTextGlyph(const String &text, size_t &byte_index, GlyphBitmap &glyph, T
     if (font == TextFont::AsciiSmooth) {
       if (fonts::lookupAsciiSmoothGlyph(static_cast<char>(codepoint), glyph.rows, glyph.width,
                                         glyph.height, glyph.row_bytes, glyph.bits_per_pixel)) {
+        return true;
+      }
+    }
+    if (font == TextFont::AsciiSmooth16) {
+      if (fonts::lookupAsciiSmooth16Glyph(static_cast<char>(codepoint), glyph.rows, glyph.width,
+                                          glyph.height, glyph.row_bytes, glyph.bits_per_pixel)) {
+        return true;
+      }
+    }
+    if (font == TextFont::AsciiSmooth14) {
+      if (fonts::lookupAsciiSmooth14Glyph(static_cast<char>(codepoint), glyph.rows, glyph.width,
+                                          glyph.height, glyph.row_bytes, glyph.bits_per_pixel)) {
         return true;
       }
     }

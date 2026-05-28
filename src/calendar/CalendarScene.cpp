@@ -108,6 +108,10 @@ uint8_t intrinsicTextPx(TextFont font, uint8_t requested_px) {
       return 8u;
     case TextFont::Ascii10:
       return 10u;
+    case TextFont::AsciiSmooth14:
+      return 14u;
+    case TextFont::AsciiSmooth16:
+      return 16u;
     case TextFont::AsciiSmooth:
       return 20u;
     case TextFont::Digit10:
@@ -137,6 +141,12 @@ TextFont weatherCandidateFont(const String &text, uint8_t requested_px) {
   if (isAsciiOnlyText(text)) {
     if (requested_px >= 18u) {
       return TextFont::AsciiSmooth;
+    }
+    if (requested_px >= 16u) {
+      return TextFont::AsciiSmooth16;
+    }
+    if (requested_px >= 14u) {
+      return TextFont::AsciiSmooth14;
     }
     if (requested_px >= 10u) {
       return TextFont::Ascii10;
@@ -665,6 +675,7 @@ struct HeaderWeatherTextLayout {
   TextFont font = TextFont::Auto;
   TextAAMode aa = TextAAMode::Threshold;
   uint16_t x = 0;
+  uint16_t y = 0;
 };
 
 struct HeaderSensorTextParts {
@@ -705,6 +716,8 @@ HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
                                                 TextFont header_date_font) {
   HeaderWeatherTextLayout out;
   out.text = model.header_weather;
+  const uint16_t icon_y = weatherHeaderIconY(header);
+  out.y = header.weather_y;
   const uint16_t date_right = static_cast<uint16_t>(
       header.date_x + textWidthPx(model.header_date, kHeaderDatePx, header_date_font));
   const uint16_t left_limit = static_cast<uint16_t>(date_right + 8u);
@@ -714,6 +727,45 @@ HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
                                        : icon_x;
   const uint16_t available_w =
       (right_limit > left_limit) ? static_cast<uint16_t>(right_limit - left_limit) : 0u;
+  if (isAsciiOnlyText(model.header_weather)) {
+    struct AsciiWeatherCandidate {
+      TextFont font;
+      uint8_t px;
+    };
+    static const AsciiWeatherCandidate kAsciiCandidates[] = {
+        {TextFont::AsciiSmooth, 20u},
+        {TextFont::AsciiSmooth16, 16u},
+        {TextFont::AsciiSmooth14, 14u},
+    };
+    for (const auto &candidate : kAsciiCandidates) {
+      const uint8_t intrinsic_px = intrinsicTextPx(candidate.font, candidate.px);
+      const uint16_t text_w = textWidthPx(out.text, intrinsic_px, candidate.font);
+      if (text_w <= available_w) {
+        out.font = candidate.font;
+        out.px = intrinsic_px;
+        out.aa = preferredAsciiAAMode(model.header_weather, out.font, out.px);
+        out.x = static_cast<uint16_t>(right_limit - text_w);
+        out.y = static_cast<uint16_t>(
+            icon_y + ((kHeaderWeatherIconSize > out.px) ? (kHeaderWeatherIconSize - out.px) / 2u : 0u));
+        return out;
+      }
+    }
+
+    const AsciiWeatherCandidate fallback =
+        kAsciiCandidates[sizeof(kAsciiCandidates) / sizeof(kAsciiCandidates[0]) - 1u];
+    out.font = fallback.font;
+    out.px = intrinsicTextPx(out.font, fallback.px);
+    out.aa = preferredAsciiAAMode(model.header_weather, out.font, out.px);
+    out.text = truncateTextToWidth(model.header_weather, available_w, out.px, out.font);
+    const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
+    out.x = (right_limit > text_w) ? static_cast<uint16_t>(right_limit - text_w) : left_limit;
+    if (out.x < left_limit) {
+      out.x = left_limit;
+    }
+    out.y = static_cast<uint16_t>(
+        icon_y + ((kHeaderWeatherIconSize > out.px) ? (kHeaderWeatherIconSize - out.px) / 2u : 0u));
+    return out;
+  }
   static const uint8_t kCandidatePx[] = {30u, 26u, 20u, 16u, 10u, 8u, 6u};
   for (const uint8_t px : kCandidatePx) {
     const TextFont font = weatherCandidateFont(model.header_weather, px);
@@ -724,6 +776,8 @@ HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
       out.font = font;
       out.aa = preferredAsciiAAMode(model.header_weather, font, intrinsic_px);
       out.x = static_cast<uint16_t>(right_limit - text_w);
+      out.y = static_cast<uint16_t>(
+          icon_y + ((kHeaderWeatherIconSize > out.px) ? (kHeaderWeatherIconSize - out.px) / 2u : 0u));
       return out;
     }
   }
@@ -735,6 +789,8 @@ HeaderWeatherTextLayout layoutHeaderWeatherText(const CalendarModel &model,
   out.text = truncateTextToWidth(model.header_weather, available_w, out.px, out.font);
   const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
   out.x = (right_limit > text_w) ? static_cast<uint16_t>(right_limit - text_w) : left_limit;
+  out.y = static_cast<uint16_t>(
+      icon_y + ((kHeaderWeatherIconSize > out.px) ? (kHeaderWeatherIconSize - out.px) / 2u : 0u));
   return out;
 }
 
@@ -1067,7 +1123,7 @@ void emitCalendarWeatherHeader(const CalendarModel &model, const CalendarLayout 
   const uint16_t wifi_x = wifiHeaderIconX(header, model.header_weather, weather_text.font);
   const uint16_t battery_x = batteryHeaderIconX(header, model.header_weather, weather_text.font);
   const uint16_t status_y = statusHeaderIconY(header);
-  sink.text(weather_text.x, header.weather_y, weather_text.text, weather_text.px, green,
+  sink.text(weather_text.x, weather_text.y, weather_text.text, weather_text.px, green,
             weather_text.font, weather_text.aa);
   emitWifiIcon(sink, wifi_x, status_y, model.header_wifi_connected);
   emitBatteryIcon(sink, battery_x, status_y, model.header_battery_pct);

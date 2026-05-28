@@ -15,8 +15,11 @@ class LedManager {
   void startBreath(const char *reason = nullptr);
   void stopEffects(const char *reason = nullptr);
   void triggerDoubleBlink(const char *reason = nullptr);
+  void startDoubleBlink(const char *reason = nullptr);
   void triggerSingleBlink(const char *reason = nullptr);
   void setSleeping(bool sleeping, const char *reason = nullptr);
+  void setTraceMuted(bool muted);
+  void showConfigSessionOn(const char *reason = nullptr);
   void update(OperationMode mode, uint32_t now_ms, bool sta_connected = false);
   const char *currentStateName() const;
 
@@ -47,10 +50,12 @@ class LedManager {
   bool active_low_ = false;
   uint8_t max_level_ = 255;
   bool sleeping_ = false;
+  bool trace_muted_ = false;
   bool state_on_ = false;
   bool sta_connected_prev_ = false;
   uint32_t last_toggle_ms_ = 0;
   BlinkMode blink_mode_ = BlinkMode::None;
+  bool blink_hold_ = false;
   uint8_t blink_step_ = 0;
   uint32_t blink_next_ms_ = 0;
   bool breath_active_ = false;
@@ -59,11 +64,13 @@ class LedManager {
   uint8_t breath_cycles_done_ = 0;
   uint32_t breath_start_ms_ = 0;
   TraceState trace_state_ = TraceState::Off;
-  static constexpr uint32_t kFastBlinkMs = 150;
-  static constexpr uint32_t kDoubleBlinkOnMs = 120;
-  static constexpr uint32_t kDoubleBlinkOffMs = 180;
+  static constexpr uint32_t kConfigWaitOnMs = 120;
+  static constexpr uint32_t kConfigWaitOffMs = 900;
+  static constexpr uint32_t kDoubleBlinkOnMs = 140;
+  static constexpr uint32_t kDoubleBlinkGapMs = 120;
+  static constexpr uint32_t kDoubleBlinkPauseMs = 650;
   static constexpr uint32_t kSingleBlinkOnMs = 120;
-  static constexpr uint32_t kSingleBlinkOffMs = 120;
+  static constexpr uint32_t kSingleBlinkOffMs = 700;
   static constexpr uint32_t kBreathPeriodMs = 1200;
   static constexpr uint8_t kBreathInitialLevel = 96;
   static constexpr uint8_t kPwmChannel = 0;

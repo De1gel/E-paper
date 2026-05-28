@@ -5,19 +5,18 @@
 namespace appfw {
 namespace {
 
-constexpr const char *kDefaultStaSsid = "DESKTOP-09PTMRM 4607";
+constexpr const char *kDefaultStaSsid = "";
 constexpr const char *kDefaultStaUser = "";
-constexpr const char *kDefaultStaPass = "67O9b1-2";
+constexpr const char *kDefaultStaPass = "";
 constexpr const char *kDefaultStaAuthMode = "auto";
-constexpr const char *kDefaultPortalLoginUrl = "";
 constexpr const char *kDefaultUiLanguage = "zh";
 constexpr const char *kDefaultTimezone = "Asia/Shanghai";
-constexpr const char *kDefaultCalendarUrl = "";
-constexpr const char *kDefaultWeatherCity = "Shanghai";
-constexpr const char *kDefaultWeatherLat = "31.2304";
-constexpr const char *kDefaultWeatherLon = "121.4737";
+constexpr const char *kDefaultCalendarUrl = "/team-sync-meeting.ics";
+constexpr const char *kDefaultWeatherCity = "北京";
+constexpr const char *kDefaultWeatherLat = "39.9042";
+constexpr const char *kDefaultWeatherLon = "116.4074";
 constexpr const char *kDefaultWeatherUrl =
-    "http://api.open-meteo.com/v1/forecast?latitude=31.2304&longitude=121.4737&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
+    "http://api.open-meteo.com/v1/forecast?latitude=39.9042&longitude=116.4074&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
 
 }  // namespace
 
@@ -27,7 +26,6 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
   settings.sta_user = kDefaultStaUser;
   settings.sta_pass = kDefaultStaPass;
   settings.sta_auth_mode = kDefaultStaAuthMode;
-  settings.portal_login_url = kDefaultPortalLoginUrl;
   settings.ui_language = kDefaultUiLanguage;
   settings.timezone = kDefaultTimezone;
   settings.photo_interval_sec = 3600;
@@ -35,8 +33,8 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
   settings.app_switch_interval_sec = 3600;
   settings.calendar_enabled = false;
   settings.calendar_layout = "landscape_split";
-  settings.calendar_refresh_sec = 900;
-  settings.calendar_time_refresh_sec = 600;
+  settings.calendar_refresh_sec = 3600;
+  settings.calendar_time_refresh_sec = 900;
   settings.sleep_start_minute = 22 * 60;
   settings.sleep_end_minute = 8 * 60;
   settings.calendar_url = kDefaultCalendarUrl;
@@ -54,11 +52,9 @@ void SettingsStore::normalize(WifiSettings &settings) {
   settings.sta_auth_mode.trim();
   settings.sta_auth_mode.toLowerCase();
   if (!(settings.sta_auth_mode == "auto" || settings.sta_auth_mode == "open" ||
-        settings.sta_auth_mode == "personal" || settings.sta_auth_mode == "enterprise" ||
-        settings.sta_auth_mode == "portal")) {
+        settings.sta_auth_mode == "personal" || settings.sta_auth_mode == "enterprise")) {
     settings.sta_auth_mode = kDefaultStaAuthMode;
   }
-  settings.portal_login_url.trim();
   settings.calendar_url.trim();
   settings.weather_city.trim();
   settings.weather_lat.trim();
@@ -122,9 +118,6 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   if (prefs.isKey("sta_user")) settings.sta_user = prefs.getString("sta_user", kDefaultStaUser);
   if (prefs.isKey("sta_pass")) settings.sta_pass = prefs.getString("sta_pass", kDefaultStaPass);
   if (prefs.isKey("sta_auth")) settings.sta_auth_mode = prefs.getString("sta_auth", kDefaultStaAuthMode);
-  if (prefs.isKey("portal_url")) {
-    settings.portal_login_url = prefs.getString("portal_url", kDefaultPortalLoginUrl);
-  }
   if (prefs.isKey("ui_lang")) settings.ui_language = prefs.getString("ui_lang", kDefaultUiLanguage);
   if (prefs.isKey("timezone")) settings.timezone = prefs.getString("timezone", kDefaultTimezone);
   if (prefs.isKey("photo_sec")) settings.photo_interval_sec = prefs.getUInt("photo_sec", 3600);
@@ -136,7 +129,7 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   }
   if (prefs.isKey("cal_en")) settings.calendar_enabled = prefs.getBool("cal_en", false);
   if (prefs.isKey("cal_layout")) settings.calendar_layout = prefs.getString("cal_layout", "landscape_split");
-  if (prefs.isKey("cal_sec")) settings.calendar_refresh_sec = prefs.getUInt("cal_sec", 900);
+  if (prefs.isKey("cal_sec")) settings.calendar_refresh_sec = prefs.getUInt("cal_sec", 3600);
   if (prefs.isKey("cal_time_sec")) {
     settings.calendar_time_refresh_sec =
         prefs.getUInt("cal_time_sec", settings.calendar_time_refresh_sec);
@@ -183,7 +176,6 @@ bool SettingsStore::save(Preferences &prefs, const WifiSettings &settings,
   prefs.putString("sta_user", settings.sta_user);
   prefs.putString("sta_pass", settings.sta_pass);
   prefs.putString("sta_auth", settings.sta_auth_mode);
-  prefs.putString("portal_url", settings.portal_login_url);
   prefs.putString("ui_lang", settings.ui_language);
   prefs.putString("timezone", settings.timezone);
   prefs.putUInt("photo_sec", settings.photo_interval_sec);

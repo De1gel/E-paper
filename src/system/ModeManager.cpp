@@ -118,4 +118,11 @@ void ModeManager::forceNormal(uint32_t now_ms, const char *reason) {
   }
 }
 
+void ModeManager::forceConfigWait(uint32_t now_ms, const char *reason) {
+  if (mode_ != OperationMode::ConfigWait) {
+    Serial.printf("[CONFIG] force config wait (%s)\n", reason ? reason : "no_reason");
+    setMode(OperationMode::ConfigWait, now_ms);
+  }
+}
+
 }  // namespace appfw

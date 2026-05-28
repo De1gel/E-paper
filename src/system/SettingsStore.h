@@ -13,7 +13,6 @@ struct WifiSettings {
   String sta_user;
   String sta_pass;
   String sta_auth_mode;
-  String portal_login_url;
   String ui_language;
   String timezone;
   uint32_t photo_interval_sec = 3600;
@@ -21,8 +20,8 @@ struct WifiSettings {
   uint32_t app_switch_interval_sec = 3600;
   bool calendar_enabled = false;
   String calendar_layout;
-  uint32_t calendar_refresh_sec = 900;
-  uint32_t calendar_time_refresh_sec = 600;
+  uint32_t calendar_refresh_sec = 3600;
+  uint32_t calendar_time_refresh_sec = 900;
   uint16_t sleep_start_minute = 22 * 60;
   uint16_t sleep_end_minute = 8 * 60;
   String calendar_url;

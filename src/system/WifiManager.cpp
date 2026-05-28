@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <algorithm>
+#include <cstring>
 #include <vector>
 #include <esp_adc_cal.h>
 #include <esp_sntp.h>
@@ -652,34 +653,57 @@ void WifiManager::registerWifiEvents() {
 void WifiManager::handleWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_START:
-      Serial.println("[WIFI][EVT] STA_START");
+      if (kDebugLogs) {
+        Serial.println("[WIFI][EVT] STA_START");
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_STOP:
-      Serial.println("[WIFI][EVT] STA_STOP");
+      if (kDebugLogs) {
+        Serial.println("[WIFI][EVT] STA_STOP");
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-      Serial.printf("[WIFI][EVT] STA_CONNECTED ssid=%s channel=%d auth=%d\n",
-                    reinterpret_cast<const char *>(info.wifi_sta_connected.ssid),
-                    static_cast<int>(info.wifi_sta_connected.channel),
-                    static_cast<int>(info.wifi_sta_connected.authmode));
+      if (kDebugLogs) {
+        Serial.printf("[WIFI][EVT] STA_CONNECTED ssid=%s channel=%d auth=%d\n",
+                      reinterpret_cast<const char *>(info.wifi_sta_connected.ssid),
+                      static_cast<int>(info.wifi_sta_connected.channel),
+                      static_cast<int>(info.wifi_sta_connected.authmode));
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      Serial.printf("[WIFI][EVT] STA_DISCONNECTED reason=%u (%s) ssid=%s\n",
-                    static_cast<unsigned>(info.wifi_sta_disconnected.reason),
-                    disconnectReasonName(info.wifi_sta_disconnected.reason),
-                    reinterpret_cast<const char *>(info.wifi_sta_disconnected.ssid));
+      if (kDebugLogs) {
+        Serial.printf("[WIFI][EVT] STA_DISCONNECTED reason=%u (%s) ssid=%s\n",
+                      static_cast<unsigned>(info.wifi_sta_disconnected.reason),
+                      disconnectReasonName(info.wifi_sta_disconnected.reason),
+                      reinterpret_cast<const char *>(info.wifi_sta_disconnected.ssid));
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      Serial.printf("[WIFI][EVT] STA_GOT_IP ip=%s gw=%s mask=%s\n",
-                    IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str(),
-                    IPAddress(info.got_ip.ip_info.gw.addr).toString().c_str(),
-                    IPAddress(info.got_ip.ip_info.netmask.addr).toString().c_str());
+      if (kDebugLogs) {
+        Serial.printf("[WIFI][EVT] STA_GOT_IP ip=%s gw=%s mask=%s\n",
+                      IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str(),
+                      IPAddress(info.got_ip.ip_info.gw.addr).toString().c_str(),
+                      IPAddress(info.got_ip.ip_info.netmask.addr).toString().c_str());
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_LOST_IP:
-      Serial.println("[WIFI][EVT] STA_LOST_IP");
+      if (kDebugLogs) {
+        Serial.println("[WIFI][EVT] STA_LOST_IP");
+      }
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+      ap_client_connected_ = true;
+      Serial.println("[WIFI][EVT] AP_CLIENT_CONNECTED");
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      if (kDebugLogs) {
+        Serial.println("[WIFI][EVT] AP_CLIENT_DISCONNECTED");
+      }
       break;
     default:
-      Serial.printf("[WIFI][EVT] %s (%d)\n", wifiEventName(event), static_cast<int>(event));
+      if (kDebugLogs) {
+        Serial.printf("[WIFI][EVT] %s (%d)\n", wifiEventName(event), static_cast<int>(event));
+      }
       break;
   }
 }
@@ -875,6 +899,18 @@ void WifiManager::update(uint32_t now_ms) {
         Serial.printf("[WIFI] STA connected ip=%s mdns_start_failed\n",
                       WiFi.localIP().toString().c_str());
       }
+      if (sta_session_role_ == StaSessionRole::ManualConfig) {
+        manual_sta_sync_settled_ = true;
+        calendar_sync_pending_ = false;
+        last_calendar_sync_ms_ = 0;
+        return;
+      }
+      if (sta_session_role_ == StaSessionRole::ApBackground) {
+        calendar_sync_pending_ = false;
+        last_calendar_sync_ms_ = 0;
+        Serial.println("[WIFI] AP background STA connected");
+        return;
+      }
       String resolved_timezone;
       String local_time;
       String sync_error;
@@ -917,7 +953,9 @@ void WifiManager::update(uint32_t now_ms) {
   if (state_ == State::StaRunning && WiFi.status() != WL_CONNECTED) {
     Serial.println("[WIFI] STA lost connection -> stop");
     sta_connect_failed_ = true;
-    if (isApSessionActive()) {
+    if (sta_session_role_ == StaSessionRole::ManualConfig) {
+      cleanupDisconnectedStaSession("manual_sta_lost_connection");
+    } else if (isApSessionActive()) {
       stopStaOnly("sta_lost_connection_keep_ap");
     } else {
       stop("sta_lost_connection");
@@ -1029,15 +1067,6 @@ bool WifiManager::beginStaConnection() {
     Serial.println("[WIFI] STA open begin");
     return true;
   }
-  if (mode == "portal") {
-    if (settings_.sta_pass.length() > 0) {
-      WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
-    } else {
-      WiFi.begin(settings_.sta_ssid.c_str());
-    }
-    Serial.printf("[WIFI] STA portal begin login_url=%s\n", settings_.portal_login_url.c_str());
-    return true;
-  }
   WiFi.begin(settings_.sta_ssid.c_str(), settings_.sta_pass.c_str());
   Serial.println("[WIFI] STA personal begin");
   return true;
@@ -1083,6 +1112,29 @@ void WifiManager::writeClockToRtc(const char *reason) {
   }
 }
 
+void WifiManager::cleanupDisconnectedStaSession(const char *reason) {
+  Serial.printf("[WIFI] cleanup disconnected STA reason=%s\n", reason ? reason : "none");
+  stopServer();
+  deinitSD();
+  MDNS.end();
+  esp_wifi_sta_wpa2_ent_disable();
+  esp_wifi_sta_wpa2_ent_clear_identity();
+  esp_wifi_sta_wpa2_ent_clear_username();
+  esp_wifi_sta_wpa2_ent_clear_password();
+  state_ = isApSessionActive() ? State::ApRunning : State::Idle;
+  sta_connect_start_ms_ = 0;
+  sta_connect_timeout_ms_ = 0;
+  sta_session_start_ms_ = 0;
+  calendar_sync_pending_ = false;
+  last_calendar_sync_ms_ = 0;
+  sta_manual_session_ = false;
+  sta_session_role_ = StaSessionRole::None;
+  last_sta_wifi_status_ = WL_IDLE_STATUS;
+  if (!isApSessionActive()) {
+    digitalWrite(kPeripheralPowerPin, LOW);
+  }
+}
+
 void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag) {
   const bool keep_ap = isApSessionActive();
   if (!keep_ap) {
@@ -1096,8 +1148,12 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
   WiFi.setSleep(true);
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
   WiFi.setHostname(kDefaultHostname);
-  if (kDebugLogs) {
+  if (kWifiScanDiagLogs && keep_ap) {
+    Serial.println("[WIFI] STA scan skipped reason=ap_active");
+  } else if (kWifiScanDiagLogs) {
     logStaScanResults();
+  } else if (kDebugLogs) {
+    Serial.println("[WIFI] STA scan skipped reason=normal_log");
   }
   if (!beginStaConnection()) {
     sta_connect_failed_ = true;
@@ -1111,6 +1167,18 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
   }
   sta_connect_start_ms_ = millis();
   sta_connect_timeout_ms_ = connect_timeout_ms;
+  sta_manual_session_ = !keep_ap && reason_tag && strcmp(reason_tag, "manual") == 0;
+  if (reason_tag && strcmp(reason_tag, "manual") == 0) {
+    sta_session_role_ = StaSessionRole::ManualConfig;
+  } else if (reason_tag && strcmp(reason_tag, "ap_config_background") == 0) {
+    sta_session_role_ = StaSessionRole::ApBackground;
+  } else if (reason_tag && strcmp(reason_tag, "calendar_pre_refresh") == 0) {
+    sta_session_role_ = StaSessionRole::CalendarPreRefresh;
+  } else if (reason_tag && strcmp(reason_tag, "auto_sync") == 0) {
+    sta_session_role_ = StaSessionRole::AutoSync;
+  } else {
+    sta_session_role_ = StaSessionRole::None;
+  }
   state_ = State::StaConnecting;
   last_sta_wifi_status_ = WiFi.status();
   Serial.printf("[WIFI] STA connecting reason=%s ssid=%s auth=%s user_len=%u pass_len=%u timeout=%lus initial_status=%s/%d\n",
@@ -1153,6 +1221,8 @@ void WifiManager::stop(const char *reason) {
   last_activity_ms_ = 0;
   last_calendar_sync_ms_ = 0;
   calendar_sync_pending_ = false;
+  sta_manual_session_ = false;
+  sta_session_role_ = StaSessionRole::None;
   last_sta_wifi_status_ = WL_IDLE_STATUS;
 }
 
@@ -1181,6 +1251,7 @@ void WifiManager::stopStaOnly(const char *reason) {
   sta_session_start_ms_ = 0;
   calendar_sync_pending_ = false;
   last_calendar_sync_ms_ = 0;
+  sta_session_role_ = StaSessionRole::None;
   last_sta_wifi_status_ = WL_IDLE_STATUS;
   if (!ap_active_) {
     stop("sta_only_stop_no_ap");
@@ -1205,6 +1276,18 @@ bool WifiManager::consumeStaConnectFailed() {
   return value;
 }
 
+bool WifiManager::consumeManualStaSyncSettled() {
+  const bool value = manual_sta_sync_settled_;
+  manual_sta_sync_settled_ = false;
+  return value;
+}
+
+bool WifiManager::consumeApClientConnected() {
+  const bool value = ap_client_connected_;
+  ap_client_connected_ = false;
+  return value;
+}
+
 bool WifiManager::isStaConnecting() const {
   return state_ == State::StaConnecting;
 }
@@ -1223,9 +1306,6 @@ bool WifiManager::hasStaCredentials() const {
   }
   if (mode == "enterprise") {
     return settings_.sta_user.length() > 0 && settings_.sta_pass.length() > 0;
-  }
-  if (mode == "portal") {
-    return true;
   }
   return settings_.sta_pass.length() > 0;
 }
@@ -1249,6 +1329,45 @@ void WifiManager::requestCalendarSyncNow() {
     last_calendar_sync_status_ = "queued";
   }
   last_calendar_sync_error_ = "";
+}
+
+bool WifiManager::syncCalendarNow(const char *reason) {
+  if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[CALSYNC] skipped reason=%s sta_not_connected\n",
+                  reason ? reason : "manual");
+    return false;
+  }
+  if (!settings_.calendar_enabled) {
+    return false;
+  }
+  const bool is_remote_url =
+      settings_.calendar_url.startsWith("http://") || settings_.calendar_url.startsWith("https://");
+  const bool is_local_path = settings_.calendar_url.startsWith("/");
+  if (!is_remote_url && !is_local_path) {
+    if (settings_.calendar_url.length() == 0) {
+      Serial.println("[CALSYNC] skip reason=empty_url");
+    } else {
+      Serial.printf("[CALSYNC] skip unsupported source=%s\n", settings_.calendar_url.c_str());
+    }
+    return false;
+  }
+
+  Serial.printf("[CALSYNC] trigger reason=%s url=%s\n",
+                reason ? reason : "manual",
+                settings_.calendar_url.c_str());
+  calendar_sync_pending_ = false;
+  last_calendar_sync_ms_ = millis();
+  last_calendar_sync_status_ = "running";
+  last_calendar_sync_error_ = "";
+  String error_msg;
+  if (!syncCalendarFromUrl(error_msg)) {
+    last_calendar_sync_status_ = "error";
+    last_calendar_sync_error_ = error_msg;
+    Serial.printf("[CALSYNC] failed err=%s url=%s\n", error_msg.c_str(),
+                  settings_.calendar_url.c_str());
+    return false;
+  }
+  return true;
 }
 
 bool WifiManager::syncWeatherNow(const char *reason) {
@@ -1440,18 +1559,11 @@ void WifiManager::maybeSyncCalendarUrl(uint32_t now_ms) {
   if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (!settings_.calendar_enabled) {
+  if (sta_session_role_ == StaSessionRole::ManualConfig ||
+      sta_session_role_ == StaSessionRole::ApBackground) {
     return;
   }
-  const bool is_remote_url =
-      settings_.calendar_url.startsWith("http://") || settings_.calendar_url.startsWith("https://");
-  const bool is_local_path = settings_.calendar_url.startsWith("/");
-  if (!is_remote_url && !is_local_path) {
-    Serial.printf("[CALSYNC] skip unsupported source=%s\n", settings_.calendar_url.c_str());
-    calendar_sync_pending_ = false;
-    if (last_calendar_sync_status_ == "queued" || last_calendar_sync_status_ == "running") {
-      last_calendar_sync_status_ = "idle";
-    }
+  if (!settings_.calendar_enabled) {
     return;
   }
 
@@ -1462,6 +1574,23 @@ void WifiManager::maybeSyncCalendarUrl(uint32_t now_ms) {
   const bool due_by_interval =
       last_calendar_sync_ms_ != 0u && (now_ms - last_calendar_sync_ms_) >= sync_interval_ms;
   if (!calendar_sync_pending_ && !due_by_interval) {
+    return;
+  }
+
+  const bool is_remote_url =
+      settings_.calendar_url.startsWith("http://") || settings_.calendar_url.startsWith("https://");
+  const bool is_local_path = settings_.calendar_url.startsWith("/");
+  if (!is_remote_url && !is_local_path) {
+    if (settings_.calendar_url.length() == 0) {
+      Serial.println("[CALSYNC] skip reason=empty_url");
+    } else {
+      Serial.printf("[CALSYNC] skip unsupported source=%s\n", settings_.calendar_url.c_str());
+      last_calendar_sync_ms_ = now_ms;
+    }
+    calendar_sync_pending_ = false;
+    if (last_calendar_sync_status_ == "queued" || last_calendar_sync_status_ == "running") {
+      last_calendar_sync_status_ = "idle";
+    }
     return;
   }
 
@@ -2406,9 +2535,8 @@ void WifiManager::handleRoot() {
           <div class='field'><label>STA SSID</label><input id='ssid'></div>
           <div class='field'><label>STA 密码</label><input id='pass' type='password'></div>
           <div class='field'><label>账号 / 身份</label><input id='staUser'></div>
-          <div class='field'><label>连接类型</label><select id='staAuthMode'><option value='auto'>自动</option><option value='personal'>普通密码 WiFi</option><option value='enterprise'>企业/校园网 802.1X</option><option value='open'>开放网络</option><option value='portal'>网页登录认证</option></select></div>
-          <div class='field' style='grid-column:1/3'><label>网页登录地址</label><input id='portalLoginUrl' placeholder='例如 http://10.0.0.1/login'></div>
-          <div class='field'><label>轮播间隔（秒）</label><input id='sec' type='number' min='30'></div>
+          <div class='field'><label>连接类型</label><select id='staAuthMode'><option value='auto'>自动</option><option value='personal'>普通密码 WiFi</option><option value='enterprise'>企业/校园网 802.1X</option><option value='open'>开放网络</option></select></div>
+          <div class='field'><label>轮播间隔（小时）</label><input id='sec' type='number' min='0.01' max='24' step='0.01' placeholder='1'></div>
           <div class='field' style='grid-column:1/3'><label>天气接口 URL</label><input id='wurl'></div>
         </div>
         <div class='row' style='margin-top:10px'>
@@ -2636,6 +2764,20 @@ void WifiManager::handleRoot() {
       const ss = s%60;
       return `${h}h ${m}m ${ss}s`;
     }
+    function secondsToHoursValue(seconds, fallbackSeconds) {
+      const sec = Number(seconds || fallbackSeconds || 0);
+      if (!Number.isFinite(sec) || sec <= 0) return '';
+      const hours = Math.round((sec / 3600) * 100) / 100;
+      return String(hours);
+    }
+    function hoursToSecondsValue(value, fallbackSeconds, minSeconds, maxSeconds) {
+      const hours = Number.parseFloat(String(value || '').trim().replace(',', '.'));
+      let seconds = Number.isFinite(hours) && hours > 0 ? Math.round(hours * 3600) : fallbackSeconds;
+      if (!Number.isFinite(seconds) || seconds <= 0) seconds = fallbackSeconds;
+      if (seconds < minSeconds) seconds = minSeconds;
+      if (seconds > maxSeconds) seconds = maxSeconds;
+      return String(seconds);
+    }
     async function loadStatus() {
       const r = await fetch('/api/status');
       const txt = await r.text();
@@ -2672,13 +2814,13 @@ void WifiManager::handleRoot() {
       staUser.value = j.sta_user || '';
       pass.value = j.sta_pass || '';
       staAuthMode.value = j.sta_auth_mode || 'auto';
-      portalLoginUrl.value = j.portal_login_url || '';
-      sec.value = j.photo_interval_sec || 300;
+      sec.value = secondsToHoursValue(j.photo_interval_sec, 3600);
       wurl.value = j.weather_url || '';
     }
 
     async function saveCfg() {
-      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser.value)}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(staAuthMode.value)}&portal_login_url=${encodeURIComponent(portalLoginUrl.value)}&photo_interval_sec=${encodeURIComponent(sec.value)}&weather_url=${encodeURIComponent(wurl.value)}`;
+      const photoInterval = hoursToSecondsValue(sec.value, 3600, 30, 86400);
+      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser.value)}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(staAuthMode.value)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&weather_url=${encodeURIComponent(wurl.value)}`;
       const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
       document.getElementById('cfgBox').textContent = await r.text();
     }
@@ -3160,7 +3302,6 @@ void WifiManager::handleSettingsGet() {
   json += "\"sta_user\":\"" + jsonEscape(settings_.sta_user) + "\",";
   json += "\"sta_pass\":\"" + jsonEscape(settings_.sta_pass) + "\",";
   json += "\"sta_auth_mode\":\"" + jsonEscape(settings_.sta_auth_mode) + "\",";
-  json += "\"portal_login_url\":\"" + jsonEscape(settings_.portal_login_url) + "\",";
   json += "\"ui_language\":\"" + jsonEscape(settings_.ui_language) + "\",";
   json += "\"timezone\":\"" + jsonEscape(settings_.timezone) + "\",";
   json += "\"photo_interval_sec\":" + String(settings_.photo_interval_sec) + ",";
@@ -3195,9 +3336,6 @@ void WifiManager::handleSettingsPost() {
   if (server_->hasArg("sta_user")) settings_.sta_user = server_->arg("sta_user");
   if (server_->hasArg("sta_pass")) settings_.sta_pass = server_->arg("sta_pass");
   if (server_->hasArg("sta_auth_mode")) settings_.sta_auth_mode = server_->arg("sta_auth_mode");
-  if (server_->hasArg("portal_login_url")) {
-    settings_.portal_login_url = server_->arg("portal_login_url");
-  }
   if (server_->hasArg("ui_language")) settings_.ui_language = server_->arg("ui_language");
   if (server_->hasArg("photo_interval_sec")) {
     settings_.photo_interval_sec = static_cast<uint32_t>(server_->arg("photo_interval_sec").toInt());
@@ -3251,10 +3389,6 @@ void WifiManager::handleSettingsPost() {
   if (server_->hasArg("weather_url")) settings_.weather_url = server_->arg("weather_url");
 
   SettingsStore::normalize(settings_);
-  if (settings_.sta_ssid.length() == 0) {
-    server_->send(400, "application/json", "{\"ok\":false,\"error\":\"empty_sta_ssid\"}");
-    return;
-  }
   SettingsStore::fillEmptyValues(settings_);
 
   if (state_ == State::StaRunning &&

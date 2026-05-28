@@ -19,10 +19,15 @@ namespace appfw {
 #define APP_SLEEP_QUIET_LOGS 0
 #endif
 
+#ifndef APP_WIFI_SCAN_DIAG_LOGS
+#define APP_WIFI_SCAN_DIAG_LOGS 0
+#endif
+
 static constexpr bool kDebugLogs = APP_DEBUG_LOGS != 0;
 static constexpr bool kLightSleepEnabled = APP_ENABLE_LIGHT_SLEEP != 0;
 static constexpr bool kSleepDiagLogs = APP_SLEEP_DIAG_LOGS != 0;
 static constexpr bool kSleepQuietLogs = APP_SLEEP_QUIET_LOGS != 0;
+static constexpr bool kWifiScanDiagLogs = APP_WIFI_SCAN_DIAG_LOGS != 0;
 
 }  // namespace appfw
 
