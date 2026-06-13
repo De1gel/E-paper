@@ -1108,14 +1108,14 @@ async function loadCfg() {
   } else {
     applyI18n("zh");
   }
-  sec.value = secondsToHoursValue(j.photo_interval_sec, 3600);
+  sec.value = secondsToHoursValue(j.photo_interval_sec, 7200);
   if (appAutoSwitch) appAutoSwitch.checked = !!j.app_auto_switch_enabled;
   if (appSwitchSec) appSwitchSec.value = secondsToHoursValue(j.app_switch_interval_sec, 3600);
   syncAppAutoSwitchFields();
   if (calendarLayout) {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
-  calendarSec.value = secondsToHoursValue(j.calendar_refresh_sec, 3600);
+  calendarSec.value = secondsToHoursValue(j.calendar_refresh_sec, 7200);
   if (sleepStart) sleepStart.value = j.sleep_start || "22:00";
   if (sleepEnd) sleepEnd.value = j.sleep_end || "08:00";
   calendarUrl.value = j.calendar_url || "";
@@ -1134,7 +1134,15 @@ async function saveCfg() {
     let lon = (weatherLon.value || "").trim();
     let weatherUrl = (wurl.value || "").trim();
 
-    if (lat && lon && !weatherUrl) {
+    if (city) {
+      const resolved = await resolveCity();
+      if (!resolved) {
+        return;
+      }
+      lat = (weatherLat.value || "").trim();
+      lon = (weatherLon.value || "").trim();
+      weatherUrl = (wurl.value || "").trim();
+    } else if (lat && lon && !weatherUrl) {
       weatherUrl = buildOpenMeteoUrl(lat, lon);
       wurl.value = weatherUrl;
     }
@@ -1143,9 +1151,9 @@ async function saveCfg() {
     const sleepStartValue = sleepStart ? sleepStart.value : "22:00";
     const sleepEndValue = sleepEnd ? sleepEnd.value : "08:00";
     const appSwitchEnabled = appAutoSwitch && appAutoSwitch.checked ? "1" : "0";
-    const photoInterval = sec ? hoursToSecondsValue(sec.value, 3600, 30, 86400) : "3600";
+    const photoInterval = sec ? hoursToSecondsValue(sec.value, 7200, 30, 86400) : "7200";
     const appSwitchInterval = appSwitchSec ? hoursToSecondsValue(appSwitchSec.value, 3600, 60, 86400) : "3600";
-    const calendarRefreshInterval = calendarSec ? hoursToSecondsValue(calendarSec.value, 3600, 60, 86400) : "3600";
+    const calendarRefreshInterval = calendarSec ? hoursToSecondsValue(calendarSec.value, 7200, 60, 86400) : "7200";
     const langValue = uiLanguage ? normalizeLang(uiLanguage.value) : "zh";
     const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
       ? normalizeAuthMode(staAuthMode.value)

@@ -308,6 +308,79 @@ bool parseYmdDate(const String &raw, int &year, int &month, int &day) {
   return year >= 2020 && month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
 }
 
+bool parseFixedDigits(const String &raw, int start, int count, int &value) {
+  if (start < 0 || count <= 0 || start + count > static_cast<int>(raw.length())) {
+    return false;
+  }
+  int parsed = 0;
+  for (int i = 0; i < count; ++i) {
+    const char c = raw[start + i];
+    if (c < '0' || c > '9') {
+      return false;
+    }
+    parsed = parsed * 10 + (c - '0');
+  }
+  value = parsed;
+  return true;
+}
+
+bool parseWeatherLocalTimeEpoch(const String &raw, int32_t utc_offset_seconds,
+                                time_t &epoch_value) {
+  epoch_value = 0;
+  if (raw.length() < 16 || raw.charAt(4) != '-' || raw.charAt(7) != '-' ||
+      raw.charAt(10) != 'T' || raw.charAt(13) != ':') {
+    return false;
+  }
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  int second = 0;
+  if (!parseFixedDigits(raw, 0, 4, year) || !parseFixedDigits(raw, 5, 2, month) ||
+      !parseFixedDigits(raw, 8, 2, day) || !parseFixedDigits(raw, 11, 2, hour) ||
+      !parseFixedDigits(raw, 14, 2, minute)) {
+    return false;
+  }
+  if (raw.length() >= 19) {
+    if (raw.charAt(16) != ':' || !parseFixedDigits(raw, 17, 2, second)) {
+      return false;
+    }
+  }
+  if (year < 2024 || month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) ||
+      hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return false;
+  }
+
+  struct tm local_tm {};
+  local_tm.tm_year = year - 1900;
+  local_tm.tm_mon = month - 1;
+  local_tm.tm_mday = day;
+  local_tm.tm_hour = hour;
+  local_tm.tm_min = minute;
+  local_tm.tm_sec = second;
+  const time_t local_as_utc = epochFromUtcTm(local_tm);
+  epoch_value = local_as_utc - static_cast<time_t>(utc_offset_seconds);
+  return isTrustedEpoch(epoch_value);
+}
+
+bool setSystemClockFromEpoch(time_t epoch_value, const char *source) {
+  if (!isTrustedEpoch(epoch_value)) {
+    return false;
+  }
+  timeval tv {};
+  tv.tv_sec = epoch_value;
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    Serial.printf("[TIME] settimeofday failed source=%s\n", source ? source : "unknown");
+    return false;
+  }
+  Serial.printf("[TIME] system clock set source=%s epoch=%lu\n",
+                source ? source : "unknown",
+                static_cast<unsigned long>(epoch_value));
+  return true;
+}
+
 time_t localEpochFromYmdHm(const String &date, const String &time_hhmm) {
   int year = 0;
   int month = 0;
@@ -498,6 +571,43 @@ String extractJsonStringField(const String &json, const char *key) {
   return out;
 }
 
+String extractJsonStringFieldAfter(const String &json, const char *anchor, const char *key) {
+  if (anchor == nullptr || key == nullptr || anchor[0] == '\0' || key[0] == '\0') {
+    return "";
+  }
+  const int anchor_pos = json.indexOf(anchor);
+  if (anchor_pos < 0) {
+    return "";
+  }
+  const String token = String("\"") + key + "\":\"";
+  const int start = json.indexOf(token, anchor_pos + static_cast<int>(strlen(anchor)));
+  if (start < 0) {
+    return "";
+  }
+
+  String out;
+  out.reserve(32);
+  bool escaping = false;
+  for (int i = start + static_cast<int>(token.length()); i < static_cast<int>(json.length()); ++i) {
+    const char c = json[i];
+    if (escaping) {
+      out += c;
+      escaping = false;
+      continue;
+    }
+    if (c == '\\') {
+      escaping = true;
+      continue;
+    }
+    if (c == '"') {
+      break;
+    }
+    out += c;
+  }
+  out.trim();
+  return out;
+}
+
 bool extractJsonIntField(const String &json, const char *key, int32_t &value) {
   value = 0;
   if (key == nullptr || key[0] == '\0') {
@@ -584,6 +694,48 @@ String timezoneForEsp(const String &timezone_name, bool has_utc_offset, int32_t 
     return "";
   }
   return tz;
+}
+
+String openMeteoUrlForCoordinates(const char *lat, const char *lon) {
+  String url = "http://api.open-meteo.com/v1/forecast?latitude=";
+  url += lat;
+  url += "&longitude=";
+  url += lon;
+  url += "&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
+  return url;
+}
+
+bool isBeijingWeatherCity(const String &city) {
+  String normalized = city;
+  normalized.trim();
+  normalized.toLowerCase();
+  return normalized == "beijing" || normalized == "beijing, china" ||
+         normalized.indexOf(u8"北京") >= 0;
+}
+
+bool applyKnownWeatherLocationDefaults(WifiSettings &settings) {
+  if (!isBeijingWeatherCity(settings.weather_city)) {
+    return false;
+  }
+  const String beijing_url = openMeteoUrlForCoordinates("39.9042", "116.4074");
+  bool changed = false;
+  if (settings.weather_lat != "39.9042") {
+    settings.weather_lat = "39.9042";
+    changed = true;
+  }
+  if (settings.weather_lon != "116.4074") {
+    settings.weather_lon = "116.4074";
+    changed = true;
+  }
+  if (settings.weather_url != beijing_url) {
+    settings.weather_url = beijing_url;
+    changed = true;
+  }
+  if (settings.timezone != "Asia/Shanghai") {
+    settings.timezone = "Asia/Shanghai";
+    changed = true;
+  }
+  return changed;
 }
 
 bool syncClockWithTimezone(const String &timezone, String &local_time, String &error_msg) {
@@ -1330,6 +1482,42 @@ void WifiManager::requestCalendarSyncNow() {
   last_calendar_sync_error_ = "";
 }
 
+bool WifiManager::ensureLocalCalendarLoaded(time_t now_epoch, const char *reason) {
+  if (!settings_.calendar_url.startsWith("/") || now_epoch <= 0) {
+    return false;
+  }
+  if (!settings_.calendar_enabled) {
+    settings_.calendar_enabled = true;
+  }
+  struct tm local_tm {};
+  if (localtime_r(&now_epoch, &local_tm) == nullptr) {
+    return false;
+  }
+  const int32_t month_key = static_cast<int32_t>((local_tm.tm_year + 1900) * 100 +
+                                                (local_tm.tm_mon + 1));
+  if (calendar_month_summary_month_key_ == month_key &&
+      calendar_month_summary_source_ == settings_.calendar_url &&
+      last_calendar_sync_status_ == "ok") {
+    return true;
+  }
+
+  Serial.printf("[CALSYNC] local ensure reason=%s month=%ld url=%s\n",
+                reason ? reason : "local",
+                static_cast<long>(month_key),
+                settings_.calendar_url.c_str());
+  last_calendar_sync_status_ = "running";
+  last_calendar_sync_error_ = "";
+  String error_msg;
+  if (!syncCalendarFromUrl(error_msg, now_epoch)) {
+    last_calendar_sync_status_ = "error";
+    last_calendar_sync_error_ = error_msg;
+    Serial.printf("[CALSYNC] local ensure failed err=%s url=%s\n", error_msg.c_str(),
+                  settings_.calendar_url.c_str());
+    return false;
+  }
+  return true;
+}
+
 bool WifiManager::syncCalendarNow(const char *reason) {
   if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
     Serial.printf("[CALSYNC] skipped reason=%s sta_not_connected\n",
@@ -1443,6 +1631,15 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
   resolved_timezone = extractJsonStringField(body, "timezone");
   int32_t utc_offset_seconds = 0;
   const bool has_utc_offset = extractJsonIntField(body, "utc_offset_seconds", utc_offset_seconds);
+  String weather_local_time = extractJsonStringFieldAfter(body, "\"current\":{", "time");
+  if (weather_local_time.length() == 0) {
+    weather_local_time = extractJsonStringFieldAfter(body, "\"current\" : {", "time");
+  }
+  Serial.printf("[TIME] weather time fields tz=%s esp_tz=%s offset=%ld raw=%s url=%s\n",
+                resolved_timezone.c_str(), timezoneForEsp(resolved_timezone, has_utc_offset,
+                                                          utc_offset_seconds).c_str(),
+                static_cast<long>(utc_offset_seconds), weather_local_time.c_str(),
+                settings_.weather_url.c_str());
   int32_t weather_code = -1;
   if (extractJsonIntField(body, "weather_code", weather_code)) {
     weather_code_ = static_cast<int>(weather_code);
@@ -1464,6 +1661,25 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
   }
 
   if (!syncClockWithTimezone(tz_for_sync, local_time, time_sync_error)) {
+    time_t weather_epoch = 0;
+    if (has_utc_offset &&
+        parseWeatherLocalTimeEpoch(weather_local_time, utc_offset_seconds, weather_epoch) &&
+        setSystemClockFromEpoch(weather_epoch, "weather_http")) {
+      struct tm tm_local {};
+      if (localtime_r(&weather_epoch, &tm_local) != nullptr) {
+        char buf[40] = {0};
+        if (strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %z", &tm_local) > 0) {
+          local_time = String(buf);
+        }
+      }
+      Serial.printf("[TIME] ntp failed, used weather time local=%s raw=%s offset=%ld\n",
+                    local_time.c_str(), weather_local_time.c_str(),
+                    static_cast<long>(utc_offset_seconds));
+      return true;
+    }
+    Serial.printf("[TIME] weather time fallback failed has_offset=%s raw=%s offset=%ld ntp_err=%s\n",
+                  has_utc_offset ? "true" : "false", weather_local_time.c_str(),
+                  static_cast<long>(utc_offset_seconds), time_sync_error.c_str());
     return false;
   }
   return true;
@@ -1506,6 +1722,13 @@ void WifiManager::loadSettings() {
   calendar_store_.setNextId(next_calendar_event_id);
   calendar_store_.deserialize(packed_events);
   calendar_store_.setNextId(next_calendar_event_id);
+  if (applyKnownWeatherLocationDefaults(settings_)) {
+    Serial.printf("[CFG] corrected known weather location city=%s lat=%s lon=%s\n",
+                  settings_.weather_city.c_str(),
+                  settings_.weather_lat.c_str(),
+                  settings_.weather_lon.c_str());
+    saveSettings();
+  }
   Serial.printf("[CFG] loaded sta_ssid=%s (%s)\n",
                 settings_.sta_ssid.c_str(),
                 (settings_.sta_ssid == SettingsStore::defaultStaSsid()) ? "default" : "prefs");
@@ -1613,7 +1836,7 @@ void WifiManager::maybeSyncCalendarUrl(uint32_t now_ms) {
   }
 }
 
-bool WifiManager::syncCalendarFromUrl(String &error_msg) {
+bool WifiManager::syncCalendarFromUrl(String &error_msg, time_t now_epoch_override) {
   error_msg = "";
   last_calendar_sync_imported_ = 0;
   last_calendar_sync_total_ = 0;
@@ -1705,7 +1928,7 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
     return false;
   }
 
-  const time_t now_epoch = time(nullptr);
+  const time_t now_epoch = (now_epoch_override > 0) ? now_epoch_override : time(nullptr);
   if (now_epoch <= 0) {
     error_msg = "clock_invalid";
     return false;
@@ -1787,6 +2010,14 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg) {
   }
   mixCalendarHashInt(month_signature, static_cast<uint32_t>(calendar_month_summary_count_));
   calendar_month_summary_signature_ = month_signature;
+  struct tm month_tm {};
+  if (localtime_r(&now_epoch, &month_tm) != nullptr) {
+    calendar_month_summary_month_key_ =
+        static_cast<int32_t>((month_tm.tm_year + 1900) * 100 + (month_tm.tm_mon + 1));
+  } else {
+    calendar_month_summary_month_key_ = -1;
+  }
+  calendar_month_summary_source_ = settings_.calendar_url;
 
   const std::vector<CalendarEvent> normalized_imported;
   const CalendarSyncMergeStats merge_stats =
@@ -2535,7 +2766,7 @@ void WifiManager::handleRoot() {
           <div class='field'><label>STA 密码</label><input id='pass' type='password'></div>
           <div class='field'><label>账号 / 身份</label><input id='staUser'></div>
           <div class='field'><label>连接类型</label><select id='staAuthMode'><option value='auto'>自动</option><option value='personal'>普通密码 WiFi</option><option value='enterprise'>企业/校园网 802.1X</option><option value='open'>开放网络</option></select></div>
-          <div class='field'><label>轮播间隔（小时）</label><input id='sec' type='number' min='0.01' max='24' step='0.01' placeholder='1'></div>
+          <div class='field'><label>轮播间隔（小时）</label><input id='sec' type='number' min='0.01' max='24' step='0.01' placeholder='2'></div>
           <div class='field' style='grid-column:1/3'><label>天气接口 URL</label><input id='wurl'></div>
         </div>
         <div class='row' style='margin-top:10px'>
@@ -2813,12 +3044,12 @@ void WifiManager::handleRoot() {
       staUser.value = j.sta_user || '';
       pass.value = j.sta_pass || '';
       staAuthMode.value = j.sta_auth_mode || 'auto';
-      sec.value = secondsToHoursValue(j.photo_interval_sec, 3600);
+      sec.value = secondsToHoursValue(j.photo_interval_sec, 7200);
       wurl.value = j.weather_url || '';
     }
 
     async function saveCfg() {
-      const photoInterval = hoursToSecondsValue(sec.value, 3600, 30, 86400);
+      const photoInterval = hoursToSecondsValue(sec.value, 7200, 30, 86400);
       const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser.value)}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(staAuthMode.value)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&weather_url=${encodeURIComponent(wurl.value)}`;
       const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
       document.getElementById('cfgBox').textContent = await r.text();
@@ -3384,6 +3615,12 @@ void WifiManager::handleSettingsPost() {
 
   SettingsStore::normalize(settings_);
   SettingsStore::fillEmptyValues(settings_);
+  if (applyKnownWeatherLocationDefaults(settings_)) {
+    Serial.printf("[CFG] corrected posted weather location city=%s lat=%s lon=%s\n",
+                  settings_.weather_city.c_str(),
+                  settings_.weather_lat.c_str(),
+                  settings_.weather_lon.c_str());
+  }
 
   if (state_ == State::StaRunning &&
       (settings_.calendar_enabled != previous_calendar_enabled ||

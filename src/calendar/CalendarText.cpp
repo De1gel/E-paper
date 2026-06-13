@@ -42,6 +42,12 @@ struct GlyphRenderMetrics {
   uint8_t base_height;
 };
 
+bool isDigitFont(TextFont font) {
+  return font == TextFont::Digit10 || font == TextFont::Digit14 ||
+         font == TextFont::Digit16 || font == TextFont::Digit26 ||
+         font == TextFont::Digit30;
+}
+
 FontBoxMetrics fontBoxMetrics(TextFont font) {
   switch (font) {
     case TextFont::AsciiSmooth:
@@ -148,14 +154,20 @@ uint8_t textBaseHeight(TextFont font) {
 
 GlyphRenderMetrics glyphRenderMetrics(const GlyphBitmap &glyph, const TextStyle &style) {
   if (glyph.bits_per_pixel > 1u) {
+    if (style.font == TextFont::Digit30 && glyph.width > 5u) {
+      constexpr uint8_t kDigit30SideTrim = 2u;
+      if (glyph.width > static_cast<uint8_t>(kDigit30SideTrim * 2u + 1u)) {
+        return GlyphRenderMetrics{kDigit30SideTrim, style.box_top,
+                                  static_cast<uint8_t>(glyph.width - kDigit30SideTrim * 2u),
+                                  glyph.height, style.base_height};
+      }
+    }
     return GlyphRenderMetrics{style.box_left, style.box_top, style.box_width, style.box_height,
                               style.base_height};
   }
   const bool fixed_bitmap_font =
       style.font == TextFont::Ascii6 || style.font == TextFont::Ascii8 ||
-      style.font == TextFont::Ascii10 || style.font == TextFont::Digit10 ||
-      style.font == TextFont::Digit14 || style.font == TextFont::Digit16 ||
-      style.font == TextFont::Digit26 || style.font == TextFont::Digit30;
+      style.font == TextFont::Ascii10 || isDigitFont(style.font);
   const FontBoxMetrics ascii_box = fontBoxMetrics(fixed_bitmap_font ? style.font : TextFont::Auto);
   return GlyphRenderMetrics{ascii_box.left, ascii_box.top, ascii_box.width, ascii_box.height,
                             ascii_box.height};
@@ -318,10 +330,8 @@ TextStyle resolveTextStyle(uint8_t pixel_height, TextFont font) {
   style.box_width = box.width;
   style.box_height = box.height;
   style.letter_spacing =
-      (style.font == TextFont::Digit10 || style.font == TextFont::Digit14 ||
-       style.font == TextFont::Digit16 || style.font == TextFont::Digit26 ||
-       style.font == TextFont::Digit30)
-          ? 0u
+      isDigitFont(style.font)
+          ? 1u
           : 1u;
   return style;
 }

@@ -37,6 +37,7 @@ class WifiManager {
   bool isCalendarSyncBusy() const;
   bool blocksLightSleep() const;
   void requestCalendarSyncNow();
+  bool ensureLocalCalendarLoaded(time_t now_epoch, const char *reason = nullptr);
   bool syncCalendarNow(const char *reason = nullptr);
   bool syncWeatherNow(const char *reason = nullptr);
   const Settings &settings() const;
@@ -72,7 +73,7 @@ class WifiManager {
   bool saveSettings();
   void applyDefaultSettings();
   void maybeSyncCalendarUrl(uint32_t now_ms);
-  bool syncCalendarFromUrl(String &error_msg);
+  bool syncCalendarFromUrl(String &error_msg, time_t now_epoch_override = 0);
   void pruneExpiredCalendarEvents();
   void registerWifiEvents();
   void handleWifiEvent(arduino_event_id_t event, arduino_event_info_t info);
@@ -141,6 +142,8 @@ class WifiManager {
   CalendarMonthSummaryEvent calendar_month_summaries_[kMaxCalendarMonthSummaries];
   size_t calendar_month_summary_count_ = 0;
   uint32_t calendar_month_summary_signature_ = 0;
+  int32_t calendar_month_summary_month_key_ = -1;
+  String calendar_month_summary_source_{};
   bool auto_exit_requested_ = false;
   bool settings_apply_refresh_pending_ = false;
   bool sta_connect_failed_ = false;

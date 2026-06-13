@@ -568,11 +568,49 @@ constexpr uint8_t kData30[3570] = {
   0x00, 0x00,
 };
 
+uint8_t dashWidthForPx(uint8_t px) {
+  switch (px) {
+    case 30:
+      return 14u;
+    case 26:
+      return 10u;
+    case 16:
+      return 7u;
+    case 14:
+      return 6u;
+    case 10:
+    default:
+      return 5u;
+  }
+}
+
+const uint8_t *dashGlyphData(uint8_t px, uint8_t width, uint8_t row_bytes) {
+  static uint8_t data[30u * 6u] = {};
+  const size_t len = static_cast<size_t>(px) * row_bytes;
+  memset(data, 0, sizeof(data));
+  const uint8_t thickness = (px >= 26u) ? 3u : ((px >= 14u) ? 2u : 1u);
+  const uint8_t y0 = static_cast<uint8_t>((px > thickness) ? ((px - thickness) / 2u) : 0u);
+  for (uint8_t y = y0; y < static_cast<uint8_t>(y0 + thickness) && y < px; ++y) {
+    for (uint8_t x = 0; x < width; ++x) {
+      const size_t index = static_cast<size_t>(y) * row_bytes + (x >> 1);
+      if (index >= len) {
+        continue;
+      }
+      if ((x & 0x01u) == 0u) {
+        data[index] = static_cast<uint8_t>(data[index] | 0xF0u);
+      } else {
+        data[index] = static_cast<uint8_t>(data[index] | 0x0Fu);
+      }
+    }
+  }
+  return data;
+}
+
 int glyphIndex(char c) {
   for (uint8_t i = 0; i < sizeof(kNumericChars) - 1u; ++i) {
     if (kNumericChars[i] == c) return i;
   }
-  return (c >= '0' && c <= '9') ? static_cast<int>(c - '0' + 1) : 0;
+  return (c >= '0' && c <= '9') ? static_cast<int>(c - '0' + 1) : -1;
 }
 
 }  // namespace
@@ -580,8 +618,19 @@ int glyphIndex(char c) {
 bool lookupAsciiNumericGlyph(char c, uint8_t px, const uint8_t *&data, uint8_t &width,
                              uint8_t &height, uint8_t &row_bytes,
                              uint8_t &bits_per_pixel) {
+  if (c == '-') {
+    height = px;
+    width = dashWidthForPx(px);
+    row_bytes = static_cast<uint8_t>((width + 1u) / 2u);
+    bits_per_pixel = 4u;
+    data = dashGlyphData(px, width, row_bytes);
+    return true;
+  }
   const int idx = glyphIndex(c);
-  const uint8_t index = static_cast<uint8_t>((idx < 0) ? 0 : idx);
+  if (idx < 0) {
+    return false;
+  }
+  const uint8_t index = static_cast<uint8_t>(idx);
   const uint8_t *widths = nullptr;
   const uint16_t *offsets = nullptr;
   const uint8_t *blob = nullptr;

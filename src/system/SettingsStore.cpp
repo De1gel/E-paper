@@ -17,6 +17,9 @@ constexpr const char *kDefaultWeatherLat = "39.9042";
 constexpr const char *kDefaultWeatherLon = "116.4074";
 constexpr const char *kDefaultWeatherUrl =
     "http://api.open-meteo.com/v1/forecast?latitude=39.9042&longitude=116.4074&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
+constexpr uint32_t kSettingsRevision = 2;
+constexpr uint32_t kOldOneHourDefaultSec = 3600;
+constexpr uint32_t kTwoHourDefaultSec = 7200;
 
 }  // namespace
 
@@ -28,12 +31,12 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
   settings.sta_auth_mode = kDefaultStaAuthMode;
   settings.ui_language = kDefaultUiLanguage;
   settings.timezone = kDefaultTimezone;
-  settings.photo_interval_sec = 3600;
+  settings.photo_interval_sec = kTwoHourDefaultSec;
   settings.app_auto_switch_enabled = false;
   settings.app_switch_interval_sec = 3600;
-  settings.calendar_enabled = false;
+  settings.calendar_enabled = true;
   settings.calendar_layout = "landscape_split";
-  settings.calendar_refresh_sec = 3600;
+  settings.calendar_refresh_sec = kTwoHourDefaultSec;
   settings.sleep_start_minute = 22 * 60;
   settings.sleep_end_minute = 8 * 60;
   settings.calendar_url = kDefaultCalendarUrl;
@@ -117,16 +120,31 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   if (prefs.isKey("sta_auth")) settings.sta_auth_mode = prefs.getString("sta_auth", kDefaultStaAuthMode);
   if (prefs.isKey("ui_lang")) settings.ui_language = prefs.getString("ui_lang", kDefaultUiLanguage);
   if (prefs.isKey("timezone")) settings.timezone = prefs.getString("timezone", kDefaultTimezone);
-  if (prefs.isKey("photo_sec")) settings.photo_interval_sec = prefs.getUInt("photo_sec", 3600);
+  const uint32_t stored_revision = prefs.getUInt("cfg_rev", 0);
+  const bool migrate_one_hour_defaults = stored_revision < kSettingsRevision;
+
+  if (prefs.isKey("photo_sec")) {
+    settings.photo_interval_sec = prefs.getUInt("photo_sec", kTwoHourDefaultSec);
+    if (migrate_one_hour_defaults && settings.photo_interval_sec == kOldOneHourDefaultSec) {
+      settings.photo_interval_sec = kTwoHourDefaultSec;
+      prefs.putUInt("photo_sec", settings.photo_interval_sec);
+    }
+  }
   if (prefs.isKey("auto_switch")) {
     settings.app_auto_switch_enabled = prefs.getBool("auto_switch", false);
   }
   if (prefs.isKey("switch_sec")) {
     settings.app_switch_interval_sec = prefs.getUInt("switch_sec", 3600);
   }
-  if (prefs.isKey("cal_en")) settings.calendar_enabled = prefs.getBool("cal_en", false);
+  if (prefs.isKey("cal_en")) settings.calendar_enabled = prefs.getBool("cal_en", true);
   if (prefs.isKey("cal_layout")) settings.calendar_layout = prefs.getString("cal_layout", "landscape_split");
-  if (prefs.isKey("cal_sec")) settings.calendar_refresh_sec = prefs.getUInt("cal_sec", 3600);
+  if (prefs.isKey("cal_sec")) {
+    settings.calendar_refresh_sec = prefs.getUInt("cal_sec", kTwoHourDefaultSec);
+    if (migrate_one_hour_defaults && settings.calendar_refresh_sec == kOldOneHourDefaultSec) {
+      settings.calendar_refresh_sec = kTwoHourDefaultSec;
+      prefs.putUInt("cal_sec", settings.calendar_refresh_sec);
+    }
+  }
   if (prefs.isKey("sleep_start")) {
     settings.sleep_start_minute =
         static_cast<uint16_t>(prefs.getUInt("sleep_start", settings.sleep_start_minute));
@@ -156,6 +174,9 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
     next_calendar_event_id = 1;
   }
   packed_events = prefs.getString("cal_events", "");
+  if (stored_revision != kSettingsRevision) {
+    prefs.putUInt("cfg_rev", kSettingsRevision);
+  }
   prefs.end();
   return true;
 }
@@ -165,6 +186,7 @@ bool SettingsStore::save(Preferences &prefs, const WifiSettings &settings,
   if (!prefs.begin("config", false)) {
     return false;
   }
+  prefs.putUInt("cfg_rev", kSettingsRevision);
   prefs.putString("sta_ssid", settings.sta_ssid);
   prefs.putString("sta_user", settings.sta_user);
   prefs.putString("sta_pass", settings.sta_pass);

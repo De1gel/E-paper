@@ -32,7 +32,7 @@ constexpr uint16_t kScreenWidth = 800;
 constexpr uint16_t kScreenHeight = 480;
 constexpr uint32_t kClockMinValidEpoch = 1700000000UL;
 constexpr uint32_t kCalendarCheckIntervalMs = 60000UL;
-constexpr AppState kDebugBootState = AppState::Calendar;
+constexpr AppState kDebugBootState = AppState::Photo;
 constexpr uint8_t kDebugForcedCalendarRows = 0;
 
 String twoDigits(int value) {
@@ -1572,7 +1572,14 @@ void App::renderCalendarPage(uint32_t now_ms) {
   const int32_t minute_key = time_valid ? appfw::minuteKeyFromTm(local_tm) : -1;
   if (time_valid) {
     last_calendar_day_key_ = appfw::dayKeyFromTm(local_tm);
+    wifi_manager_.ensureLocalCalendarLoaded(local_epoch, "calendar_render");
   }
+  Serial.printf("[CAL] render time_valid=%s epoch=%lu local=%04d-%02d-%02d %02d:%02d:%02d minute=%u\n",
+                time_valid ? "true" : "false",
+                static_cast<unsigned long>(local_epoch),
+                local_tm.tm_year + 1900, local_tm.tm_mon + 1, local_tm.tm_mday,
+                local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec,
+                static_cast<unsigned>(local_tm.tm_hour * 60 + local_tm.tm_min));
   rebuildCalendarSceneCache(local_tm, time_valid);
   pushCalendarFullRefreshStriped(calendar_model_cache_, calendar_layout_cache_);
   force_calendar_full_refresh_ = false;
