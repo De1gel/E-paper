@@ -19,7 +19,6 @@ PALETTE = [
 ALGOS = [
     "fs_serpentine",
     "atkinson",
-    "jjn",
     "yliluoma",
     "dbs",
 ]
@@ -193,33 +192,6 @@ def quantize_error_diffusion(base: list[float], algo: str) -> Image.Image:
                 add(x, y + 1, er, eg, eb, r)
                 add(x + 1, y + 1, er, eg, eb, r)
                 add(x, y + 2, er, eg, eb, r)
-            elif algo == "jjn":
-                if not rev:
-                    add(x + 1, y, er, eg, eb, 7 / 48)
-                    add(x + 2, y, er, eg, eb, 5 / 48)
-                    add(x - 2, y + 1, er, eg, eb, 3 / 48)
-                    add(x - 1, y + 1, er, eg, eb, 5 / 48)
-                    add(x, y + 1, er, eg, eb, 7 / 48)
-                    add(x + 1, y + 1, er, eg, eb, 5 / 48)
-                    add(x + 2, y + 1, er, eg, eb, 3 / 48)
-                    add(x - 2, y + 2, er, eg, eb, 1 / 48)
-                    add(x - 1, y + 2, er, eg, eb, 3 / 48)
-                    add(x, y + 2, er, eg, eb, 5 / 48)
-                    add(x + 1, y + 2, er, eg, eb, 3 / 48)
-                    add(x + 2, y + 2, er, eg, eb, 1 / 48)
-                else:
-                    add(x - 1, y, er, eg, eb, 7 / 48)
-                    add(x - 2, y, er, eg, eb, 5 / 48)
-                    add(x + 2, y + 1, er, eg, eb, 3 / 48)
-                    add(x + 1, y + 1, er, eg, eb, 5 / 48)
-                    add(x, y + 1, er, eg, eb, 7 / 48)
-                    add(x - 1, y + 1, er, eg, eb, 5 / 48)
-                    add(x - 2, y + 1, er, eg, eb, 3 / 48)
-                    add(x + 2, y + 2, er, eg, eb, 1 / 48)
-                    add(x + 1, y + 2, er, eg, eb, 3 / 48)
-                    add(x, y + 2, er, eg, eb, 5 / 48)
-                    add(x - 1, y + 2, er, eg, eb, 3 / 48)
-                    add(x - 2, y + 2, er, eg, eb, 1 / 48)
     return out
 
 
@@ -290,7 +262,7 @@ def quantize_dbs(base: list[float], iters: int = 2) -> Image.Image:
 
 
 def run_algo(base: list[float], algo: str) -> Image.Image:
-    if algo in {"fs_serpentine", "atkinson", "jjn"}:
+    if algo in {"fs_serpentine", "atkinson"}:
         return quantize_error_diffusion(base, algo)
     if algo == "yliluoma":
         return quantize_yliluoma(base)
@@ -340,13 +312,13 @@ def main() -> None:
 
             make_sheet(
                 rendered,
-                title=f"{case_name} | {gtag} | FS-serp / Atkinson / JJN / Yliluoma / DBS",
-                out_path=gdir / "03_compare_grid_5algos.png",
+                title=f"{case_name} | {gtag} | FS-serp / Atkinson / Yliluoma / DBS",
+                out_path=gdir / "03_compare_grid_4algos.png",
             )
 
     (OUT_ROOT / "README.txt").write_text(
-        "5 algorithms x 3 gamma levels\n"
-        "Algorithms: fs_serpentine, atkinson, jjn, yliluoma, dbs\n"
+        "4 algorithms x 3 gamma levels\n"
+        "Algorithms: fs_serpentine, atkinson, yliluoma, dbs\n"
         "Gammas: 0.85, 1.00, 1.20\n"
         "Input cases: photo + image\n"
         "Mode: single fit-like firmware preprocess\n"

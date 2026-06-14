@@ -2813,9 +2813,8 @@ void WifiManager::handleRoot() {
             <div class='field'>
               <label>抖动算法</label>
               <select id='ditherMode' style='padding:8px;border:1px solid var(--line);border-radius:8px;'>
-                <option value='fs_serpentine' selected>Floyd-Steinberg（通用 / 人像推荐）</option>
-                <option value='atkinson'>Atkinson（插画 / 图标推荐）</option>
-                <option value='jjn'>Jarvis-Judice-Ninke（风景照推荐）</option>
+                <option value='atkinson' selected>Atkinson（插画 / 图标推荐）</option>
+                <option value='fs_serpentine'>Floyd-Steinberg（通用 / 人像推荐）</option>
               </select>
               <div id='ditherHint' class='hint-line'></div>
             </div>
@@ -2887,8 +2886,7 @@ void WifiManager::handleRoot() {
     };
     const ditherAdvice = {
       fs_serpentine: '通用默认。人像、日常照片优先用这个，边缘和肤色过渡更自然。',
-      atkinson: '对比更干净，适合图标、漫画、线稿和高反差插画。',
-      jjn: '扩散更平滑，适合风景照、大面积渐变和天空云层。'
+      atkinson: '对比更干净，适合图标、漫画、线稿和高反差插画。'
     };
     function normalizeDir(path) {
       let out = path || '/';
@@ -2977,7 +2975,7 @@ void WifiManager::handleRoot() {
       uploadModeSel.addEventListener('change', syncUploadOptions);
     }
     if (ditherModeSel) {
-      ditherModeSel.value = 'fs_serpentine';
+      ditherModeSel.value = 'atkinson';
       ditherModeSel.addEventListener('change', syncUploadOptions);
     }
     if (gammaCtrl) {
@@ -3204,9 +3202,9 @@ void WifiManager::handleRoot() {
         work[idx + 2] += eb * ratio;
       };
 
-      const mode = (ditherMode || 'fs_serpentine').toLowerCase();
+      const mode = (ditherMode || 'atkinson').toLowerCase();
       for (let y = 0; y < H; y++) {
-        const reverse = (mode === 'fs_serpentine' || mode === 'jjn') && ((y & 1) === 1);
+        const reverse = (mode === 'fs_serpentine') && ((y & 1) === 1);
         const xStart = reverse ? (W - 1) : 0;
         const xEnd = reverse ? -1 : W;
         const step = reverse ? -1 : 1;
@@ -3244,35 +3242,6 @@ void WifiManager::handleRoot() {
             addErr(x, y + 1, er, eg, eb, r);
             addErr(x + 1, y + 1, er, eg, eb, r);
             addErr(x, y + 2, er, eg, eb, r);
-          } else if (mode === 'jjn') {
-            if (!reverse) {
-              addErr(x + 1, y, er, eg, eb, 7 / 48);
-              addErr(x + 2, y, er, eg, eb, 5 / 48);
-              addErr(x - 2, y + 1, er, eg, eb, 3 / 48);
-              addErr(x - 1, y + 1, er, eg, eb, 5 / 48);
-              addErr(x, y + 1, er, eg, eb, 7 / 48);
-              addErr(x + 1, y + 1, er, eg, eb, 5 / 48);
-              addErr(x + 2, y + 1, er, eg, eb, 3 / 48);
-              addErr(x - 2, y + 2, er, eg, eb, 1 / 48);
-              addErr(x - 1, y + 2, er, eg, eb, 3 / 48);
-              addErr(x, y + 2, er, eg, eb, 5 / 48);
-              addErr(x + 1, y + 2, er, eg, eb, 3 / 48);
-              addErr(x + 2, y + 2, er, eg, eb, 1 / 48);
-            } else {
-              addErr(x - 1, y, er, eg, eb, 7 / 48);
-              addErr(x - 2, y, er, eg, eb, 5 / 48);
-              addErr(x + 2, y + 1, er, eg, eb, 3 / 48);
-              addErr(x + 1, y + 1, er, eg, eb, 5 / 48);
-              addErr(x, y + 1, er, eg, eb, 7 / 48);
-              addErr(x - 1, y + 1, er, eg, eb, 5 / 48);
-              addErr(x - 2, y + 1, er, eg, eb, 3 / 48);
-              addErr(x + 2, y + 2, er, eg, eb, 1 / 48);
-              addErr(x + 1, y + 2, er, eg, eb, 3 / 48);
-              addErr(x, y + 2, er, eg, eb, 5 / 48);
-              addErr(x - 1, y + 2, er, eg, eb, 3 / 48);
-              addErr(x - 2, y + 2, er, eg, eb, 1 / 48);
-            }
-          }
         }
       }
       let outIdx = 0;
@@ -3282,7 +3251,7 @@ void WifiManager::handleRoot() {
       return out;
     }
 
-    async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = 'fs_serpentine', gammaValue = 1.0) {
+    async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = 'atkinson', gammaValue = 1.0) {
       const img = new Image();
       const dataUrl = await new Promise((resolve, reject) => {
         const fr = new FileReader();
@@ -3347,8 +3316,8 @@ void WifiManager::handleRoot() {
       const dir = currentDir || '/';
       const mode = document.getElementById('uploadMode').value || 'normal';
       const ditherMode = document.getElementById('ditherMode')
-        ? (document.getElementById('ditherMode').value || 'fs_serpentine')
-        : 'fs_serpentine';
+        ? (document.getElementById('ditherMode').value || 'atkinson')
+        : 'atkinson';
       const gammaValue = document.getElementById('gammaCtrl')
         ? Number.parseFloat(document.getElementById('gammaCtrl').value || '1.0')
         : 1.0;
