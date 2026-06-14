@@ -27,7 +27,6 @@
 - 抖动算法：
   - `fs_serpentine`
   - `atkinson`
-  - `jjn`
 - `gamma` 调整：`0.80 ~ 1.40`
 
 最终输出：

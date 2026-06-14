@@ -203,7 +203,6 @@ const I18N = {
     "upload.algo": "抖动算法",
     "upload.algo_fs": "Floyd-Steinberg（通用默认 / 细节锐利）",
     "upload.algo_atkinson": "Atkinson（插画 / 图标 / 风格化）",
-    "upload.algo_jjn": "Jarvis-Judice-Ninke（照片 / 渐变平滑）",
     "upload.gamma": "Gamma",
     "upload.gamma_tip": "推荐值：1.00 通用；0.90~0.98 提亮暗部；1.05~1.15 增强层次；过高会压暗暗部细节。",
     "upload.waiting": "等待上传...",
@@ -277,7 +276,6 @@ const I18N = {
     "color.white": "白",
     "upload.hint_fs": "通用默认，细节锐利。",
     "upload.hint_atkinson": "适合插画、图标、风格化。",
-    "upload.hint_jjn": "适合照片和渐变平滑。",
     "upload.gamma_hint_low": "偏亮：暗部会被抬起。",
     "upload.gamma_hint_midhigh": "偏重：层次更实，适合风景。",
     "upload.gamma_hint_high": "较重：对比更强，暗部细节更易丢失。",
@@ -420,7 +418,6 @@ const I18N = {
     "upload.algo": "Dithering",
     "upload.algo_fs": "Floyd-Steinberg (general / sharp detail)",
     "upload.algo_atkinson": "Atkinson (icons / illustration / stylized)",
-    "upload.algo_jjn": "Jarvis-Judice-Ninke (photo / smooth gradient)",
     "upload.gamma": "Gamma",
     "upload.gamma_tip": "Recommended: 1.00 baseline; 0.90~0.98 brighter shadows; 1.05~1.15 stronger layering; too high loses dark detail.",
     "upload.waiting": "Waiting for upload...",
@@ -494,7 +491,6 @@ const I18N = {
     "color.white": "White",
     "upload.hint_fs": "General default, sharp detail.",
     "upload.hint_atkinson": "Good for icons, illustration, stylized images.",
-    "upload.hint_jjn": "Good for photos and smoother gradients.",
     "upload.gamma_hint_low": "Brighter: shadows are lifted.",
     "upload.gamma_hint_midhigh": "Heavier: stronger layers, good for landscapes.",
     "upload.gamma_hint_high": "Too heavy: stronger contrast, dark details may be lost.",
@@ -637,7 +633,6 @@ const I18N = {
     "upload.algo": "Algorithme",
     "upload.algo_fs": "Floyd-Steinberg (general / detail net)",
     "upload.algo_atkinson": "Atkinson (icones / illustration / style)",
-    "upload.algo_jjn": "Jarvis-Judice-Ninke (photo / degrade doux)",
     "upload.gamma": "Gamma",
     "upload.gamma_tip": "Valeurs conseillees : 1.00 general ; 0.90~0.98 eclaircit les ombres ; 1.05~1.15 renforce les couches ; trop haut perd les details sombres.",
     "upload.waiting": "En attente de televersement...",
@@ -711,7 +706,6 @@ const I18N = {
     "color.white": "Blanc",
     "upload.hint_fs": "Defaut general, details nets.",
     "upload.hint_atkinson": "Ideal pour icones, illustrations et style graphique.",
-    "upload.hint_jjn": "Ideal pour photos et degrades plus doux.",
     "upload.gamma_hint_low": "Plus clair : les ombres montent.",
     "upload.gamma_hint_midhigh": "Plus dense : couches renforcees, bon pour paysages.",
     "upload.gamma_hint_high": "Tres dense : contraste fort, details sombres perdus.",
@@ -927,7 +921,6 @@ async function resolveCity() {
 
 function ditherAdviceText(mode) {
   if (mode === "atkinson") return t("upload.hint_atkinson");
-  if (mode === "jjn") return t("upload.hint_jjn");
   return t("upload.hint_fs");
 }
 
@@ -957,7 +950,7 @@ function syncUploadOptions() {
 }
 
 uploadModeSel.value = "normal";
-ditherModeSel.value = "fs_serpentine";
+ditherModeSel.value = "atkinson";
 uploadModeSel.addEventListener("change", syncUploadOptions);
 ditherModeSel.addEventListener("change", syncUploadOptions);
 gammaCtrl.addEventListener("input", syncGammaLabel);
@@ -1689,7 +1682,7 @@ function threshold(v) {
   return v < 128 ? 0 : 255;
 }
 
-function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "fs_serpentine", gammaValue = 1.0) {
+function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "atkinson", gammaValue = 1.0) {
   const n = W * H;
   const rr = new Float32Array(n);
   const gg = new Float32Array(n);
@@ -1728,10 +1721,10 @@ function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "fs_serpentine", 
     bb[i] = clamp255(bb[i] + eb * f);
   }
 
-  const mode = (ditherMode || "fs_serpentine").toLowerCase();
+  const mode = (ditherMode || "atkinson").toLowerCase();
 
   for (let y = 0; y < H; y++) {
-    const reverse = (mode === "fs_serpentine" || mode === "jjn") && (y & 1);
+    const reverse = mode === "fs_serpentine" && (y & 1);
     const xs = reverse ? W - 1 : 0;
     const xe = reverse ? -1 : W;
     const st = reverse ? -1 : 1;
@@ -1764,20 +1757,6 @@ function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "fs_serpentine", 
         addErr(x, y + 1, er, eg, eb, f);
         addErr(x + 1, y + 1, er, eg, eb, f);
         addErr(x, y + 2, er, eg, eb, f);
-      } else if (mode === "jjn") {
-        if (!reverse) {
-          addErr(x + 1, y, er, eg, eb, 7 / 48); addErr(x + 2, y, er, eg, eb, 5 / 48);
-          addErr(x - 2, y + 1, er, eg, eb, 3 / 48); addErr(x - 1, y + 1, er, eg, eb, 5 / 48);
-          addErr(x, y + 1, er, eg, eb, 7 / 48); addErr(x + 1, y + 1, er, eg, eb, 5 / 48); addErr(x + 2, y + 1, er, eg, eb, 3 / 48);
-          addErr(x - 2, y + 2, er, eg, eb, 1 / 48); addErr(x - 1, y + 2, er, eg, eb, 3 / 48);
-          addErr(x, y + 2, er, eg, eb, 5 / 48); addErr(x + 1, y + 2, er, eg, eb, 3 / 48); addErr(x + 2, y + 2, er, eg, eb, 1 / 48);
-        } else {
-          addErr(x - 1, y, er, eg, eb, 7 / 48); addErr(x - 2, y, er, eg, eb, 5 / 48);
-          addErr(x + 2, y + 1, er, eg, eb, 3 / 48); addErr(x + 1, y + 1, er, eg, eb, 5 / 48);
-          addErr(x, y + 1, er, eg, eb, 7 / 48); addErr(x - 1, y + 1, er, eg, eb, 5 / 48); addErr(x - 2, y + 1, er, eg, eb, 3 / 48);
-          addErr(x + 2, y + 2, er, eg, eb, 1 / 48); addErr(x + 1, y + 2, er, eg, eb, 3 / 48);
-          addErr(x, y + 2, er, eg, eb, 5 / 48); addErr(x - 1, y + 2, er, eg, eb, 3 / 48); addErr(x - 2, y + 2, er, eg, eb, 1 / 48);
-        }
       }
     }
   }
@@ -1790,7 +1769,7 @@ function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "fs_serpentine", 
   return out;
 }
 
-async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = "fs_serpentine", gammaValue = 1.0) {
+async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = "atkinson", gammaValue = 1.0) {
   const img = new Image();
   const dataUrl = await new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -1859,7 +1838,7 @@ async function uploadFile() {
   }
 
   const mode = (uploadModeSel.value || "normal").toLowerCase();
-  const ditherMode = ditherModeSel.value || "fs_serpentine";
+  const ditherMode = ditherModeSel.value || "atkinson";
   const gammaValue = Number.parseFloat(gammaCtrl.value || "1.0");
   const gammaText = Number.isFinite(gammaValue) ? gammaValue.toFixed(2) : "1.00";
 
