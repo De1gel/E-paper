@@ -1058,7 +1058,7 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
 
 void App::beginDisplaySession() {
   setPeripheralPower(true);
-  EPD_init_fast();
+  EPD_init();
 }
 
 void App::endDisplaySession() {
