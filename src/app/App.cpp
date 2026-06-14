@@ -1538,9 +1538,12 @@ bool App::ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms) {
 }
 
 void App::beginDisplaySession(bool partial_refresh) {
-  (void)partial_refresh;
   setPeripheralPower(true);
-  EPD_init_fast();
+  if (partial_refresh) {
+    EPD_init_fast();
+  } else {
+    EPD_init();
+  }
 }
 
 void App::endDisplaySession() {
