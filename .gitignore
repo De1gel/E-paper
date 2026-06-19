@@ -1,5 +1,6 @@
 .pio
 **/.pio/
+.pio-*/
 .codex
 .codex/
 .tmp_weather_demo/

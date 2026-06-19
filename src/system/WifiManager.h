@@ -105,6 +105,10 @@ class WifiManager {
   String contentTypeForPath(const String &path) const;
   bool isSafePath(const String &path) const;
   bool isEpd4Path(const String &path) const;
+  String joinSdPath(const String &dir, const String &name) const;
+  String leafName(const String &path) const;
+  String algoSuffix(const String &algo) const;
+  String nextImageFilename(const String &algo) const;
   bool removePathRecursive(const String &path) const;
   String currentIp() const;
   bool syncClockFromWeather(String &resolved_timezone, bool &timezone_updated, String &local_time,
@@ -152,9 +156,12 @@ class WifiManager {
   bool sta_manual_session_ = false;
   StaSessionRole sta_session_role_ = StaSessionRole::None;
   bool upload_ok_ = true;
+  bool upload_started_ = false;
+  uint32_t upload_received_ = 0;
   String upload_error_{};
   String upload_mode_{"normal"};
   String upload_tmp_path_{};
+  String upload_final_path_{};
   bool aht_ready_ = false;
   float temperature_c_ = NAN;
   float humidity_pct_ = NAN;

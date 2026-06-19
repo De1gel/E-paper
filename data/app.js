@@ -16,6 +16,8 @@ const ditherModeSel = document.getElementById("ditherMode");
 const uploadExtra = document.getElementById("uploadExtra");
 const uploadBtn = document.querySelector("button[onclick='uploadFile()']");
 const uploadBox = document.getElementById("uploadBox");
+const uploadPreview = document.getElementById("uploadPreview");
+const uploadPreviewImg = document.getElementById("uploadPreviewImg");
 const ditherHint = document.getElementById("ditherHint");
 const gammaHint = document.getElementById("gammaHint");
 const modeNote = document.getElementById("modeNote");
@@ -271,13 +273,15 @@ const I18N = {
     "upload.gamma_hint_low": "偏亮：暗部会被抬起。",
     "upload.gamma_hint_midhigh": "偏重：层次更实，适合风景。",
     "upload.gamma_hint_high": "较重：对比更强，暗部细节更易丢失。",
-    "upload.mode_note_normal": "普通文件上传会直接保存到当前目录。",
-    "upload.mode_note_fit": "图片按比例缩放到 800x480 后转 .epd4 保存到 /pic。",
-    "upload.mode_note_crop": "图片优先铺满 800x480（可能裁边）后转 .epd4 保存到 /pic。",
+    "upload.mode_note_normal": "普通文件上传会直接保存到当前目录。直接上传图片类型的解码支持 PNG、JPG 和 BMP，需提前自行抖动处理。",
+    "upload.mode_note_fit": "图片按比例缩放到 800x480，抖动后保存为 PNG 到 /pic。",
+    "upload.mode_note_crop": "图片优先铺满 800x480（可能裁边），抖动后保存为 PNG 到 /pic。",
     "upload.pick_file": "请选择要上传的文件",
-    "upload.only_images": "缩放/裁剪上传仅支持 bmp/jpg/png",
-    "upload.preprocessing": "正在预处理并转换为 EPD4...",
+    "upload.only_images": "图片上传仅支持 PNG/JPG/BMP",
+    "upload.preprocessing": "正在预处理并生成 PNG...",
     "upload.preprocess_failed": "预处理失败: {err}",
+    "upload.batch_done": "完成：成功 {ok}，跳过 {skipped}，失败 {failed}，共 {total}",
+    "upload.progress": "{index}/{total} {name}",
   },
   en: {
     "app.title": "E-paper Console",
@@ -479,13 +483,15 @@ const I18N = {
     "upload.gamma_hint_low": "Brighter: shadows are lifted.",
     "upload.gamma_hint_midhigh": "Heavier: stronger layers, good for landscapes.",
     "upload.gamma_hint_high": "Too heavy: stronger contrast, dark details may be lost.",
-    "upload.mode_note_normal": "Normal upload saves file to current directory.",
-    "upload.mode_note_fit": "Fit mode scales image to 800x480 and saves as .epd4 in /pic.",
-    "upload.mode_note_crop": "Crop mode fills 800x480 (may cut edges) and saves .epd4 in /pic.",
+    "upload.mode_note_normal": "Normal upload saves files to the current directory. Direct image decoding supports PNG, JPG, and BMP; images should be pre-dithered.",
+    "upload.mode_note_fit": "Fit mode scales to 800x480, dithers, and saves PNG files in /pic.",
+    "upload.mode_note_crop": "Crop mode fills 800x480 (may cut edges), dithers, and saves PNG files in /pic.",
     "upload.pick_file": "Please select a file",
-    "upload.only_images": "Fit/Crop mode only supports bmp/jpg/png",
-    "upload.preprocessing": "Preprocessing and converting to EPD4...",
+    "upload.only_images": "Image upload only supports PNG/JPG/BMP",
+    "upload.preprocessing": "Preprocessing and generating PNG...",
     "upload.preprocess_failed": "Preprocess failed: {err}",
+    "upload.batch_done": "Done: {ok} succeeded, {skipped} skipped, {failed} failed, {total} total",
+    "upload.progress": "{index}/{total} {name}",
   },
   fr: {
     "app.title": "Console E-paper",
@@ -687,13 +693,15 @@ const I18N = {
     "upload.gamma_hint_low": "Plus clair : les ombres montent.",
     "upload.gamma_hint_midhigh": "Plus dense : couches renforcees, bon pour paysages.",
     "upload.gamma_hint_high": "Tres dense : contraste fort, details sombres perdus.",
-    "upload.mode_note_normal": "Le mode normal enregistre le fichier dans le dossier courant.",
-    "upload.mode_note_fit": "Le mode adapte redimensionne a 800x480 et enregistre en .epd4 dans /pic.",
-    "upload.mode_note_crop": "Le mode recadre remplit 800x480 (bords coupes possibles) puis enregistre en .epd4 dans /pic.",
+    "upload.mode_note_normal": "Le mode normal enregistre les fichiers dans le dossier courant. Le decodage direct des images prend en charge PNG, JPG et BMP ; les images doivent etre deja tramees.",
+    "upload.mode_note_fit": "Le mode adapte redimensionne a 800x480, trame, puis enregistre en PNG dans /pic.",
+    "upload.mode_note_crop": "Le mode recadre remplit 800x480 (bords coupes possibles), trame, puis enregistre en PNG dans /pic.",
     "upload.pick_file": "Veuillez selectionner un fichier",
-    "upload.only_images": "Le mode adapte/recadre accepte seulement bmp/jpg/png",
-    "upload.preprocessing": "Pretraitement et conversion vers EPD4...",
+    "upload.only_images": "Le televersement image accepte seulement PNG/JPG/BMP",
+    "upload.preprocessing": "Pretraitement et generation PNG...",
     "upload.preprocess_failed": "Echec du pretraitement : {err}",
+    "upload.batch_done": "Termine : {ok} reussis, {skipped} ignores, {failed} echoues, {total} au total",
+    "upload.progress": "{index}/{total} {name}",
   },
 };
 
@@ -915,6 +923,11 @@ function syncUploadOptions() {
   const mode = uploadModeSel.value || "normal";
   const isImageMode = mode === "fit" || mode === "crop";
   uploadExtra.classList.toggle("show", isImageMode);
+  const fileEl = document.getElementById("uploadInput");
+  if (fileEl) {
+    fileEl.accept = isImageMode ? ".png,.jpg,.jpeg,.bmp,image/png,image/jpeg,image/bmp" : "";
+    fileEl.multiple = true;
+  }
   ditherHint.textContent = ditherAdviceText(ditherModeSel.value);
   if (mode === "normal") modeNote.textContent = t("upload.mode_note_normal");
   else if (mode === "fit") modeNote.textContent = t("upload.mode_note_fit");
@@ -1127,7 +1140,8 @@ async function saveCfg() {
     let lon = (weatherLon.value || "").trim();
     let weatherUrl = (wurl.value || "").trim();
 
-    if (city) {
+    const canResolveCity = latestStatusState === "sta_running";
+    if (city && canResolveCity) {
       const resolved = await resolveCity();
       if (!resolved) {
         return;
@@ -1598,6 +1612,7 @@ function renderRows(items) {
       dl.className = "btn";
       dl.textContent = t("common.download");
       dl.href = "/api/file?path=" + encodeURIComponent(path);
+      dl.download = name || "file";
       dl.target = "_blank";
 
       const delBtn = document.createElement("button");
@@ -1744,7 +1759,115 @@ function quantizeImageToEpd4(rgba, W, H, palette, ditherMode = "atkinson", gamma
   return out;
 }
 
-async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = "atkinson", gammaValue = 1.0) {
+function quantizeImageToImageData(rgba, W, H, palette, ditherMode = "atkinson", gammaValue = 1.0) {
+  const n = W * H;
+  const rr = new Float32Array(n);
+  const gg = new Float32Array(n);
+  const bb = new Float32Array(n);
+  const out = new Uint8ClampedArray(n * 4);
+
+  const gamma = Number.isFinite(gammaValue) && gammaValue > 0 ? gammaValue : 1.0;
+
+  for (let i = 0, p = 0; i < n; i++, p += 4) {
+    const a = rgba[p + 3] / 255;
+    const r = (rgba[p] / 255) * a + (1 - a);
+    const g = (rgba[p + 1] / 255) * a + (1 - a);
+    const b = (rgba[p + 2] / 255) * a + (1 - a);
+    rr[i] = clamp255(Math.round(Math.pow(r, gamma) * 255));
+    gg[i] = clamp255(Math.round(Math.pow(g, gamma) * 255));
+    bb[i] = clamp255(Math.round(Math.pow(b, gamma) * 255));
+  }
+
+  function nearest(r, g, b) {
+    let best = 0;
+    let bestD = Infinity;
+    for (let k = 0; k < palette.length; k++) {
+      const pr = palette[k].rgb[0], pg = palette[k].rgb[1], pb = palette[k].rgb[2];
+      const dr = r - pr, dg = g - pg, db = b - pb;
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  }
+
+  function addErr(x, y, er, eg, eb, f) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = y * W + x;
+    rr[i] = clamp255(rr[i] + er * f);
+    gg[i] = clamp255(gg[i] + eg * f);
+    bb[i] = clamp255(bb[i] + eb * f);
+  }
+
+  const mode = (ditherMode || "atkinson").toLowerCase();
+
+  for (let y = 0; y < H; y++) {
+    const reverse = mode === "fs_serpentine" && (y & 1);
+    const xs = reverse ? W - 1 : 0;
+    const xe = reverse ? -1 : W;
+    const st = reverse ? -1 : 1;
+
+    for (let x = xs; x !== xe; x += st) {
+      const i = y * W + x;
+      const oldR = rr[i], oldG = gg[i], oldB = bb[i];
+      const k = nearest(oldR, oldG, oldB);
+      const nr = palette[k].rgb[0], ng = palette[k].rgb[1], nb = palette[k].rgb[2];
+      const p = i * 4;
+      out[p + 0] = nr;
+      out[p + 1] = ng;
+      out[p + 2] = nb;
+      out[p + 3] = 255;
+      const er = oldR - nr, eg = oldG - ng, eb = oldB - nb;
+
+      if (mode === "fs_serpentine") {
+        if (!reverse) {
+          addErr(x + 1, y, er, eg, eb, 7 / 16);
+          addErr(x - 1, y + 1, er, eg, eb, 3 / 16);
+          addErr(x, y + 1, er, eg, eb, 5 / 16);
+          addErr(x + 1, y + 1, er, eg, eb, 1 / 16);
+        } else {
+          addErr(x - 1, y, er, eg, eb, 7 / 16);
+          addErr(x + 1, y + 1, er, eg, eb, 3 / 16);
+          addErr(x, y + 1, er, eg, eb, 5 / 16);
+          addErr(x - 1, y + 1, er, eg, eb, 1 / 16);
+        }
+      } else if (mode === "atkinson") {
+        const f = 1 / 8;
+        addErr(x + 1, y, er, eg, eb, f);
+        addErr(x + 2, y, er, eg, eb, f);
+        addErr(x - 1, y + 1, er, eg, eb, f);
+        addErr(x, y + 1, er, eg, eb, f);
+        addErr(x + 1, y + 1, er, eg, eb, f);
+        addErr(x, y + 2, er, eg, eb, f);
+      }
+    }
+  }
+
+  return new ImageData(out, W, H);
+}
+
+function showUploadPreview(url) {
+  if (!uploadPreview || !uploadPreviewImg) return;
+  uploadPreviewImg.src = url;
+  uploadPreview.hidden = false;
+}
+
+function isSupportedUploadImage(file) {
+  const lower = (file && file.name ? file.name : "").toLowerCase();
+  return lower.endsWith(".png") || lower.endsWith(".jpg") ||
+         lower.endsWith(".jpeg") || lower.endsWith(".bmp");
+}
+
+async function parseUploadResponse(response) {
+  const text = await response.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  if (!response.ok || !json || !json.ok) {
+    throw new Error((json && json.error) ? json.error : (text || "upload_failed"));
+  }
+  return json;
+}
+
+async function preprocessImageToPngBlob(file, cropMode, ditherMode = "atkinson", gammaValue = 1.0) {
   const img = new Image();
   const dataUrl = await new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -1800,14 +1923,21 @@ async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = "atkinson"
     { rgb: [0, 255, 0], nib: 0x06 },
   ];
 
-  const epd4 = quantizeImageToEpd4(rgba, W, H, palette, ditherMode, gammaValue);
-  return new Blob([epd4], { type: "application/octet-stream" });
+  const imageData = quantizeImageToImageData(rgba, W, H, palette, ditherMode, gammaValue);
+  ctx.putImageData(imageData, 0, 0);
+  showUploadPreview(canvas.toDataURL("image/png"));
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("png_encode_failed"));
+    }, "image/png");
+  });
 }
 
 async function uploadFile() {
   const fileEl = document.getElementById("uploadInput");
-  const f = fileEl.files && fileEl.files[0];
-  if (!f) {
+  const files = Array.from((fileEl && fileEl.files) || []);
+  if (!files.length) {
     uploadBox.textContent = t("upload.pick_file");
     return;
   }
@@ -1817,40 +1947,67 @@ async function uploadFile() {
   const gammaValue = Number.parseFloat(gammaCtrl.value || "1.0");
   const gammaText = Number.isFinite(gammaValue) ? gammaValue.toFixed(2) : "1.00";
 
-  if (mode === "normal") {
-    if (uploadBtn) uploadBtn.disabled = true;
-    const fd = new FormData();
-    fd.append("file", f);
-    const q = "/api/upload?dir=" + encodeURIComponent(currentDir) + "&mode=normal&algo=" + encodeURIComponent(ditherMode) + "&gamma=" + encodeURIComponent(gammaText);
-    const r = await fetch(q, { method: "POST", body: fd });
-    uploadBox.textContent = await r.text();
-    await listFiles(currentDir);
-    if (uploadBtn) uploadBtn.disabled = false;
-    return;
-  }
-
-  const lower = (f.name || "").toLowerCase();
-  if (!(lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".bmp"))) {
-    uploadBox.textContent = t("upload.only_images");
-    return;
-  }
-
-  uploadBox.textContent = t("upload.preprocessing");
   if (uploadBtn) uploadBtn.disabled = true;
+  let ok = 0;
+  let skipped = 0;
+  let failed = 0;
+
   try {
-    const epdBlob = await preprocessImageToEpd4Blob(f, mode === "crop", ditherMode, gammaValue);
-    const outName = (f.name.replace(/\.[^.]+$/, "") || "image") + ".epd4";
-    const fd = new FormData();
-    fd.append("file", epdBlob, outName);
-    const q = "/api/upload?dir=" + encodeURIComponent("/pic") + "&mode=normal&algo=" + encodeURIComponent(ditherMode) + "&gamma=" + encodeURIComponent(gammaText);
-    const r = await fetch(q, { method: "POST", body: fd });
-    uploadBox.textContent = await r.text();
-    currentDir = "/pic";
-    await listFiles("/pic");
-  } catch (e) {
-    uploadBox.textContent = fmt("upload.preprocess_failed", {
-      err: (e && e.message ? e.message : String(e)),
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const name = f.name || "file";
+      uploadBox.textContent = fmt("upload.progress", { index: i + 1, total: files.length, name });
+
+      try {
+        const fd = new FormData();
+        if (mode === "normal") {
+          fd.append("file", f, name);
+          const q = "/api/upload?dir=" + encodeURIComponent(currentDir) +
+            "&mode=normal&algo=" + encodeURIComponent(ditherMode) +
+            "&gamma=" + encodeURIComponent(gammaText);
+          const r = await fetch(q, { method: "POST", body: fd });
+          await parseUploadResponse(r);
+          ok++;
+          continue;
+        }
+
+        if (!isSupportedUploadImage(f)) {
+          skipped++;
+          continue;
+        }
+
+        uploadBox.textContent = fmt("upload.progress", {
+          index: i + 1,
+          total: files.length,
+          name: t("upload.preprocessing") + " " + name,
+        });
+        const pngBlob = await preprocessImageToPngBlob(f, mode === "crop", ditherMode, gammaValue);
+        fd.append("file", pngBlob, "image.png");
+        const q = "/api/upload?dir=" + encodeURIComponent("/pic") +
+          "&mode=normal&kind=image&algo=" + encodeURIComponent(ditherMode) +
+          "&gamma=" + encodeURIComponent(gammaText);
+        const r = await fetch(q, { method: "POST", body: fd });
+        const result = await parseUploadResponse(r);
+        if (result.path) {
+          showUploadPreview("/api/file?path=" + encodeURIComponent(result.path));
+        }
+        ok++;
+      } catch (e) {
+        failed++;
+        console.warn("[UPLOAD] failed", name, e);
+      }
+    }
+
+    uploadBox.textContent = fmt("upload.batch_done", {
+      ok,
+      skipped,
+      failed,
+      total: files.length,
     });
+    if (mode !== "normal") {
+      currentDir = "/pic";
+    }
+    await listFiles(currentDir);
   } finally {
     if (uploadBtn) uploadBtn.disabled = false;
   }

@@ -13,6 +13,8 @@ constexpr uint8_t kZhWeekdayPx = 26;
 constexpr uint8_t kHeaderDatePx = 24;
 constexpr uint8_t kHeaderWeatherPx = 30;
 constexpr uint8_t kHeaderSensorsPx = 20;
+constexpr uint8_t kHeaderLocationSlotPx = 30;
+constexpr uint8_t kHeaderLocationVisualOffsetY = 2;
 constexpr uint16_t kHeaderWeatherIconSize = 24u;
 constexpr uint16_t kHeaderWeatherIconOffsetY = 2u;
 constexpr uint16_t kHeaderStatusIconSize = 16u;
@@ -467,9 +469,9 @@ HeaderMetrics computeHeaderMetrics(const CalendarLayout &layout, const CalendarM
   const uint16_t date_h = textHeightPx(model.header_date, kHeaderDatePx, header_date_font);
   metrics.date_x = static_cast<uint16_t>(
       metrics.left_x + ((metrics.left_w > date_w) ? (metrics.left_w - date_w) / 2u : 0u));
-  constexpr uint8_t kLocationPx = 30u;
   constexpr uint16_t kDateLocationGap = 5u;
-  const uint16_t date_location_h = static_cast<uint16_t>(date_h + kDateLocationGap + kLocationPx);
+  const uint16_t date_location_h =
+      static_cast<uint16_t>(date_h + kDateLocationGap + kHeaderLocationSlotPx);
   metrics.date_y = static_cast<uint16_t>(
       metrics.card_y +
       ((metrics.card_h > date_location_h) ? (metrics.card_h - date_location_h) / 2u : 0u));
@@ -566,6 +568,17 @@ uint16_t statusHeaderIconY(const HeaderMetrics &header) {
                                     : 0u));
 }
 
+uint16_t headerLocationTextY(const HeaderMetrics &header, const String &text, uint8_t px,
+                             TextFont font) {
+  const uint16_t text_h = textHeightPx(text, px, font);
+  const uint16_t centered_offset =
+      (kHeaderLocationSlotPx > text_h)
+          ? static_cast<uint16_t>((kHeaderLocationSlotPx - text_h) / 2u)
+          : 0u;
+  const uint8_t visual_offset = isAsciiOnlyText(text) ? kHeaderLocationVisualOffsetY : 0u;
+  return static_cast<uint16_t>(header.location_y + centered_offset + visual_offset);
+}
+
 struct HeaderLocationTextLayout {
   String text;
   uint8_t px = 30u;
@@ -632,6 +645,7 @@ HeaderLocationTextLayout layoutHeaderLocationText(const CalendarModel &model,
         out.aa = preferredAsciiAAMode(model.header_weather, out.font, out.px);
         out.x = static_cast<uint16_t>(
             header.left_x + ((available_w > text_w) ? (available_w - text_w) / 2u : 0u));
+        out.y = headerLocationTextY(header, out.text, out.px, out.font);
         return out;
       }
     }
@@ -645,6 +659,7 @@ HeaderLocationTextLayout layoutHeaderLocationText(const CalendarModel &model,
     const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
     out.x = static_cast<uint16_t>(
         header.left_x + ((available_w > text_w) ? (available_w - text_w) / 2u : 0u));
+    out.y = headerLocationTextY(header, out.text, out.px, out.font);
     return out;
   }
   static const uint8_t kCandidatePx[] = {30u, 26u, 20u, 16u, 10u, 8u, 6u};
@@ -658,6 +673,7 @@ HeaderLocationTextLayout layoutHeaderLocationText(const CalendarModel &model,
       out.aa = preferredAsciiAAMode(model.header_weather, font, intrinsic_px);
       out.x = static_cast<uint16_t>(
           header.left_x + ((available_w > text_w) ? (available_w - text_w) / 2u : 0u));
+      out.y = headerLocationTextY(header, out.text, out.px, out.font);
       return out;
     }
   }
@@ -670,6 +686,7 @@ HeaderLocationTextLayout layoutHeaderLocationText(const CalendarModel &model,
   const uint16_t text_w = textWidthPx(out.text, out.px, out.font);
   out.x = static_cast<uint16_t>(
       header.left_x + ((available_w > text_w) ? (available_w - text_w) / 2u : 0u));
+  out.y = headerLocationTextY(header, out.text, out.px, out.font);
   return out;
 }
 

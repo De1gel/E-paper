@@ -2080,14 +2080,26 @@ void WifiManager::startServer() {
       "/api/upload", HTTP_POST,
       [this]() {
         markActivity(millis());
-        if (upload_ok_) {
-          server_->send(200, "application/json", "{\"ok\":true}");
+        if (upload_ok_ && upload_started_ && upload_received_ > 0 &&
+            upload_final_path_.length() > 0) {
+          String json = "{\"ok\":true,\"path\":\"";
+          json += jsonEscape(upload_final_path_);
+          json += "\",\"size\":";
+          json += String(upload_received_);
+          json += "}";
+          server_->send(200, "application/json", json);
+          upload_started_ = false;
+          upload_received_ = 0;
+          upload_final_path_ = "";
           return;
         }
         String json = "{\"ok\":false,\"error\":\"";
-        json += jsonEscape(upload_error_);
+        json += jsonEscape(upload_error_.length() > 0 ? upload_error_ : "upload_incomplete");
         json += "\"}";
         server_->send(500, "application/json", json);
+        upload_started_ = false;
+        upload_received_ = 0;
+        upload_final_path_ = "";
       },
       [this]() { handleFileUpload(); });
   server_->onNotFound([this]() { handleNotFound(); });
@@ -2211,11 +2223,6 @@ String WifiManager::listDirectoryJson(const char *path) {
   File entry = dir.openNextFile();
   while (entry) {
     const String name = String(entry.name());
-    if (String(path) == "/pic" && !entry.isDirectory() && !isEpd4Path(name)) {
-      ++skipped;
-      entry = dir.openNextFile();
-      continue;
-    }
     if (!first) {
       out += ",";
     }
@@ -2238,13 +2245,15 @@ String WifiManager::listDirectoryJson(const char *path) {
 }
 
 String WifiManager::contentTypeForPath(const String &path) const {
-  if (path.endsWith(".html")) return "text/html";
-  if (path.endsWith(".css")) return "text/css";
-  if (path.endsWith(".js")) return "application/javascript";
-  if (path.endsWith(".json")) return "application/json";
-  if (path.endsWith(".png")) return "image/png";
-  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
-  if (path.endsWith(".bmp")) return "image/bmp";
+  String lower = path;
+  lower.toLowerCase();
+  if (lower.endsWith(".html")) return "text/html";
+  if (lower.endsWith(".css")) return "text/css";
+  if (lower.endsWith(".js")) return "application/javascript";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".bmp")) return "image/bmp";
   return "application/octet-stream";
 }
 
@@ -2264,6 +2273,63 @@ bool WifiManager::isEpd4Path(const String &path) const {
   return lower.endsWith(".epd4");
 }
 
+String WifiManager::joinSdPath(const String &dir, const String &name) const {
+  String out = dir;
+  if (!out.endsWith("/")) {
+    out += "/";
+  }
+  out += name;
+  return out;
+}
+
+String WifiManager::leafName(const String &path) const {
+  const int slash = path.lastIndexOf('/');
+  return slash >= 0 ? path.substring(slash + 1) : path;
+}
+
+String WifiManager::algoSuffix(const String &algo) const {
+  String lower = algo;
+  lower.toLowerCase();
+  if (lower == "fs_serpentine" || lower == "fs") {
+    return "fs";
+  }
+  if (lower == "atkinson" || lower == "atk") {
+    return "atk";
+  }
+  return "unk";
+}
+
+String WifiManager::nextImageFilename(const String &algo) const {
+  const String suffix = algoSuffix(algo);
+  const String tail = "_" + suffix + ".png";
+  uint16_t max_no = 0;
+
+  File dir = SD.open("/pic");
+  if (dir && dir.isDirectory()) {
+    File entry = dir.openNextFile();
+    while (entry) {
+      if (!entry.isDirectory()) {
+        String name = leafName(String(entry.name()));
+        name.toLowerCase();
+        if (name.startsWith("image") && name.endsWith(tail)) {
+          const String num = name.substring(5, name.length() - tail.length());
+          const int value = num.toInt();
+          if (value > max_no) {
+            max_no = static_cast<uint16_t>(value);
+          }
+        }
+      }
+      entry = dir.openNextFile();
+    }
+    dir.close();
+  }
+
+  char buf[32];
+  snprintf(buf, sizeof(buf), "image%03u_%s.png", static_cast<unsigned>(max_no + 1),
+           suffix.c_str());
+  return String(buf);
+}
+
 bool WifiManager::removePathRecursive(const String &path) const {
   File entry = SD.open(path);
   if (!entry) {
@@ -2276,10 +2342,9 @@ bool WifiManager::removePathRecursive(const String &path) const {
 
   File child = entry.openNextFile();
   while (child) {
-    const String child_name = String(child.name());
-    const bool child_is_dir = child.isDirectory();
+    const String child_path = joinSdPath(path, leafName(String(child.name())));
     child.close();
-    if (!removePathRecursive(child_name)) {
+    if (!removePathRecursive(child_path)) {
       entry.close();
       return false;
     }
@@ -3986,6 +4051,10 @@ void WifiManager::handleFileDownload() {
     server_->send(404, "application/json", "{\"ok\":false,\"error\":\"not_found\"}");
     return;
   }
+  String filename = leafName(path);
+  filename.replace("\"", "");
+  server_->sendHeader("Content-Disposition",
+                      String("attachment; filename=\"") + filename + "\"");
   server_->streamFile(file, contentTypeForPath(path));
   file.close();
 }
@@ -4101,12 +4170,15 @@ void WifiManager::handleFileUpload() {
 
   if (upload.status == UPLOAD_FILE_START) {
     upload_ok_ = true;
+    upload_started_ = true;
+    upload_received_ = 0;
     upload_error_ = "";
     upload_mode_ = server_->hasArg("mode") ? server_->arg("mode") : "normal";
     upload_mode_.toLowerCase();
     upload_algo = server_->hasArg("algo") ? server_->arg("algo") : "none";
     upload_gamma = server_->hasArg("gamma") ? server_->arg("gamma") : "1.00";
     upload_tmp_path_ = "";
+    upload_final_path_ = "";
     Serial.printf("[UPLOAD] begin mode=%s algo=%s gamma=%s remote=%s\n",
                   upload_mode_.c_str(),
                   upload_algo.c_str(),
@@ -4126,6 +4198,12 @@ void WifiManager::handleFileUpload() {
   String filename = upload.filename;
   filename.replace("\\", "");
   filename.replace("/", "");
+  const bool image_output = server_->hasArg("kind") && server_->arg("kind") == "image";
+  String dir = server_->hasArg("dir") ? server_->arg("dir") : "/";
+  if (image_output) {
+    dir = "/pic";
+    filename = nextImageFilename(upload_algo);
+  }
   if (filename.length() == 0) {
     upload_ok_ = false;
     upload_error_ = "bad_filename";
@@ -4133,7 +4211,6 @@ void WifiManager::handleFileUpload() {
   }
 
   const bool preprocess_mode = (upload_mode_ == "fit" || upload_mode_ == "crop");
-  const String dir = server_->hasArg("dir") ? server_->arg("dir") : "/";
   if (!isSafePath(dir)) {
     upload_ok_ = false;
     upload_error_ = "bad_dir";
@@ -4175,7 +4252,12 @@ void WifiManager::handleFileUpload() {
     Serial.printf("[SD] upload start %s\n", filepath.c_str());
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (upload_file) {
-      upload_file.write(upload.buf, upload.currentSize);
+      const size_t written = upload_file.write(upload.buf, upload.currentSize);
+      upload_received_ += static_cast<uint32_t>(written);
+      if (written != upload.currentSize) {
+        upload_ok_ = false;
+        upload_error_ = "write_failed";
+      }
     } else {
       upload_ok_ = false;
       upload_error_ = "write_target_missing";
@@ -4197,13 +4279,32 @@ void WifiManager::handleFileUpload() {
       return;
     }
 
-    if (upload_ok_) {
-      Serial.printf("[UPLOAD] done ok mode=%s algo=%s gamma=%s final=%s\n",
-                    upload_mode_.c_str(),
-                    upload_algo.c_str(),
-                    upload_gamma.c_str(),
-                    filepath.c_str());
+    File verify = SD.open(filepath, FILE_READ);
+    if (!verify) {
+      upload_ok_ = false;
+      upload_error_ = "verify_open_failed";
+      Serial.printf("[UPLOAD] verify open failed %s\n", filepath.c_str());
+      return;
     }
+    const uint32_t actual_size = static_cast<uint32_t>(verify.size());
+    verify.close();
+    if (actual_size == 0 || actual_size != upload_received_) {
+      upload_ok_ = false;
+      upload_error_ = "verify_size_failed";
+      SD.remove(filepath);
+      Serial.printf("[UPLOAD] verify size failed %s actual=%lu received=%lu\n",
+                    filepath.c_str(), static_cast<unsigned long>(actual_size),
+                    static_cast<unsigned long>(upload_received_));
+      return;
+    }
+
+    upload_final_path_ = filepath;
+    Serial.printf("[UPLOAD] done ok mode=%s algo=%s gamma=%s final=%s bytes=%lu\n",
+                  upload_mode_.c_str(),
+                  upload_algo.c_str(),
+                  upload_gamma.c_str(),
+                  filepath.c_str(),
+                  static_cast<unsigned long>(upload_received_));
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     upload_ok_ = false;
     upload_error_ = "aborted";

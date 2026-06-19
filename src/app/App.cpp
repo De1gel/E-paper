@@ -1,6 +1,12 @@
 #include "app/App.h"
 
 #include <FS.h>
+#include <JPEGDEC.h>
+#undef INTELSHORT
+#undef INTELLONG
+#undef MOTOSHORT
+#undef MOTOLONG
+#include <PNGdec.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
 #include <algorithm>
@@ -30,10 +36,489 @@ constexpr size_t kEpd4Bytes = (800 * 480) / 2;
 constexpr uint16_t kPhotoCount = 1;
 constexpr uint16_t kScreenWidth = 800;
 constexpr uint16_t kScreenHeight = 480;
+constexpr size_t kPngRgbaBufferedBytes = 2u * (kScreenWidth * 4u + 1u) + 30u;
+static_assert(PNG_MAX_BUFFERED_PIXELS >= kPngRgbaBufferedBytes,
+              "PNGdec buffer must hold two aligned RGBA scanlines");
 constexpr uint32_t kClockMinValidEpoch = 1700000000UL;
 constexpr uint32_t kCalendarCheckIntervalMs = 60000UL;
 constexpr AppState kDebugBootState = AppState::Photo;
 constexpr uint8_t kDebugForcedCalendarRows = 0;
+
+PNG *g_png_decoder = nullptr;
+JPEGDEC *g_jpeg_decoder = nullptr;
+File g_png_file;
+File g_jpeg_file;
+uint8_t *g_photo_decode_frame = nullptr;
+uint8_t *g_photo_stripe_frame = nullptr;
+uint16_t *g_png_line_buffer = nullptr;
+int g_png_line_capacity = 0;
+uint16_t *g_jpeg_band_buffer = nullptr;
+size_t g_jpeg_band_capacity = 0;
+uint16_t g_png_source_x_for_target[kScreenWidth] = {};
+uint16_t g_png_source_y_for_target[kScreenHeight] = {};
+uint8_t g_png_target_row[kScreenWidth / 2] = {};
+uint16_t g_png_next_target_y = 0;
+size_t g_png_written_bytes = 0;
+bool g_png_direct_active = false;
+bool g_png_direct_failed = false;
+int g_jpeg_band_y = -1;
+int g_jpeg_band_height = 0;
+int g_jpeg_decoded_width = 0;
+uint16_t g_jpeg_next_target_y = 0;
+size_t g_jpeg_written_bytes = 0;
+bool g_jpeg_direct_active = false;
+bool g_jpeg_direct_failed = false;
+uint16_t g_photo_stripe_rows = 0;
+uint16_t g_photo_stripe_start_y = 0;
+uint16_t g_photo_stripe_row_bytes = 0;
+int g_photo_src_width = 0;
+int g_photo_src_height = 0;
+int g_photo_crop_x = 0;
+int g_photo_crop_y = 0;
+float g_photo_scale = 1.0f;
+
+uint8_t nearestPanelNibble(uint8_t r, uint8_t g, uint8_t b) {
+  struct PanelColor {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t nibble;
+  };
+  static constexpr PanelColor kColors[] = {
+      {0, 0, 0, 0x00},
+      {255, 255, 255, 0x01},
+      {255, 255, 0, 0x02},
+      {255, 0, 0, 0x03},
+      {0, 0, 255, 0x05},
+      {0, 255, 0, 0x06},
+  };
+
+  uint32_t best_dist = 0xFFFFFFFFu;
+  uint8_t best = 0x01;
+  for (const PanelColor &c : kColors) {
+    const int dr = static_cast<int>(r) - static_cast<int>(c.r);
+    const int dg = static_cast<int>(g) - static_cast<int>(c.g);
+    const int db = static_cast<int>(b) - static_cast<int>(c.b);
+    const uint32_t dist = static_cast<uint32_t>(dr * dr + dg * dg + db * db);
+    if (dist < best_dist) {
+      best_dist = dist;
+      best = c.nibble;
+    }
+  }
+  return best;
+}
+
+void setPackedPhotoPixel(uint8_t *frame, int x, int y, uint8_t nibble) {
+  if (!frame || x < 0 || x >= static_cast<int>(kScreenWidth) ||
+      y < 0 || y >= static_cast<int>(kScreenHeight)) {
+    return;
+  }
+  const uint32_t pixel = static_cast<uint32_t>(y) * kScreenWidth + static_cast<uint32_t>(x);
+  const uint32_t byte_index = pixel >> 1;
+  if ((pixel & 1u) == 0) {
+    frame[byte_index] = static_cast<uint8_t>((frame[byte_index] & 0x0F) | ((nibble & 0x0F) << 4));
+  } else {
+    frame[byte_index] = static_cast<uint8_t>((frame[byte_index] & 0xF0) | (nibble & 0x0F));
+  }
+}
+
+void clearPhotoStripe() {
+  if (!g_photo_stripe_frame || g_photo_stripe_rows == 0 || g_photo_stripe_row_bytes == 0) {
+    return;
+  }
+  memset(g_photo_stripe_frame, 0x11,
+         static_cast<size_t>(g_photo_stripe_rows) * g_photo_stripe_row_bytes);
+}
+
+void flushPhotoStripe() {
+  if (!g_photo_stripe_frame || g_photo_stripe_start_y >= kScreenHeight) {
+    return;
+  }
+  const uint16_t rows = std::min<uint16_t>(
+      g_photo_stripe_rows, static_cast<uint16_t>(kScreenHeight - g_photo_stripe_start_y));
+  const size_t bytes = static_cast<size_t>(rows) * g_photo_stripe_row_bytes;
+  for (size_t i = 0; i < bytes; ++i) {
+    EPD_W21_WriteDATA(g_photo_stripe_frame[i]);
+  }
+  g_photo_stripe_start_y = static_cast<uint16_t>(g_photo_stripe_start_y + g_photo_stripe_rows);
+  clearPhotoStripe();
+}
+
+void flushPhotoStripesUntil(int target_y) {
+  if (!g_photo_stripe_frame || target_y < 0) {
+    return;
+  }
+  while (g_photo_stripe_start_y < kScreenHeight &&
+         target_y >= static_cast<int>(g_photo_stripe_start_y + g_photo_stripe_rows)) {
+    flushPhotoStripe();
+  }
+}
+
+void beginPhotoStripeOutput(uint8_t *stripe, uint16_t rows, uint16_t row_bytes) {
+  g_photo_decode_frame = nullptr;
+  g_photo_stripe_frame = stripe;
+  g_photo_stripe_rows = rows;
+  g_photo_stripe_row_bytes = row_bytes;
+  g_photo_stripe_start_y = 0;
+  clearPhotoStripe();
+}
+
+void endPhotoStripeOutput() {
+  while (g_photo_stripe_frame && g_photo_stripe_start_y < kScreenHeight) {
+    flushPhotoStripe();
+  }
+  g_photo_stripe_frame = nullptr;
+  g_photo_stripe_rows = 0;
+  g_photo_stripe_row_bytes = 0;
+  g_photo_stripe_start_y = 0;
+}
+
+void cancelPhotoStripeOutput() {
+  g_photo_stripe_frame = nullptr;
+  g_photo_stripe_rows = 0;
+  g_photo_stripe_row_bytes = 0;
+  g_photo_stripe_start_y = 0;
+}
+
+void setPhotoTargetPixel(int x, int y, uint8_t nibble) {
+  if (g_photo_decode_frame) {
+    setPackedPhotoPixel(g_photo_decode_frame, x, y, nibble);
+    return;
+  }
+  if (!g_photo_stripe_frame || x < 0 || x >= static_cast<int>(kScreenWidth) ||
+      y < 0 || y >= static_cast<int>(kScreenHeight)) {
+    return;
+  }
+  flushPhotoStripesUntil(y);
+  if (y < static_cast<int>(g_photo_stripe_start_y) ||
+      y >= static_cast<int>(g_photo_stripe_start_y + g_photo_stripe_rows)) {
+    return;
+  }
+  const uint32_t local_y = static_cast<uint32_t>(y - g_photo_stripe_start_y);
+  const uint32_t byte_index = local_y * g_photo_stripe_row_bytes + (static_cast<uint32_t>(x) >> 1);
+  if ((x & 1) == 0) {
+    g_photo_stripe_frame[byte_index] =
+        static_cast<uint8_t>((g_photo_stripe_frame[byte_index] & 0x0F) |
+                             ((nibble & 0x0F) << 4));
+  } else {
+    g_photo_stripe_frame[byte_index] =
+        static_cast<uint8_t>((g_photo_stripe_frame[byte_index] & 0xF0) | (nibble & 0x0F));
+  }
+}
+
+void setupCoverCropMapping(int src_width, int src_height) {
+  g_photo_src_width = src_width;
+  g_photo_src_height = src_height;
+  if (src_width <= 0 || src_height <= 0) {
+    g_photo_scale = 1.0f;
+    g_photo_crop_x = 0;
+    g_photo_crop_y = 0;
+    return;
+  }
+  const float sx = static_cast<float>(kScreenWidth) / static_cast<float>(src_width);
+  const float sy = static_cast<float>(kScreenHeight) / static_cast<float>(src_height);
+  g_photo_scale = (sx > sy) ? sx : sy;
+  const int scaled_w = static_cast<int>(src_width * g_photo_scale + 0.5f);
+  const int scaled_h = static_cast<int>(src_height * g_photo_scale + 0.5f);
+  g_photo_crop_x = (scaled_w > static_cast<int>(kScreenWidth))
+                       ? ((scaled_w - static_cast<int>(kScreenWidth)) / 2)
+                       : 0;
+  g_photo_crop_y = (scaled_h > static_cast<int>(kScreenHeight))
+                       ? ((scaled_h - static_cast<int>(kScreenHeight)) / 2)
+                       : 0;
+}
+
+bool ensurePngLineBuffer(int width) {
+  if (width <= 0) {
+    return false;
+  }
+  if (g_png_line_buffer && g_png_line_capacity >= width) {
+    return true;
+  }
+  uint16_t *next = static_cast<uint16_t *>(
+      heap_caps_malloc(static_cast<size_t>(width) * sizeof(uint16_t), MALLOC_CAP_8BIT));
+  if (!next) {
+    return false;
+  }
+  if (g_png_line_buffer) {
+    heap_caps_free(g_png_line_buffer);
+  }
+  g_png_line_buffer = next;
+  g_png_line_capacity = width;
+  return true;
+}
+
+bool setupPngTargetMapping() {
+  if (g_photo_src_width <= 0 || g_photo_src_height <= 0 || g_photo_scale <= 0.0f) {
+    return false;
+  }
+  for (uint16_t tx = 0; tx < kScreenWidth; ++tx) {
+    int sx = static_cast<int>((static_cast<float>(tx + g_photo_crop_x) + 0.5f) /
+                              g_photo_scale);
+    if (sx < 0) sx = 0;
+    if (sx >= g_photo_src_width) sx = g_photo_src_width - 1;
+    g_png_source_x_for_target[tx] = static_cast<uint16_t>(sx);
+  }
+  for (uint16_t ty = 0; ty < kScreenHeight; ++ty) {
+    int sy = static_cast<int>((static_cast<float>(ty + g_photo_crop_y) + 0.5f) /
+                              g_photo_scale);
+    if (sy < 0) sy = 0;
+    if (sy >= g_photo_src_height) sy = g_photo_src_height - 1;
+    g_png_source_y_for_target[ty] = static_cast<uint16_t>(sy);
+    if (ty > 0 && g_png_source_y_for_target[ty] < g_png_source_y_for_target[ty - 1]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool sourcePixelToTarget(int sx, int sy, int &tx, int &ty) {
+  if (g_photo_scale <= 0.0f) {
+    return false;
+  }
+  tx = static_cast<int>(sx * g_photo_scale + 0.5f) - g_photo_crop_x;
+  ty = static_cast<int>(sy * g_photo_scale + 0.5f) - g_photo_crop_y;
+  return tx >= 0 && tx < static_cast<int>(kScreenWidth) &&
+         ty >= 0 && ty < static_cast<int>(kScreenHeight);
+}
+
+void paintMappedSourcePixel(uint8_t *frame, int sx, int sy, uint8_t nibble) {
+  int tx0 = 0;
+  int ty0 = 0;
+  if (!sourcePixelToTarget(sx, sy, tx0, ty0)) {
+    return;
+  }
+  int tx1 = tx0;
+  int ty1 = ty0;
+  if (g_photo_scale > 1.0f) {
+    tx1 = static_cast<int>((sx + 1) * g_photo_scale + 0.5f) - g_photo_crop_x;
+    ty1 = static_cast<int>((sy + 1) * g_photo_scale + 0.5f) - g_photo_crop_y;
+  }
+  if (tx1 <= tx0) tx1 = tx0 + 1;
+  if (ty1 <= ty0) ty1 = ty0 + 1;
+  if (tx1 > static_cast<int>(kScreenWidth)) tx1 = kScreenWidth;
+  if (ty1 > static_cast<int>(kScreenHeight)) ty1 = kScreenHeight;
+  for (int y = ty0; y < ty1; ++y) {
+    for (int x = tx0; x < tx1; ++x) {
+      (void)frame;
+      setPhotoTargetPixel(x, y, nibble);
+    }
+  }
+}
+
+uint8_t rgb565ToPanelNibble(uint16_t pixel) {
+  const uint8_t r = static_cast<uint8_t>(((pixel >> 11) & 0x1F) * 255 / 31);
+  const uint8_t g = static_cast<uint8_t>(((pixel >> 5) & 0x3F) * 255 / 63);
+  const uint8_t b = static_cast<uint8_t>((pixel & 0x1F) * 255 / 31);
+  return nearestPanelNibble(r, g, b);
+}
+
+void *photoPngOpen(const char *filename, int32_t *size) {
+  g_png_file = SD.open(filename, FILE_READ);
+  if (!g_png_file) {
+    return nullptr;
+  }
+  *size = static_cast<int32_t>(g_png_file.size());
+  return &g_png_file;
+}
+
+void photoPngClose(void *handle) {
+  (void)handle;
+  if (g_png_file) {
+    g_png_file.close();
+  }
+}
+
+int32_t photoPngRead(PNGFILE *file, uint8_t *buffer, int32_t length) {
+  File *f = static_cast<File *>(file->fHandle);
+  if (!f) {
+    return 0;
+  }
+  return static_cast<int32_t>(f->read(buffer, length));
+}
+
+int32_t photoPngSeek(PNGFILE *file, int32_t position) {
+  File *f = static_cast<File *>(file->fHandle);
+  return (f && f->seek(position)) ? 1 : 0;
+}
+
+int photoPngDraw(PNGDRAW *draw) {
+  if (!draw || !g_png_direct_active || g_png_direct_failed || !g_png_decoder) {
+    return 0;
+  }
+  if (draw->y < 0 || draw->y >= g_photo_src_height) {
+    g_png_direct_failed = true;
+    return 0;
+  }
+  if (draw->iWidth < g_photo_src_width || !g_png_line_buffer ||
+      g_png_line_capacity < g_photo_src_width) {
+    Serial.printf("[PHOTO] png invalid scanline y=%d width=%d expected=%d\n",
+                  draw->y, draw->iWidth, g_photo_src_width);
+    g_png_direct_failed = true;
+    return 0;
+  }
+  g_png_decoder->getLineAsRGB565(draw, g_png_line_buffer, PNG_RGB565_LITTLE_ENDIAN, 0xFFFFFFFFu);
+
+  while (g_png_next_target_y < kScreenHeight) {
+    const uint16_t required_source_y = g_png_source_y_for_target[g_png_next_target_y];
+    if (required_source_y > static_cast<uint16_t>(draw->y)) {
+      break;
+    }
+    if (required_source_y < static_cast<uint16_t>(draw->y)) {
+      Serial.printf("[PHOTO] png source row skipped target_y=%u required=%u got=%d\n",
+                    static_cast<unsigned>(g_png_next_target_y),
+                    static_cast<unsigned>(required_source_y), draw->y);
+      g_png_direct_failed = true;
+      return 0;
+    }
+
+    for (uint16_t tx = 0; tx < kScreenWidth; tx += 2) {
+      const uint8_t high = rgb565ToPanelNibble(
+          g_png_line_buffer[g_png_source_x_for_target[tx]]);
+      const uint8_t low = rgb565ToPanelNibble(
+          g_png_line_buffer[g_png_source_x_for_target[tx + 1]]);
+      g_png_target_row[tx >> 1] = static_cast<uint8_t>((high << 4) | low);
+    }
+    for (size_t i = 0; i < sizeof(g_png_target_row); ++i) {
+      EPD_W21_WriteDATA(g_png_target_row[i]);
+    }
+    g_png_written_bytes += sizeof(g_png_target_row);
+    ++g_png_next_target_y;
+  }
+  return 1;
+}
+
+void *photoJpegOpen(const char *filename, int32_t *size) {
+  g_jpeg_file = SD.open(filename, FILE_READ);
+  if (!g_jpeg_file) {
+    return nullptr;
+  }
+  *size = static_cast<int32_t>(g_jpeg_file.size());
+  return &g_jpeg_file;
+}
+
+void photoJpegClose(void *handle) {
+  (void)handle;
+  if (g_jpeg_file) {
+    g_jpeg_file.close();
+  }
+}
+
+int32_t photoJpegRead(JPEGFILE *file, uint8_t *buffer, int32_t length) {
+  File *f = static_cast<File *>(file->fHandle);
+  if (!f) {
+    return 0;
+  }
+  return static_cast<int32_t>(f->read(buffer, length));
+}
+
+int32_t photoJpegSeek(JPEGFILE *file, int32_t position) {
+  File *f = static_cast<File *>(file->fHandle);
+  return (f && f->seek(position)) ? 1 : 0;
+}
+
+bool flushCompletedJpegBand() {
+  if (g_jpeg_band_y < 0 || g_jpeg_band_height <= 0 || !g_jpeg_band_buffer) {
+    return true;
+  }
+  const int band_end_y = g_jpeg_band_y + g_jpeg_band_height;
+  while (g_jpeg_next_target_y < kScreenHeight) {
+    const int source_y = g_png_source_y_for_target[g_jpeg_next_target_y];
+    if (source_y >= band_end_y) {
+      break;
+    }
+    if (source_y < g_jpeg_band_y) {
+      Serial.printf("[PHOTO] jpeg source row unavailable target_y=%u source_y=%d band=%d..%d\n",
+                    static_cast<unsigned>(g_jpeg_next_target_y), source_y,
+                    g_jpeg_band_y, band_end_y - 1);
+      return false;
+    }
+
+    const uint16_t *source_row =
+        g_jpeg_band_buffer + static_cast<size_t>(source_y - g_jpeg_band_y) *
+                                   g_jpeg_decoded_width;
+    for (uint16_t tx = 0; tx < kScreenWidth; tx += 2) {
+      const uint8_t high =
+          rgb565ToPanelNibble(source_row[g_png_source_x_for_target[tx]]);
+      const uint8_t low =
+          rgb565ToPanelNibble(source_row[g_png_source_x_for_target[tx + 1]]);
+      g_png_target_row[tx >> 1] = static_cast<uint8_t>((high << 4) | low);
+    }
+    for (size_t i = 0; i < sizeof(g_png_target_row); ++i) {
+      EPD_W21_WriteDATA(g_png_target_row[i]);
+    }
+    g_jpeg_written_bytes += sizeof(g_png_target_row);
+    ++g_jpeg_next_target_y;
+    if ((g_jpeg_next_target_y & 0x0Fu) == 0u) {
+      yield();
+    }
+  }
+  return true;
+}
+
+int photoJpegDraw(JPEGDRAW *draw) {
+  if (!draw || !g_jpeg_direct_active || g_jpeg_direct_failed ||
+      !g_jpeg_band_buffer || g_jpeg_decoded_width <= 0) {
+    return 0;
+  }
+  if (draw->x < 0 || draw->y < 0 || draw->iWidth <= 0 || draw->iHeight <= 0 ||
+      draw->iWidthUsed <= 0 || draw->x + draw->iWidthUsed > g_jpeg_decoded_width ||
+      static_cast<size_t>(draw->iHeight) * g_jpeg_decoded_width > g_jpeg_band_capacity) {
+    Serial.printf("[PHOTO] jpeg invalid block x=%d y=%d width=%d used=%d height=%d source_width=%d\n",
+                  draw->x, draw->y, draw->iWidth, draw->iWidthUsed,
+                  draw->iHeight, g_jpeg_decoded_width);
+    g_jpeg_direct_failed = true;
+    return 0;
+  }
+
+  if (draw->y != g_jpeg_band_y) {
+    if (g_jpeg_band_y >= 0 && !flushCompletedJpegBand()) {
+      g_jpeg_direct_failed = true;
+      return 0;
+    }
+    if (g_jpeg_band_y >= 0 && draw->y <= g_jpeg_band_y) {
+      Serial.printf("[PHOTO] jpeg block order invalid previous_y=%d got_y=%d\n",
+                    g_jpeg_band_y, draw->y);
+      g_jpeg_direct_failed = true;
+      return 0;
+    }
+    g_jpeg_band_y = draw->y;
+    g_jpeg_band_height = draw->iHeight;
+    memset(g_jpeg_band_buffer, 0xFF,
+           static_cast<size_t>(g_jpeg_band_height) * g_jpeg_decoded_width * sizeof(uint16_t));
+  } else if (draw->iHeight != g_jpeg_band_height) {
+    Serial.printf("[PHOTO] jpeg block height mismatch y=%d expected=%d got=%d\n",
+                  draw->y, g_jpeg_band_height, draw->iHeight);
+    g_jpeg_direct_failed = true;
+    return 0;
+  }
+
+  for (int y = 0; y < draw->iHeight; ++y) {
+    memcpy(g_jpeg_band_buffer + static_cast<size_t>(y) * g_jpeg_decoded_width + draw->x,
+           draw->pPixels + static_cast<size_t>(y) * draw->iWidth,
+           static_cast<size_t>(draw->iWidthUsed) * sizeof(uint16_t));
+  }
+  return 1;
+}
+
+uint16_t readLe16(File &file) {
+  uint8_t b[2] = {};
+  if (file.read(b, sizeof(b)) != sizeof(b)) {
+    return 0;
+  }
+  return static_cast<uint16_t>(b[0] | (static_cast<uint16_t>(b[1]) << 8));
+}
+
+uint32_t readLe32(File &file) {
+  uint8_t b[4] = {};
+  if (file.read(b, sizeof(b)) != sizeof(b)) {
+    return 0;
+  }
+  return static_cast<uint32_t>(b[0]) |
+         (static_cast<uint32_t>(b[1]) << 8) |
+         (static_cast<uint32_t>(b[2]) << 16) |
+         (static_cast<uint32_t>(b[3]) << 24);
+}
 
 String twoDigits(int value) {
   if (value < 10) {
@@ -1103,13 +1588,13 @@ void App::renderPhotoPage() {
   refreshPhotoFileCount();
   if (photo_file_count_ > 0) {
     const uint16_t safe_index = static_cast<uint16_t>(photo_index_ % photo_file_count_);
-    if (renderEpd4PhotoAtIndex(safe_index)) {
+    if (renderPhotoAtIndex(safe_index)) {
       return;
     }
-    Serial.println("[PHOTO] epd4 render failed, fallback clear");
+    Serial.println("[PHOTO] render failed, fallback clear");
   }
 
-  Serial.println("[PHOTO] no epd4 file available, fallback clear");
+  Serial.println("[PHOTO] no supported photo available, fallback clear");
   PIC_display_Clear();
 }
 
@@ -1141,6 +1626,35 @@ bool App::isEpd4Name(const String &name) const {
   return lower.endsWith(".epd4");
 }
 
+bool App::isPngName(const String &name) const {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".png");
+}
+
+bool App::isJpegName(const String &name) const {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".jpg") || lower.endsWith(".jpeg");
+}
+
+bool App::isBmpName(const String &name) const {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".bmp");
+}
+
+bool App::isAlbumPhotoName(const String &name) const {
+  return isEpd4Name(name) || isPngName(name) || isJpegName(name) || isBmpName(name);
+}
+
+String App::photoEntryPath(const String &name) const {
+  if (name.startsWith("/")) {
+    return name;
+  }
+  return String("/pic/") + name;
+}
+
 void App::refreshPhotoFileCount() {
   const bool auto_power_cycle = !peripheral_power_on_;
   if (auto_power_cycle) {
@@ -1167,8 +1681,12 @@ void App::refreshPhotoFileCount() {
   uint16_t count = 0;
   File entry = dir.openNextFile();
   while (entry) {
-    if (!entry.isDirectory() && isEpd4Name(String(entry.name())) && entry.size() == kEpd4Bytes) {
-      ++count;
+    if (!entry.isDirectory()) {
+      const String name = String(entry.name());
+      if ((isEpd4Name(name) && entry.size() == kEpd4Bytes) ||
+          isPngName(name) || isJpegName(name) || isBmpName(name)) {
+        ++count;
+      }
     }
     entry = dir.openNextFile();
   }
@@ -1176,7 +1694,7 @@ void App::refreshPhotoFileCount() {
   photo_file_count_ = count;
   if (photo_file_count_ != last_logged_photo_file_count_) {
     if (appfw::kDebugLogs) {
-      Serial.printf("[PHOTO] epd4 scan count=%u\n", photo_file_count_);
+      Serial.printf("[PHOTO] supported photo scan count=%u\n", photo_file_count_);
     }
     last_logged_photo_file_count_ = photo_file_count_;
   }
@@ -1185,13 +1703,13 @@ void App::refreshPhotoFileCount() {
   }
 }
 
-bool App::renderEpd4PhotoAtIndex(uint16_t index) {
+bool App::renderPhotoAtIndex(uint16_t index) {
   const bool auto_power_cycle = !peripheral_power_on_;
   if (auto_power_cycle) {
     setPeripheralPower(true);
   }
   if (!ensurePhotoStorageMounted()) {
-    Serial.println("[PHOTO] epd4 render skip: sd_not_ready");
+    Serial.println("[PHOTO] render skip: sd_not_ready");
     if (auto_power_cycle) {
       setPeripheralPower(false);
     }
@@ -1202,37 +1720,72 @@ bool App::renderEpd4PhotoAtIndex(uint16_t index) {
     if (dir) {
       dir.close();
     }
-    Serial.println("[PHOTO] epd4 render skip: /pic unavailable");
+    Serial.println("[PHOTO] render skip: /pic unavailable");
     if (auto_power_cycle) {
       setPeripheralPower(false);
     }
     return false;
   }
 
-  File selected;
+  String selected_path;
   uint16_t current = 0;
   File entry = dir.openNextFile();
   while (entry) {
-    if (!entry.isDirectory() && isEpd4Name(String(entry.name())) && entry.size() == kEpd4Bytes) {
-      if (current == index) {
-        selected = entry;
-        break;
+    if (!entry.isDirectory()) {
+      const String name = String(entry.name());
+      const bool valid_epd4 = isEpd4Name(name) && entry.size() == kEpd4Bytes;
+      const bool valid_decoded = isPngName(name) || isJpegName(name) || isBmpName(name);
+      if (valid_epd4 || valid_decoded) {
+        if (current == index) {
+          selected_path = photoEntryPath(name);
+          entry.close();
+          break;
+        }
+        ++current;
       }
-      ++current;
     }
+    entry.close();
     entry = dir.openNextFile();
   }
-  if (!selected) {
-    dir.close();
-    Serial.printf("[PHOTO] epd4 render skip: index=%u not found\n", index + 1);
+  dir.close();
+
+  if (selected_path.length() == 0) {
+    Serial.printf("[PHOTO] render skip: index=%u not found\n", index + 1);
     if (auto_power_cycle) {
       setPeripheralPower(false);
     }
+    return false;
+  }
+
+  bool ok = false;
+  if (isEpd4Name(selected_path)) {
+    ok = renderEpd4PhotoFile(selected_path);
+  } else {
+    ok = renderDecodedPhotoFile(selected_path);
+  }
+
+  if (auto_power_cycle) {
+    setPeripheralPower(false);
+  }
+  return ok;
+}
+
+bool App::renderEpd4PhotoFile(const String &path) {
+  File selected = SD.open(path, FILE_READ);
+  if (!selected) {
+    Serial.printf("[PHOTO] epd4 open failed path=%s\n", path.c_str());
+    return false;
+  }
+  if (selected.size() != kEpd4Bytes) {
+    Serial.printf("[PHOTO] epd4 size mismatch path=%s got=%u expected=%u\n",
+                  path.c_str(), static_cast<unsigned>(selected.size()),
+                  static_cast<unsigned>(kEpd4Bytes));
+    selected.close();
     return false;
   }
 
   if (appfw::kDebugLogs) {
-    Serial.printf("[PHOTO] render epd4 file=%s index=%u\n", selected.name(), index + 1);
+    Serial.printf("[PHOTO] render epd4 file=%s\n", path.c_str());
   }
   uint8_t buf[256];
   EPD_W21_WriteCMD(0x10);
@@ -1251,26 +1804,341 @@ bool App::renderEpd4PhotoAtIndex(uint16_t index) {
     }
   }
 
+  selected.close();
   if (total != kEpd4Bytes) {
-    selected.close();
-    dir.close();
-    Serial.printf("[PHOTO] epd4 size mismatch got=%u expected=%u\n",
+    Serial.printf("[PHOTO] epd4 read mismatch got=%u expected=%u\n",
                   static_cast<unsigned>(total), static_cast<unsigned>(kEpd4Bytes));
-    if (auto_power_cycle) {
-      setPeripheralPower(false);
-    }
     return false;
   }
 
-  selected.close();
-  dir.close();
   EPD_W21_WriteCMD(0x12);
   EPD_W21_WriteDATA(0x00);
   delay(1);
   waitEpdReadyWithLed();
-  if (auto_power_cycle) {
-    setPeripheralPower(false);
+  return true;
+}
+
+bool App::renderDecodedPhotoFile(const String &path) {
+  if (isPngName(path)) {
+    return renderPngDirectToEpd(path);
   }
+  if (isJpegName(path)) {
+    return renderJpegDirectToEpd(path);
+  }
+  if (!ensureCalendarStripeBuffer()) {
+    Serial.printf("[PHOTO] decode stripe alloc failed path=%s bytes=%u\n",
+                  path.c_str(), static_cast<unsigned>(kScreenWidth * kCalendarStripeRows / 2u));
+    return false;
+  }
+
+  bool ok = false;
+  beginPhotoStripeOutput(calendar_stripe_.data(), calendar_stripe_.rows(), calendar_stripe_.rowBytes());
+  EPD_W21_WriteCMD(0x10);
+  if (isBmpName(path)) {
+    ok = decodeBmpToPackedFrame(path, nullptr);
+  }
+
+  if (ok) {
+    endPhotoStripeOutput();
+    EPD_W21_WriteCMD(0x12);
+    EPD_W21_WriteDATA(0x00);
+    delay(1);
+    waitEpdReadyWithLed();
+  } else {
+    cancelPhotoStripeOutput();
+  }
+  return ok;
+}
+
+bool App::renderPngDirectToEpd(const String &path) {
+  PNG *decoder = new PNG();
+  if (!decoder) {
+    Serial.printf("[PHOTO] png decoder alloc failed path=%s\n", path.c_str());
+    return false;
+  }
+  g_png_decoder = decoder;
+  const int open_rc = decoder->open(path.c_str(), photoPngOpen, photoPngClose,
+                                    photoPngRead, photoPngSeek, photoPngDraw);
+  if (open_rc != PNG_SUCCESS) {
+    Serial.printf("[PHOTO] png open failed path=%s rc=%d\n", path.c_str(), open_rc);
+    g_png_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  setupCoverCropMapping(decoder->getWidth(), decoder->getHeight());
+  if (decoder->getWidth() > 65535 || decoder->getHeight() > 65535 ||
+      !setupPngTargetMapping()) {
+    Serial.printf("[PHOTO] png mapping failed path=%s source=%dx%d\n",
+                  path.c_str(), decoder->getWidth(), decoder->getHeight());
+    decoder->close();
+    g_png_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  if (!ensurePngLineBuffer(decoder->getWidth())) {
+    Serial.printf("[PHOTO] png line alloc failed path=%s width=%d bytes=%u\n",
+                  path.c_str(), decoder->getWidth(),
+                  static_cast<unsigned>(decoder->getWidth() * sizeof(uint16_t)));
+    decoder->close();
+    g_png_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  Serial.printf("[PHOTO] png direct render path=%s source=%dx%d pixel_type=%d target=%ux%u "
+                "crop=%d,%d scale=%.3f row_bytes=%u dither=none rotate=none\n",
+                path.c_str(), decoder->getWidth(), decoder->getHeight(),
+                decoder->getPixelType(), kScreenWidth, kScreenHeight,
+                g_photo_crop_x, g_photo_crop_y,
+                static_cast<double>(g_photo_scale),
+                static_cast<unsigned>(sizeof(g_png_target_row)));
+
+  g_png_next_target_y = 0;
+  g_png_written_bytes = 0;
+  g_png_direct_failed = false;
+  g_png_direct_active = true;
+  EPD_W21_WriteCMD(0x10);
+  const int decode_rc = decoder->decode(nullptr, PNG_FAST_PALETTE);
+  g_png_direct_active = false;
+  decoder->close();
+  g_png_decoder = nullptr;
+  delete decoder;
+
+  const bool complete = decode_rc == PNG_SUCCESS && !g_png_direct_failed &&
+                        g_png_next_target_y == kScreenHeight &&
+                        g_png_written_bytes == kEpd4Bytes;
+  if (!complete) {
+    Serial.printf("[PHOTO] png direct decode failed path=%s rc=%d rows=%u/%u bytes=%u/%u "
+                  "callback_failed=%d refresh=skipped\n",
+                  path.c_str(), decode_rc, static_cast<unsigned>(g_png_next_target_y),
+                  static_cast<unsigned>(kScreenHeight),
+                  static_cast<unsigned>(g_png_written_bytes),
+                  static_cast<unsigned>(kEpd4Bytes), g_png_direct_failed ? 1 : 0);
+    return false;
+  }
+
+  EPD_W21_WriteCMD(0x12);
+  EPD_W21_WriteDATA(0x00);
+  delay(1);
+  waitEpdReadyWithLed();
+  Serial.printf("[PHOTO] png direct complete rows=%u bytes=%u refresh=1\n",
+                static_cast<unsigned>(g_png_next_target_y),
+                static_cast<unsigned>(g_png_written_bytes));
+  return true;
+}
+
+bool App::renderJpegDirectToEpd(const String &path) {
+  JPEGDEC *decoder = new JPEGDEC();
+  if (!decoder) {
+    Serial.printf("[PHOTO] jpeg decoder alloc failed path=%s\n", path.c_str());
+    return false;
+  }
+  g_jpeg_decoder = decoder;
+  const int open_rc = decoder->open(path.c_str(), photoJpegOpen, photoJpegClose,
+                                    photoJpegRead, photoJpegSeek, photoJpegDraw);
+  if (!open_rc) {
+    Serial.printf("[PHOTO] jpeg open failed path=%s error=%d\n",
+                  path.c_str(), decoder->getLastError());
+    g_jpeg_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  const int width = decoder->getWidth();
+  const int height = decoder->getHeight();
+  if (width <= 0 || height <= 0) {
+    Serial.printf("[PHOTO] jpeg invalid dimensions path=%s source=%dx%d error=%d\n",
+                  path.c_str(), width, height, decoder->getLastError());
+    decoder->close();
+    g_jpeg_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  int decode_options = 0;
+  int decode_divisor = 1;
+  const int divisors[] = {2, 4, 8};
+  const int options[] = {JPEG_SCALE_HALF, JPEG_SCALE_QUARTER, JPEG_SCALE_EIGHTH};
+  for (size_t i = 0; i < 3; ++i) {
+    const int scaled_width = (width + divisors[i] - 1) / divisors[i];
+    const int scaled_height = (height + divisors[i] - 1) / divisors[i];
+    if (scaled_width >= kScreenWidth && scaled_height >= kScreenHeight) {
+      decode_divisor = divisors[i];
+      decode_options = options[i];
+    }
+  }
+  const int decoded_width = (width + decode_divisor - 1) / decode_divisor;
+  const int decoded_height = (height + decode_divisor - 1) / decode_divisor;
+  setupCoverCropMapping(decoded_width, decoded_height);
+  if (!setupPngTargetMapping()) {
+    Serial.printf("[PHOTO] jpeg mapping failed path=%s decoded=%dx%d\n",
+                  path.c_str(), decoded_width, decoded_height);
+    decoder->close();
+    g_jpeg_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+
+  constexpr int kMaxJpegBandRows = 16;
+  const size_t required_band_pixels =
+      static_cast<size_t>(decoded_width) * kMaxJpegBandRows;
+  g_jpeg_band_buffer = static_cast<uint16_t *>(
+      heap_caps_malloc(required_band_pixels * sizeof(uint16_t), MALLOC_CAP_8BIT));
+  if (!g_jpeg_band_buffer) {
+    Serial.printf("[PHOTO] jpeg band alloc failed path=%s pixels=%u bytes=%u\n",
+                  path.c_str(), static_cast<unsigned>(required_band_pixels),
+                  static_cast<unsigned>(required_band_pixels * sizeof(uint16_t)));
+    decoder->close();
+    g_jpeg_decoder = nullptr;
+    delete decoder;
+    return false;
+  }
+  g_jpeg_band_capacity = required_band_pixels;
+  g_jpeg_decoded_width = decoded_width;
+  Serial.printf("[PHOTO] jpeg direct render path=%s source=%dx%d decoded=%dx%d target=%ux%u "
+                "crop=%d,%d scale=%.3f decode_divisor=%d band_bytes=%u\n",
+                path.c_str(), width, height, decoded_width, decoded_height,
+                kScreenWidth, kScreenHeight, g_photo_crop_x, g_photo_crop_y,
+                static_cast<double>(g_photo_scale), decode_divisor,
+                static_cast<unsigned>(required_band_pixels * sizeof(uint16_t)));
+
+  decoder->setPixelType(RGB565_LITTLE_ENDIAN);
+  g_jpeg_band_y = -1;
+  g_jpeg_band_height = 0;
+  g_jpeg_next_target_y = 0;
+  g_jpeg_written_bytes = 0;
+  g_jpeg_direct_failed = false;
+  g_jpeg_direct_active = true;
+  EPD_W21_WriteCMD(0x10);
+  const int decode_rc = decoder->decode(0, 0, decode_options);
+  if (decode_rc && !g_jpeg_direct_failed && !flushCompletedJpegBand()) {
+    g_jpeg_direct_failed = true;
+  }
+  const int decode_error = decoder->getLastError();
+  g_jpeg_direct_active = false;
+  decoder->close();
+  g_jpeg_decoder = nullptr;
+  delete decoder;
+  heap_caps_free(g_jpeg_band_buffer);
+  g_jpeg_band_buffer = nullptr;
+  g_jpeg_band_capacity = 0;
+  g_jpeg_band_y = -1;
+  g_jpeg_band_height = 0;
+  g_jpeg_decoded_width = 0;
+
+  const bool complete = decode_rc && !g_jpeg_direct_failed &&
+                        g_jpeg_next_target_y == kScreenHeight &&
+                        g_jpeg_written_bytes == kEpd4Bytes;
+  if (!complete) {
+    Serial.printf("[PHOTO] jpeg direct decode failed path=%s rc=%d error=%d rows=%u/%u "
+                  "bytes=%u/%u callback_failed=%d refresh=skipped\n",
+                  path.c_str(), decode_rc, decode_error,
+                  static_cast<unsigned>(g_jpeg_next_target_y),
+                  static_cast<unsigned>(kScreenHeight),
+                  static_cast<unsigned>(g_jpeg_written_bytes),
+                  static_cast<unsigned>(kEpd4Bytes), g_jpeg_direct_failed ? 1 : 0);
+    return false;
+  }
+
+  EPD_W21_WriteCMD(0x12);
+  EPD_W21_WriteDATA(0x00);
+  delay(1);
+  waitEpdReadyWithLed();
+  Serial.printf("[PHOTO] jpeg direct complete rows=%u bytes=%u refresh=1\n",
+                static_cast<unsigned>(g_jpeg_next_target_y),
+                static_cast<unsigned>(g_jpeg_written_bytes));
+  return true;
+}
+
+bool App::decodeBmpToPackedFrame(const String &path, uint8_t *frame) {
+  File file = SD.open(path, FILE_READ);
+  if (!file) {
+    Serial.printf("[PHOTO] bmp open failed path=%s\n", path.c_str());
+    return false;
+  }
+
+  if (readLe16(file) != 0x4D42) {
+    file.close();
+    Serial.printf("[PHOTO] bmp invalid signature path=%s\n", path.c_str());
+    return false;
+  }
+  (void)readLe32(file);
+  (void)readLe16(file);
+  (void)readLe16(file);
+  const uint32_t data_offset = readLe32(file);
+  const uint32_t dib_size = readLe32(file);
+  if (dib_size < 40) {
+    file.close();
+    Serial.printf("[PHOTO] bmp unsupported dib path=%s size=%lu\n",
+                  path.c_str(), static_cast<unsigned long>(dib_size));
+    return false;
+  }
+  const int32_t width = static_cast<int32_t>(readLe32(file));
+  const int32_t signed_height = static_cast<int32_t>(readLe32(file));
+  const uint16_t planes = readLe16(file);
+  const uint16_t bpp = readLe16(file);
+  const uint32_t compression = readLe32(file);
+  const int32_t height = abs(signed_height);
+  if (planes != 1 || compression != 0 || width <= 0 || height <= 0 ||
+      (bpp != 24 && bpp != 32)) {
+    file.close();
+    Serial.printf("[PHOTO] bmp unsupported path=%s width=%ld height=%ld bpp=%u comp=%lu\n",
+                  path.c_str(), static_cast<long>(width), static_cast<long>(signed_height),
+                  static_cast<unsigned>(bpp), static_cast<unsigned long>(compression));
+    return false;
+  }
+
+  setupCoverCropMapping(static_cast<int>(width), static_cast<int>(height));
+  Serial.printf("[PHOTO] bmp render path=%s source=%ldx%ld target=%ux%u crop=%d,%d scale=%.3f\n",
+                path.c_str(), static_cast<long>(width), static_cast<long>(height),
+                kScreenWidth, kScreenHeight, g_photo_crop_x, g_photo_crop_y,
+                static_cast<double>(g_photo_scale));
+  const bool top_down = signed_height < 0;
+  const uint32_t row_stride = ((static_cast<uint32_t>(width) * bpp + 31u) / 32u) * 4u;
+  uint8_t *row = static_cast<uint8_t *>(heap_caps_malloc(row_stride, MALLOC_CAP_8BIT));
+  if (!row) {
+    file.close();
+    Serial.printf("[PHOTO] bmp row alloc failed path=%s bytes=%lu\n",
+                  path.c_str(), static_cast<unsigned long>(row_stride));
+    return false;
+  }
+
+  for (int32_t y = 0; y < height; ++y) {
+    const int32_t source_y = top_down ? y : (height - 1 - y);
+    const uint32_t pos = data_offset + static_cast<uint32_t>(source_y) * row_stride;
+    if (!file.seek(pos) || file.read(row, row_stride) != static_cast<int>(row_stride)) {
+      heap_caps_free(row);
+      file.close();
+      Serial.printf("[PHOTO] bmp read failed path=%s row=%ld\n", path.c_str(), static_cast<long>(y));
+      return false;
+    }
+    for (int32_t x = 0; x < width; ++x) {
+      const uint32_t p = static_cast<uint32_t>(x) * (bpp / 8);
+      const uint8_t b = row[p + 0];
+      const uint8_t g = row[p + 1];
+      const uint8_t r = row[p + 2];
+      paintMappedSourcePixel(frame, static_cast<int>(x), static_cast<int>(y),
+                             nearestPanelNibble(r, g, b));
+    }
+  }
+
+  heap_caps_free(row);
+  file.close();
+  return true;
+}
+
+bool App::pushPackedPhotoFrame(const uint8_t *frame, size_t len) {
+  if (!frame || len != kEpd4Bytes) {
+    return false;
+  }
+  EPD_W21_WriteCMD(0x10);
+  for (size_t i = 0; i < len; ++i) {
+    EPD_W21_WriteDATA(frame[i]);
+    if ((i & 0x1FFFu) == 0) {
+      led_manager_.update(mode_manager_.mode(), millis());
+    }
+  }
+  EPD_W21_WriteCMD(0x12);
+  EPD_W21_WriteDATA(0x00);
+  delay(1);
+  waitEpdReadyWithLed();
   return true;
 }
 

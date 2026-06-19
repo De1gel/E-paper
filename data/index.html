@@ -139,6 +139,21 @@
       display:none;
     }
     .upload-extra.show { display:block; }
+    .upload-preview {
+      margin-top:10px;
+      padding:8px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#fff;
+      max-width:820px;
+    }
+    .upload-preview img {
+      display:block;
+      width:100%;
+      max-width:800px;
+      aspect-ratio:5 / 3;
+      object-fit:contain;
+    }
     .hint-line { margin-top:8px; font-size:12px; color:#617180; line-height:1.6; }
     .tooltip {
       position:relative;
@@ -425,7 +440,7 @@
 
       <div class="card">
         <div class="row">
-          <input id="uploadInput" type="file">
+          <input id="uploadInput" type="file" multiple>
           <select id="uploadMode" style="padding:8px;border:1px solid var(--line);border-radius:8px;min-width:220px;">
             <option value="normal">普通文件上传</option>
             <option value="fit">图片缩放上传</option>
@@ -460,6 +475,9 @@
           <div id="modeNote" class="mode-note"></div>
         </div>
         <pre id="uploadBox" style="margin-top:8px">等待上传...</pre>
+        <div id="uploadPreview" class="upload-preview" hidden>
+          <img id="uploadPreviewImg" alt="">
+        </div>
       </div>
     </section>
   </div>
