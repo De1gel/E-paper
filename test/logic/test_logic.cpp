@@ -141,8 +141,10 @@ void testCalendarIcsCore() {
   assert(appfw::eventOverlapsWindow(100, 200, 150, 250));
   assert(!appfw::eventOverlapsWindow(100, 120, 121, 200));
   assert(appfw::trimDisplayField(" Room\\nA ", 20) == "Room / A");
+  assert(appfw::trimDisplayField("\\n", 20) == "");
   assert(appfw::buildImportedTitle("", "Office", "") == "Office");
   assert(appfw::buildImportedTitle("Meeting", "Office", "") == "Meeting @Office");
+  assert(appfw::buildImportedTitle("test", "test", "\\n") == "test @test");
 
   assert(appfw::weekdayMaskBit(0) == 1u);
   assert(appfw::weekdayMaskBit(6) == 64u);

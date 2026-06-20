@@ -480,10 +480,29 @@ bool eventOverlapsWindow(time_t start_epoch, time_t end_epoch, time_t window_sta
 }
 
 String trimDisplayField(const String &raw, size_t max_len) {
-  String value = icsUnescape(raw);
-  value.replace("\r", " ");
-  value.replace("\n", " / ");
-  value.trim();
+  const String unescaped = icsUnescape(raw);
+  String value;
+  String line;
+  value.reserve(unescaped.length());
+  line.reserve(unescaped.length());
+  for (size_t i = 0; i <= unescaped.length(); ++i) {
+    const char c = (i < unescaped.length()) ? unescaped[i] : '\n';
+    if (c == '\r') {
+      continue;
+    }
+    if (c != '\n') {
+      line += c;
+      continue;
+    }
+    line.trim();
+    if (line.length() > 0) {
+      if (value.length() > 0) {
+        value += " / ";
+      }
+      value += line;
+    }
+    line = "";
+  }
   if (value.length() > max_len) {
     value = value.substring(0, max_len);
   }
@@ -492,6 +511,7 @@ String trimDisplayField(const String &raw, size_t max_len) {
 
 String buildImportedTitle(const String &summary, const String &location, const String &description) {
   String title = trimDisplayField(summary, 32);
+  const bool has_summary = title.length() > 0;
   String trimmed_location = trimDisplayField(location, 18);
   String trimmed_description = trimDisplayField(description, 18);
   if (title.length() == 0) {
@@ -500,9 +520,11 @@ String buildImportedTitle(const String &summary, const String &location, const S
   if (title.length() == 0) {
     title = "Busy";
   }
-  if (trimmed_location.length() > 0 && title.indexOf(trimmed_location.c_str()) < 0) {
-    title += " @";
-    title += trimmed_location;
+  if (trimmed_location.length() > 0) {
+    if (has_summary) {
+      title += " @";
+      title += trimmed_location;
+    }
   } else if (trimmed_description.length() > 0 &&
              title.indexOf(trimmed_description.c_str()) < 0 &&
              title.length() < 24) {

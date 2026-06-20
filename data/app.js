@@ -9,6 +9,10 @@ const statusNote = document.getElementById("statusNote");
 const crumbs = document.getElementById("crumbs");
 const fileRows = document.getElementById("fileRows");
 const fileSummary = document.getElementById("fileSummary");
+const fileSelectAll = document.getElementById("fileSelectAll");
+const batchDeleteBtn = document.getElementById("batchDeleteBtn");
+const batchDownloadBtn = document.getElementById("batchDownloadBtn");
+const batchProgress = document.getElementById("batchProgress");
 const gammaCtrl = document.getElementById("gammaCtrl");
 const gammaVal = document.getElementById("gammaVal");
 const uploadModeSel = document.getElementById("uploadMode");
@@ -18,6 +22,7 @@ const uploadBtn = document.querySelector("button[onclick='uploadFile()']");
 const uploadBox = document.getElementById("uploadBox");
 const uploadPreview = document.getElementById("uploadPreview");
 const uploadPreviewImg = document.getElementById("uploadPreviewImg");
+const WEB_APP_VERSION = "20260620d";
 const ditherHint = document.getElementById("ditherHint");
 const gammaHint = document.getElementById("gammaHint");
 const modeNote = document.getElementById("modeNote");
@@ -47,6 +52,7 @@ const cfgBox = document.getElementById("cfgBox");
 const scheduleTitle = document.getElementById("scheduleTitle");
 const scheduleLocation = document.getElementById("scheduleLocation");
 const scheduleTime = document.getElementById("scheduleTime");
+const scheduleEndTime = document.getElementById("scheduleEndTime");
 const scheduleColor = document.getElementById("scheduleColor");
 const scheduleRepeat = document.getElementById("scheduleRepeat");
 const scheduleDate = document.getElementById("scheduleDate");
@@ -60,6 +66,9 @@ let latestStatusState = "";
 let currentLanguage = "zh";
 let lastScheduleItems = [];
 let lastFileItems = [];
+let selectedFilePaths = new Set();
+let selectionDir = "/pic";
+let batchOperationBusy = false;
 let activeTabKey = "status";
 let cfgLoadedOnce = false;
 let filesLoadedOnce = false;
@@ -141,6 +150,8 @@ const I18N = {
     "cfg.schedule.location": "地点",
     "cfg.schedule.location_ph": "例如：A101",
     "cfg.schedule.time": "时间",
+    "cfg.schedule.start_time": "开始时间",
+    "cfg.schedule.end_time": "结束时间（可选）",
     "cfg.schedule.color": "颜色",
     "cfg.schedule.color_red": "红色（重要提醒）",
     "cfg.schedule.color_blue": "蓝色（工作安排）",
@@ -212,6 +223,14 @@ const I18N = {
     "common.readonly": "只读",
     "common.open": "打开",
     "common.download": "下载",
+    "common.select_all": "全选",
+    "common.batch_delete": "批量删除",
+    "common.batch_download": "批量下载",
+    "common.selected_fmt": "已选择 {count} 项",
+    "common.batch_delete_confirm": "确认删除选中的 {count} 项？此操作不可撤销。",
+    "common.batch_delete_done": "批量删除完成：成功 {ok}，失败 {failed}",
+    "common.batch_download_progress": "下载 {index}/{total}：{name}（{done}）",
+    "common.batch_download_done": "批量下载完成：成功 {ok}，失败 {failed}",
     "common.folder": "目录",
     "common.file": "文件",
     "common.current_dir_fmt": "当前目录 {dir}，共 {count} 项",
@@ -229,6 +248,7 @@ const I18N = {
     "common.err_store_push_failed": "日程写入内存失败",
     "common.err_calendar_events_full": "日程数量已满，请先删除部分日程",
     "common.err_manual_calendar_events_full": "手动日程数量已满，请先删除部分手动日程",
+    "common.err_bad_end_time": "结束时间必须晚于开始时间",
     "common.delete_failed": "删除失败",
     "common.please_enter_city": "请先输入城市名称。",
     "common.resolving_city": "正在解析城市...",
@@ -254,6 +274,7 @@ const I18N = {
     "common.del_file_confirm": "确认删除文件？\n{path}",
     "common.add_title_required": "请先输入日程标题",
     "common.bad_time": "时间格式错误，请使用 HH:MM",
+    "common.bad_time_range": "结束时间必须晚于开始时间",
     "common.bad_once_date": "仅一次日程需要有效日期",
     "common.bad_weekday": "每周重复需要有效星期",
     "common.add_failed_check": "添加失败，请检查连接状态",
@@ -351,6 +372,8 @@ const I18N = {
     "cfg.schedule.location": "Location",
     "cfg.schedule.location_ph": "Example: A101",
     "cfg.schedule.time": "Time",
+    "cfg.schedule.start_time": "Start time",
+    "cfg.schedule.end_time": "End time (optional)",
     "cfg.schedule.color": "Color",
     "cfg.schedule.color_red": "Red (important)",
     "cfg.schedule.color_blue": "Blue (work)",
@@ -422,6 +445,14 @@ const I18N = {
     "common.readonly": "Read-only",
     "common.open": "Open",
     "common.download": "Download",
+    "common.select_all": "Select all",
+    "common.batch_delete": "Delete selected",
+    "common.batch_download": "Download selected",
+    "common.selected_fmt": "{count} selected",
+    "common.batch_delete_confirm": "Delete the selected {count} item(s)? This cannot be undone.",
+    "common.batch_delete_done": "Batch delete complete: {ok} succeeded, {failed} failed",
+    "common.batch_download_progress": "Downloading {index}/{total}: {name} ({done})",
+    "common.batch_download_done": "Batch download complete: {ok} succeeded, {failed} failed",
     "common.folder": "Folder",
     "common.file": "File",
     "common.current_dir_fmt": "Current: {dir}, {count} item(s)",
@@ -439,6 +470,7 @@ const I18N = {
     "common.err_store_push_failed": "Failed to store schedule in memory",
     "common.err_calendar_events_full": "Schedule list is full. Delete some events first.",
     "common.err_manual_calendar_events_full": "Manual schedule list is full. Delete some manual events first.",
+    "common.err_bad_end_time": "End time must be later than start time",
     "common.delete_failed": "Delete failed",
     "common.please_enter_city": "Please enter a city name first.",
     "common.resolving_city": "Resolving city...",
@@ -464,6 +496,7 @@ const I18N = {
     "common.del_file_confirm": "Delete file?\n{path}",
     "common.add_title_required": "Please input schedule title",
     "common.bad_time": "Invalid time. Use HH:MM",
+    "common.bad_time_range": "End time must be later than start time",
     "common.bad_once_date": "One-time schedule requires a valid date",
     "common.bad_weekday": "Weekly schedule requires a valid weekday",
     "common.add_failed_check": "Add failed. Check connection.",
@@ -561,6 +594,8 @@ const I18N = {
     "cfg.schedule.location": "Lieu",
     "cfg.schedule.location_ph": "Exemple : A101",
     "cfg.schedule.time": "Heure",
+    "cfg.schedule.start_time": "Heure de debut",
+    "cfg.schedule.end_time": "Heure de fin (facultatif)",
     "cfg.schedule.color": "Couleur",
     "cfg.schedule.color_red": "Rouge (important)",
     "cfg.schedule.color_blue": "Bleu (travail)",
@@ -632,6 +667,14 @@ const I18N = {
     "common.readonly": "Lecture seule",
     "common.open": "Ouvrir",
     "common.download": "Telecharger",
+    "common.select_all": "Tout selectionner",
+    "common.batch_delete": "Supprimer la selection",
+    "common.batch_download": "Telecharger la selection",
+    "common.selected_fmt": "{count} selectionne(s)",
+    "common.batch_delete_confirm": "Supprimer les {count} elements selectionnes ? Cette action est irreversible.",
+    "common.batch_delete_done": "Suppression terminee : {ok} reussie(s), {failed} echouee(s)",
+    "common.batch_download_progress": "Telechargement {index}/{total} : {name} ({done})",
+    "common.batch_download_done": "Telechargement termine : {ok} reussi(s), {failed} echoue(s)",
     "common.folder": "Dossier",
     "common.file": "Fichier",
     "common.current_dir_fmt": "Dossier courant {dir}, {count} element(s)",
@@ -649,6 +692,7 @@ const I18N = {
     "common.err_store_push_failed": "Ecriture du planning en memoire echouee",
     "common.err_calendar_events_full": "Planning plein. Supprimez d abord quelques evenements.",
     "common.err_manual_calendar_events_full": "Planning manuel plein. Supprimez d abord quelques evenements manuels.",
+    "common.err_bad_end_time": "L heure de fin doit etre apres l heure de debut",
     "common.delete_failed": "Suppression echouee",
     "common.please_enter_city": "Veuillez saisir un nom de ville.",
     "common.resolving_city": "Resolution de la ville...",
@@ -674,6 +718,7 @@ const I18N = {
     "common.del_file_confirm": "Supprimer le fichier ?\n{path}",
     "common.add_title_required": "Veuillez saisir un titre",
     "common.bad_time": "Heure invalide. Utilisez HH:MM",
+    "common.bad_time_range": "L heure de fin doit etre apres l heure de debut",
     "common.bad_once_date": "Un evenement unique exige une date valide",
     "common.bad_weekday": "Un evenement hebdo exige un jour valide",
     "common.add_failed_check": "Ajout echoue. Verifiez la connexion.",
@@ -1326,7 +1371,7 @@ function renderScheduleRows(items) {
     const colorName = colorLabel(colorKey);
     const swatchColor = colorCssMap[colorKey] || colorCssMap.blue;
     tr.innerHTML = `
-      <td>${event.time || "--:--"}</td>
+      <td>${event.time || "--:--"}${event.end_time ? ` - ${event.end_time}` : ""}</td>
       <td>${event.title || "-"}</td>
       <td>${describeEventRule(event)}</td>
       <td><span class="swatch" style="background:${swatchColor}"></span>${colorName}</td>
@@ -1415,6 +1460,8 @@ async function addSchedule() {
   const title = (scheduleTitle?.value || "").trim();
   const location = (scheduleLocation?.value || "").trim();
   const time = normalizeHm(scheduleTime?.value || "");
+  const rawEndTime = (scheduleEndTime?.value || "").trim();
+  const endTime = normalizeHm(rawEndTime);
   const color = (scheduleColor?.value || "blue").trim();
   const repeat = normalizeRepeat(scheduleRepeat?.value || "weekly");
   const date = (scheduleDate?.value || "").trim();
@@ -1428,6 +1475,14 @@ async function addSchedule() {
     scheduleSummary.textContent = t("common.bad_time");
     return;
   }
+  if (rawEndTime && !endTime) {
+    scheduleSummary.textContent = t("common.bad_time");
+    return;
+  }
+  if (endTime && endTime <= time) {
+    scheduleSummary.textContent = t("common.bad_time_range");
+    return;
+  }
   if (repeat === "once" && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     scheduleSummary.textContent = t("common.bad_once_date");
     return;
@@ -1437,7 +1492,7 @@ async function addSchedule() {
     return;
   }
 
-  let body = `title=${encodeURIComponent(title)}&location=${encodeURIComponent(location)}&time=${encodeURIComponent(time)}&color=${encodeURIComponent(color)}&repeat=${encodeURIComponent(repeat)}`;
+  let body = `title=${encodeURIComponent(title)}&location=${encodeURIComponent(location)}&time=${encodeURIComponent(time)}&end_time=${encodeURIComponent(endTime)}&color=${encodeURIComponent(color)}&repeat=${encodeURIComponent(repeat)}`;
   if (repeat === "once") body += `&date=${encodeURIComponent(date)}`;
   if (repeat === "weekly") body += `&weekday=${encodeURIComponent(String(weekday))}`;
 
@@ -1524,7 +1579,14 @@ function renderBreadcrumb(path) {
 }
 
 async function openDir(path) {
-  currentDir = normalizeDir(path);
+  if (batchOperationBusy) return;
+  const nextDir = normalizeDir(path);
+  if (nextDir !== selectionDir) {
+    selectedFilePaths.clear();
+    selectionDir = nextDir;
+    if (batchProgress) batchProgress.textContent = "";
+  }
+  currentDir = nextDir;
   renderBreadcrumb(currentDir);
   await listFiles(currentDir);
 }
@@ -1534,6 +1596,7 @@ async function goUpDir() {
 }
 
 async function createFolder() {
+  if (batchOperationBusy) return;
   const name = prompt(t("common.new_folder_prompt"));
   if (!name) return;
   const folder = name.trim().replace(/[\\/]+/g, "");
@@ -1550,6 +1613,7 @@ async function createFolder() {
 }
 
 async function removeEntry(path, isDir) {
+  if (batchOperationBusy) return;
   const ok = window.confirm(
     isDir ? fmt("common.del_dir_confirm", { path }) : fmt("common.del_file_confirm", { path })
   );
@@ -1559,11 +1623,155 @@ async function removeEntry(path, isDir) {
   await listFiles(currentDir);
 }
 
+function selectedEntries() {
+  return lastFileItems
+    .map((item) => ({
+      item,
+      path: joinPath(currentDir, item.name || ""),
+    }))
+    .filter((entry) => selectedFilePaths.has(entry.path));
+}
+
+function updateBatchControls() {
+  const entries = selectedEntries();
+  const fileCount = entries.filter((entry) => !entry.item.dir).length;
+  const allSelected = lastFileItems.length > 0 && entries.length === lastFileItems.length;
+
+  if (fileSelectAll) {
+    fileSelectAll.checked = allSelected;
+    fileSelectAll.indeterminate = entries.length > 0 && !allSelected;
+    fileSelectAll.disabled = batchOperationBusy || lastFileItems.length === 0;
+  }
+  if (batchDeleteBtn) batchDeleteBtn.disabled = batchOperationBusy || entries.length === 0;
+  if (batchDownloadBtn) batchDownloadBtn.disabled = batchOperationBusy || fileCount === 0;
+  if (fileSummary) {
+    const baseSummary = fmt("common.current_dir_fmt", {
+      dir: currentDir,
+      count: lastFileItems.length,
+    });
+    fileSummary.textContent = entries.length > 0
+      ? baseSummary + " · " + fmt("common.selected_fmt", { count: entries.length })
+      : baseSummary;
+  }
+}
+
+function toggleSelectAll(checked) {
+  selectedFilePaths.clear();
+  if (checked) {
+    lastFileItems.forEach((item) => {
+      selectedFilePaths.add(joinPath(currentDir, item.name || ""));
+    });
+  }
+  renderRows(lastFileItems);
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function deleteSelectedFiles() {
+  const entries = selectedEntries();
+  if (!entries.length || batchOperationBusy) return;
+  if (!window.confirm(fmt("common.batch_delete_confirm", { count: entries.length }))) return;
+
+  batchOperationBusy = true;
+  updateBatchControls();
+  let ok = 0;
+  let failed = 0;
+  try {
+    const ordered = entries.slice().sort((a, b) => Number(a.item.dir) - Number(b.item.dir));
+    for (const entry of ordered) {
+      try {
+        const response = await fetch("/api/file?path=" + encodeURIComponent(entry.path), {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error(await response.text());
+        ok++;
+      } catch (error) {
+        failed++;
+        console.warn("[FILES] batch delete failed", entry.path, error);
+      }
+      await sleepMs(150);
+    }
+    selectedFilePaths.clear();
+    await listFiles(currentDir);
+    if (batchProgress) {
+      batchProgress.textContent = fmt("common.batch_delete_done", { ok, failed });
+    }
+  } finally {
+    batchOperationBusy = false;
+    updateBatchControls();
+  }
+}
+
+const BATCH_DOWNLOAD_GAP_MS = 1000;
+
+async function downloadFileQueued(entry) {
+  const response = await fetch("/api/file?path=" + encodeURIComponent(entry.path));
+  if (!response.ok) throw new Error(await response.text());
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = entry.item.name || "file";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function downloadSelectedFiles() {
+  const entries = selectedEntries().filter((entry) => !entry.item.dir);
+  if (!entries.length || batchOperationBusy) return;
+
+  batchOperationBusy = true;
+  updateBatchControls();
+  let ok = 0;
+  let failed = 0;
+  try {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (batchProgress) {
+        batchProgress.textContent = fmt("common.batch_download_progress", {
+          index: i + 1,
+          total: entries.length,
+          name: entry.item.name || "file",
+          done: "0 B",
+        });
+      }
+      try {
+        await downloadFileQueued(entry);
+        ok++;
+      } catch (error) {
+        failed++;
+        console.warn("[FILES] batch download failed", entry.path, error);
+      }
+      await sleepMs(BATCH_DOWNLOAD_GAP_MS);
+    }
+    if (batchProgress) {
+      batchProgress.textContent = fmt("common.batch_download_done", { ok, failed });
+    }
+  } finally {
+    batchOperationBusy = false;
+    updateBatchControls();
+  }
+}
+
+if (fileSelectAll) {
+  fileSelectAll.addEventListener("change", () => toggleSelectAll(fileSelectAll.checked));
+}
+
 function renderRows(items) {
   lastFileItems = Array.isArray(items) ? items.slice() : [];
+  const visiblePaths = new Set(lastFileItems.map((item) => joinPath(currentDir, item.name || "")));
+  selectedFilePaths.forEach((path) => {
+    if (!visiblePaths.has(path)) selectedFilePaths.delete(path);
+  });
   fileRows.innerHTML = "";
   if (!items.length) {
-    fileRows.innerHTML = `<tr><td colspan="4" class="small">${t("common.dir_empty")}</td></tr>`;
+    fileRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.dir_empty")}</td></tr>`;
+    updateBatchControls();
     return;
   }
 
@@ -1573,11 +1781,25 @@ function renderRows(items) {
     const path = joinPath(currentDir, name);
 
     const tr = document.createElement("tr");
+    const selectTd = document.createElement("td");
     const nameTd = document.createElement("td");
     const sizeTd = document.createElement("td");
     const typeTd = document.createElement("td");
     const opTd = document.createElement("td");
     opTd.className = "actions";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "file-select";
+    checkbox.checked = selectedFilePaths.has(path);
+    checkbox.disabled = batchOperationBusy;
+    checkbox.setAttribute("aria-label", name);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedFilePaths.add(path);
+      else selectedFilePaths.delete(path);
+      updateBatchControls();
+    });
+    selectTd.appendChild(checkbox);
 
     if (isDir) {
       const btn = document.createElement("button");
@@ -1624,25 +1846,32 @@ function renderRows(items) {
       opTd.appendChild(delBtn);
     }
 
+    tr.appendChild(selectTd);
     tr.appendChild(nameTd);
     tr.appendChild(sizeTd);
     tr.appendChild(typeTd);
     tr.appendChild(opTd);
     fileRows.appendChild(tr);
   });
+  updateBatchControls();
 }
 
 async function listFiles(path) {
-  currentDir = normalizeDir(path || currentDir || "/pic");
+  const nextDir = normalizeDir(path || currentDir || "/pic");
+  if (nextDir !== selectionDir) {
+    selectedFilePaths.clear();
+    selectionDir = nextDir;
+  }
+  currentDir = nextDir;
   renderBreadcrumb(currentDir);
-  fileRows.innerHTML = `<tr><td colspan="4" class="small">${t("common.loading")}</td></tr>`;
+  fileRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.loading")}</td></tr>`;
 
   const r = await fetch("/api/files?path=" + encodeURIComponent(currentDir));
   const txt = await r.text();
   let j = null;
   try { j = JSON.parse(txt); } catch {}
   if (!j || !j.ok) {
-    fileRows.innerHTML = `<tr><td colspan="4" class="small">${t("common.dir_read_failed")}</td></tr>`;
+    fileRows.innerHTML = `<tr><td colspan="5" class="small">${t("common.dir_read_failed")}</td></tr>`;
     fileSummary.textContent = txt || t("common.dir_read_failed");
     setNotice(txt || t("common.dir_read_failed"));
     return;
@@ -1660,6 +1889,7 @@ async function listFiles(path) {
 
   renderRows(items);
   fileSummary.textContent = fmt("common.current_dir_fmt", { dir: currentDir, count: items.length });
+  updateBatchControls();
   setNotice("");
   filesLoadedOnce = true;
 }
@@ -1867,6 +2097,43 @@ async function parseUploadResponse(response) {
   return json;
 }
 
+async function postUploadWithRetry(url, formData, maxAttempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(url, { method: "POST", body: formData });
+      return await parseUploadResponse(response);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await sleepMs(600 * attempt);
+      }
+    }
+  }
+  throw lastError || new Error("upload_failed");
+}
+
+async function reportUploadClientEvent(event, name, stage, mode, algo, error) {
+  const body = new URLSearchParams({
+    event,
+    version: WEB_APP_VERSION,
+    file: name,
+    stage,
+    mode,
+    algo,
+    error,
+  });
+  try {
+    await fetch("/api/client-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: body.toString(),
+    });
+  } catch (reportError) {
+    console.warn("[UPLOAD] client event report failed", reportError);
+  }
+}
+
 async function preprocessImageToPngBlob(file, cropMode, ditherMode = "atkinson", gammaValue = 1.0) {
   const img = new Image();
   const dataUrl = await new Promise((resolve, reject) => {
@@ -1951,6 +2218,17 @@ async function uploadFile() {
   let ok = 0;
   let skipped = 0;
   let failed = 0;
+  const failureDetails = [];
+  const skippedDetails = [];
+
+  await reportUploadClientEvent(
+    "batch_begin",
+    `${files.length}_files`,
+    "start",
+    mode,
+    ditherMode,
+    ""
+  );
 
   try {
     for (let i = 0; i < files.length; i++) {
@@ -1958,6 +2236,7 @@ async function uploadFile() {
       const name = f.name || "file";
       uploadBox.textContent = fmt("upload.progress", { index: i + 1, total: files.length, name });
 
+      let stage = mode === "normal" ? "upload" : "preprocess";
       try {
         const fd = new FormData();
         if (mode === "normal") {
@@ -1965,14 +2244,14 @@ async function uploadFile() {
           const q = "/api/upload?dir=" + encodeURIComponent(currentDir) +
             "&mode=normal&algo=" + encodeURIComponent(ditherMode) +
             "&gamma=" + encodeURIComponent(gammaText);
-          const r = await fetch(q, { method: "POST", body: fd });
-          await parseUploadResponse(r);
+          await postUploadWithRetry(q, fd);
           ok++;
           continue;
         }
 
         if (!isSupportedUploadImage(f)) {
           skipped++;
+          skippedDetails.push(`[SKIPPED] ${name}: unsupported_type`);
           continue;
         }
 
@@ -1982,28 +2261,30 @@ async function uploadFile() {
           name: t("upload.preprocessing") + " " + name,
         });
         const pngBlob = await preprocessImageToPngBlob(f, mode === "crop", ditherMode, gammaValue);
-        fd.append("file", pngBlob, "image.png");
+        stage = "upload";
+        fd.append("file", pngBlob, name);
         const q = "/api/upload?dir=" + encodeURIComponent("/pic") +
           "&mode=normal&kind=image&algo=" + encodeURIComponent(ditherMode) +
           "&gamma=" + encodeURIComponent(gammaText);
-        const r = await fetch(q, { method: "POST", body: fd });
-        const result = await parseUploadResponse(r);
-        if (result.path) {
-          showUploadPreview("/api/file?path=" + encodeURIComponent(result.path));
-        }
+        await postUploadWithRetry(q, fd);
         ok++;
+        await sleepMs(300);
       } catch (e) {
         failed++;
-        console.warn("[UPLOAD] failed", name, e);
+        const reason = e && e.message ? e.message : String(e);
+        failureDetails.push(`[FAILED] ${name} (${stage}): ${reason}`);
+        console.warn("[UPLOAD] failed", { name, stage, mode, algo: ditherMode, error: reason });
+        await reportUploadClientEvent("failed", name, stage, mode, ditherMode, reason);
       }
     }
 
-    uploadBox.textContent = fmt("upload.batch_done", {
+    const summary = fmt("upload.batch_done", {
       ok,
       skipped,
       failed,
       total: files.length,
     });
+    uploadBox.textContent = [summary, ...failureDetails, ...skippedDetails].join("\n");
     if (mode !== "normal") {
       currentDir = "/pic";
     }

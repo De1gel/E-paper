@@ -1202,7 +1202,8 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (summary.item_count == 0u) {
       continue;
     }
-    const uint8_t visible_limit = (layout.grid_rows >= 6u) ? 2u : 3u;
+    const uint8_t visible_limit =
+        (layout.mode == LayoutMode::PortraitSplit || layout.grid_rows >= 6u) ? 2u : 3u;
     const uint8_t shown_count = std::min(summary.item_count, visible_limit);
     const uint16_t summary_y_base_raw = static_cast<uint16_t>(text_cy + today_marker_extent +
                                                               kMonthSummaryCircleGap);

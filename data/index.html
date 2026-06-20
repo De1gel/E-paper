@@ -106,6 +106,11 @@
       display:none;
     }
     .path-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    .batch-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+    .batch-select-all { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
+    .batch-select-all input, .file-select { width:18px; height:18px; margin:0; }
+    .file-table th.select-col, .file-table td:first-child { width:38px; text-align:center; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
     .crumb { background:var(--soft); border-radius:999px; padding:6px 10px; }
     .crumb.current { background:#fff; font-weight:600; }
     .file-table td.actions { width:220px; }
@@ -354,7 +359,8 @@
         <div class="grid2">
           <div class="field"><label>日程标题</label><input id="scheduleTitle" placeholder="例如：团队周会"></div>
           <div class="field"><label>地点</label><input id="scheduleLocation" placeholder="例如：A101"></div>
-          <div class="field"><label>时间</label><input id="scheduleTime" type="time" value="09:00"></div>
+          <div class="field"><label>开始时间</label><input id="scheduleTime" type="time" value="09:00"></div>
+          <div class="field"><label>结束时间（可选）</label><input id="scheduleEndTime" type="time" value="09:30"></div>
           <div class="field">
             <label>颜色</label>
             <select id="scheduleColor">
@@ -431,8 +437,14 @@
           <button class="btn primary" onclick="listFiles()">刷新目录</button>
         </div>
         <div id="crumbs" class="crumbs"></div>
+        <div class="batch-bar">
+          <label class="batch-select-all"><input id="fileSelectAll" type="checkbox"><span data-i18n="common.select_all">全选</span></label>
+          <button id="batchDownloadBtn" class="btn" onclick="downloadSelectedFiles()" data-i18n="common.batch_download" disabled>批量下载</button>
+          <button id="batchDeleteBtn" class="btn warn" onclick="deleteSelectedFiles()" data-i18n="common.batch_delete" disabled>批量删除</button>
+          <span id="batchProgress" class="small"></span>
+        </div>
         <table class="file-table">
-          <thead><tr><th>名称</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
+          <thead><tr><th class="select-col"></th><th>名称</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
           <tbody id="fileRows"></tbody>
         </table>
         <div class="small" id="fileSummary" style="margin-top:8px">等待加载...</div>
@@ -482,6 +494,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=20260406k"></script>
+<script src="/app.js?v=20260620d"></script>
 </body>
 </html>

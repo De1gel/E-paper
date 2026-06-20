@@ -108,7 +108,7 @@ class WifiManager {
   String joinSdPath(const String &dir, const String &name) const;
   String leafName(const String &path) const;
   String algoSuffix(const String &algo) const;
-  String nextImageFilename(const String &algo) const;
+  String processedImageFilename(const String &original_name, const String &algo) const;
   bool removePathRecursive(const String &path) const;
   String currentIp() const;
   bool syncClockFromWeather(String &resolved_timezone, bool &timezone_updated, String &local_time,

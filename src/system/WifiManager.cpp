@@ -2074,6 +2074,29 @@ void WifiManager::startServer() {
   server_->on("/api/file", HTTP_GET, [this]() { handleFileDownload(); });
   server_->on("/api/file", HTTP_DELETE, [this]() { handleFileDelete(); });
   server_->on("/api/weather_test", HTTP_GET, [this]() { handleWeatherTest(); });
+  server_->on("/api/client-log", HTTP_POST, [this]() {
+    markActivity(millis());
+    auto cleanLogValue = [](String value, size_t max_length) {
+      value.replace("\r", " ");
+      value.replace("\n", " ");
+      if (value.length() > max_length) {
+        value.remove(max_length);
+      }
+      return value;
+    };
+    const String event = cleanLogValue(server_->arg("event"), 32u);
+    const String version = cleanLogValue(server_->arg("version"), 32u);
+    const String file = cleanLogValue(server_->arg("file"), 120u);
+    const String stage = cleanLogValue(server_->arg("stage"), 32u);
+    const String mode = cleanLogValue(server_->arg("mode"), 32u);
+    const String algo = cleanLogValue(server_->arg("algo"), 32u);
+    const String error = cleanLogValue(server_->arg("error"), 160u);
+    Serial.printf("[UPLOAD][CLIENT] event=%s version=%s file=%s stage=%s mode=%s algo=%s "
+                  "error=%s remote=%s\n",
+                  event.c_str(), version.c_str(), file.c_str(), stage.c_str(), mode.c_str(),
+                  algo.c_str(), error.c_str(), server_->client().remoteIP().toString().c_str());
+    server_->send(200, "application/json", "{\"ok\":true}");
+  });
   server_->on("/api/stop", HTTP_POST, [this]() { handleStopPortal(); });
   server_->on("/api/reboot", HTTP_POST, [this]() { handleReboot(); });
   server_->on(
@@ -2299,35 +2322,18 @@ String WifiManager::algoSuffix(const String &algo) const {
   return "unk";
 }
 
-String WifiManager::nextImageFilename(const String &algo) const {
-  const String suffix = algoSuffix(algo);
-  const String tail = "_" + suffix + ".png";
-  uint16_t max_no = 0;
-
-  File dir = SD.open("/pic");
-  if (dir && dir.isDirectory()) {
-    File entry = dir.openNextFile();
-    while (entry) {
-      if (!entry.isDirectory()) {
-        String name = leafName(String(entry.name()));
-        name.toLowerCase();
-        if (name.startsWith("image") && name.endsWith(tail)) {
-          const String num = name.substring(5, name.length() - tail.length());
-          const int value = num.toInt();
-          if (value > max_no) {
-            max_no = static_cast<uint16_t>(value);
-          }
-        }
-      }
-      entry = dir.openNextFile();
-    }
-    dir.close();
+String WifiManager::processedImageFilename(const String &original_name,
+                                           const String &algo) const {
+  String base = leafName(original_name);
+  const int extension = base.lastIndexOf('.');
+  if (extension > 0) {
+    base = base.substring(0, extension);
   }
-
-  char buf[32];
-  snprintf(buf, sizeof(buf), "image%03u_%s.png", static_cast<unsigned>(max_no + 1),
-           suffix.c_str());
-  return String(buf);
+  if (base.length() == 0) {
+    base = "image";
+  }
+  const String suffix = algoSuffix(algo);
+  return base + "_" + suffix + ".png";
 }
 
 bool WifiManager::removePathRecursive(const String &path) const {
@@ -3418,7 +3424,9 @@ void WifiManager::handleRoot() {
       if (uploadBtn) uploadBtn.disabled = true;
       try {
         const epdBlob = await preprocessImageToEpd4Blob(f, mode === 'crop', ditherMode, gammaValue);
-        const outName = (f.name.replace(/\.[^.]+$/, '') || 'image') + '.epd4';
+        const algoSuffix = ditherMode === 'atkinson' ? 'atk' : 'fs';
+        const outName = (f.name.replace(/\.[^.]+$/, '') || 'image')
+          + '_' + algoSuffix + '.epd4';
         const fd = new FormData();
         fd.append('file', epdBlob, outName);
         const q = '/api/upload?dir=' + encodeURIComponent('/pic') + '&mode=normal'
@@ -3756,6 +3764,10 @@ void WifiManager::handleCalendarEventsPost() {
     const String end_time = server_->arg("end_time");
     if (end_time.length() > 0) {
       if (!normalizeCalendarTimeValue(end_time, normalized_end_time)) {
+        server_->send(400, "application/json", "{\"ok\":false,\"error\":\"bad_end_time\"}");
+        return;
+      }
+      if (normalized_end_time.compareTo(normalized_time) <= 0) {
         server_->send(400, "application/json", "{\"ok\":false,\"error\":\"bad_end_time\"}");
         return;
       }
@@ -4195,36 +4207,42 @@ void WifiManager::handleFileUpload() {
     return;
   }
 
-  String filename = upload.filename;
-  filename.replace("\\", "");
-  filename.replace("/", "");
-  const bool image_output = server_->hasArg("kind") && server_->arg("kind") == "image";
-  String dir = server_->hasArg("dir") ? server_->arg("dir") : "/";
-  if (image_output) {
-    dir = "/pic";
-    filename = nextImageFilename(upload_algo);
-  }
-  if (filename.length() == 0) {
-    upload_ok_ = false;
-    upload_error_ = "bad_filename";
-    return;
-  }
-
   const bool preprocess_mode = (upload_mode_ == "fit" || upload_mode_ == "crop");
-  if (!isSafePath(dir)) {
-    upload_ok_ = false;
-    upload_error_ = "bad_dir";
-    if (upload.status == UPLOAD_FILE_START) {
-      Serial.printf("[SD] upload rejected bad dir=%s\n", dir.c_str());
+  String filepath = upload_tmp_path_;
+  if (upload.status == UPLOAD_FILE_START) {
+    String filename = upload.filename;
+    filename.replace("\\", "");
+    filename.replace("/", "");
+    const bool image_output = server_->hasArg("kind") && server_->arg("kind") == "image";
+    String dir = server_->hasArg("dir") ? server_->arg("dir") : "/";
+    if (image_output) {
+      dir = "/pic";
+      filename = processedImageFilename(filename, upload_algo);
     }
+    if (filename.length() == 0) {
+      upload_ok_ = false;
+      upload_error_ = "bad_filename";
+      return;
+    }
+    if (!isSafePath(dir)) {
+      upload_ok_ = false;
+      upload_error_ = "bad_dir";
+      Serial.printf("[SD] upload rejected bad dir=%s\n", dir.c_str());
+      return;
+    }
+
+    filepath = dir;
+    if (!filepath.endsWith("/")) {
+      filepath += "/";
+    }
+    filepath += filename;
+    upload_tmp_path_ = filepath;
+  }
+  if (filepath.length() == 0) {
+    upload_ok_ = false;
+    upload_error_ = "write_target_missing";
     return;
   }
-  String filepath = dir;
-  if (!filepath.endsWith("/")) {
-    filepath += "/";
-  }
-  filepath += filename;
-  upload_tmp_path_ = filepath;
 
   if (upload.status == UPLOAD_FILE_START) {
     if (preprocess_mode) {
