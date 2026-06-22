@@ -42,36 +42,23 @@ struct VisibleEvent {
   uint8_t color_nibble = 0;
 };
 
-struct ScheduleGroup {
-  String time_hhmm;
-  uint8_t event_count = 0;
-  uint8_t event_indices[appfw::kMaxCalendarEvents] = {};
-};
-
 struct CalendarModel {
   bool time_valid = false;
+  bool schedule_two_columns = false;
   LayoutMode layout_mode = LayoutMode::LandscapeSplit;
   uint16_t current_minute_of_day = 0;
   String ui_language;
-  String title;
   String header_date;
-  String header_time;
   String header_weather;
   String header_sensors;
   int16_t header_weather_code = -1;
   bool header_wifi_connected = false;
   int16_t header_battery_pct = -1;
-  String schedule_title;
-  String no_time_label;
-  String more_label;
   String weekday_labels[7];
   uint8_t month_row_count = 6;
 
   size_t visible_event_count = 0;
   VisibleEvent visible_events[appfw::kMaxCalendarEvents];
-
-  size_t schedule_group_count = 0;
-  ScheduleGroup schedule_groups[appfw::kMaxCalendarEvents];
 
   DateCell date_cells[42];
   DaySummary day_summaries[42];

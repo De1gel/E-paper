@@ -11,13 +11,14 @@ constexpr const char *kDefaultStaPass = "";
 constexpr const char *kDefaultStaAuthMode = "auto";
 constexpr const char *kDefaultUiLanguage = "zh";
 constexpr const char *kDefaultTimezone = "Asia/Shanghai";
-constexpr const char *kDefaultCalendarUrl = "/team-sync-meeting.ics";
+constexpr const char *kDefaultCalendarUrl = "";
+constexpr const char *kLegacyDemoCalendarUrl = "/team-sync-meeting.ics";
 constexpr const char *kDefaultWeatherCity = "北京";
 constexpr const char *kDefaultWeatherLat = "39.9042";
 constexpr const char *kDefaultWeatherLon = "116.4074";
 constexpr const char *kDefaultWeatherUrl =
     "http://api.open-meteo.com/v1/forecast?latitude=39.9042&longitude=116.4074&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
-constexpr uint32_t kSettingsRevision = 2;
+constexpr uint32_t kSettingsRevision = 3;
 constexpr uint32_t kOldOneHourDefaultSec = 3600;
 constexpr uint32_t kTwoHourDefaultSec = 7200;
 
@@ -36,14 +37,18 @@ void SettingsStore::applyDefaults(WifiSettings &settings, size_t &calendar_event
   settings.app_switch_interval_sec = 3600;
   settings.calendar_enabled = true;
   settings.calendar_layout = "landscape_split";
+  settings.schedule_columns = "one_column";
   settings.calendar_refresh_sec = kTwoHourDefaultSec;
   settings.sleep_start_minute = 22 * 60;
   settings.sleep_end_minute = 8 * 60;
   settings.calendar_url = kDefaultCalendarUrl;
   settings.weather_city = kDefaultWeatherCity;
+  settings.weather_location_city = "";
   settings.weather_lat = kDefaultWeatherLat;
   settings.weather_lon = kDefaultWeatherLon;
   settings.weather_url = kDefaultWeatherUrl;
+  settings.weather_code = -1;
+  settings.last_daily_sync_day = -1;
   calendar_event_count = 0;
   next_calendar_event_id = 1;
 }
@@ -59,14 +64,26 @@ void SettingsStore::normalize(WifiSettings &settings) {
   }
   settings.calendar_url.trim();
   settings.weather_city.trim();
+  settings.weather_location_city.trim();
   settings.weather_lat.trim();
   settings.weather_lon.trim();
   settings.weather_url.trim();
+  if (settings.weather_city.length() > 96u) settings.weather_city.remove(96u);
+  if (settings.weather_location_city.length() > 96u) settings.weather_location_city.remove(96u);
+  if (settings.weather_lat.length() > 24u) settings.weather_lat.remove(24u);
+  if (settings.weather_lon.length() > 24u) settings.weather_lon.remove(24u);
+  if (settings.weather_url.length() > 512u) settings.weather_url.remove(512u);
   settings.calendar_layout.trim();
   settings.calendar_layout.toLowerCase();
   if (!(settings.calendar_layout == "landscape_split" ||
         settings.calendar_layout == "portrait_split")) {
     settings.calendar_layout = "landscape_split";
+  }
+  settings.schedule_columns.trim();
+  settings.schedule_columns.toLowerCase();
+  if (!(settings.schedule_columns == "one_column" ||
+        settings.schedule_columns == "two_columns")) {
+    settings.schedule_columns = "one_column";
   }
 
   settings.ui_language.trim();
@@ -138,6 +155,9 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
   }
   if (prefs.isKey("cal_en")) settings.calendar_enabled = prefs.getBool("cal_en", true);
   if (prefs.isKey("cal_layout")) settings.calendar_layout = prefs.getString("cal_layout", "landscape_split");
+  if (prefs.isKey("sched_cols")) {
+    settings.schedule_columns = prefs.getString("sched_cols", "one_column");
+  }
   if (prefs.isKey("cal_sec")) {
     settings.calendar_refresh_sec = prefs.getUInt("cal_sec", kTwoHourDefaultSec);
     if (migrate_one_hour_defaults && settings.calendar_refresh_sec == kOldOneHourDefaultSec) {
@@ -160,10 +180,19 @@ bool SettingsStore::load(Preferences &prefs, WifiSettings &settings,
         static_cast<uint16_t>(prefs.getUInt("active_start", settings.sleep_end_minute));
   }
   if (prefs.isKey("cal_url")) settings.calendar_url = prefs.getString("cal_url", kDefaultCalendarUrl);
+  if (stored_revision < 3u && settings.calendar_url == kLegacyDemoCalendarUrl) {
+    settings.calendar_url = "";
+    prefs.putString("cal_url", settings.calendar_url);
+  }
   if (prefs.isKey("weather_city")) settings.weather_city = prefs.getString("weather_city", kDefaultWeatherCity);
+  if (prefs.isKey("weather_loc_city")) {
+    settings.weather_location_city = prefs.getString("weather_loc_city", "");
+  }
   if (prefs.isKey("weather_lat")) settings.weather_lat = prefs.getString("weather_lat", kDefaultWeatherLat);
   if (prefs.isKey("weather_lon")) settings.weather_lon = prefs.getString("weather_lon", kDefaultWeatherLon);
   if (prefs.isKey("weather_url")) settings.weather_url = prefs.getString("weather_url", kDefaultWeatherUrl);
+  settings.weather_code = prefs.getInt("weather_code", -1);
+  settings.last_daily_sync_day = prefs.getInt("daily_sync_day", -1);
 
   normalize(settings);
   fillEmptyValues(settings);
@@ -198,14 +227,18 @@ bool SettingsStore::save(Preferences &prefs, const WifiSettings &settings,
   prefs.putUInt("switch_sec", settings.app_switch_interval_sec);
   prefs.putBool("cal_en", settings.calendar_enabled);
   prefs.putString("cal_layout", settings.calendar_layout);
+  prefs.putString("sched_cols", settings.schedule_columns);
   prefs.putUInt("cal_sec", settings.calendar_refresh_sec);
   prefs.putUInt("sleep_start", settings.sleep_start_minute);
   prefs.putUInt("sleep_end", settings.sleep_end_minute);
   prefs.putString("cal_url", settings.calendar_url);
   prefs.putString("weather_city", settings.weather_city);
+  prefs.putString("weather_loc_city", settings.weather_location_city);
   prefs.putString("weather_lat", settings.weather_lat);
   prefs.putString("weather_lon", settings.weather_lon);
   prefs.putString("weather_url", settings.weather_url);
+  prefs.putInt("weather_code", settings.weather_code);
+  prefs.putInt("daily_sync_day", settings.last_daily_sync_day);
   prefs.putUInt("cal_next_id", next_calendar_event_id);
   prefs.putString("cal_events", packed_events);
   prefs.end();

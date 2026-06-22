@@ -170,7 +170,7 @@
 
 说明：
 - 固件优先从 SPIFFS 提供这两个文件
-- `data/index.html` 目前不是主入口
+- `data/index.html` 已删除，配置页面仅保留 `data/portal.html`
 
 ## 7. 资源、测试与工具
 

@@ -6,14 +6,11 @@
 
 #include "calendar/CalendarLayout.h"
 #include "calendar/CalendarModel.h"
-#include "calendar/CalendarText.h"
 #include "render/StripeBuffer.h"
 #include "system/InputManager.h"
 #include "system/LedManager.h"
 #include "system/ModeManager.h"
 #include "system/WifiManager.h"
-
-class CalendarFrameSink;
 
 enum class AppState : uint8_t {
   Photo = 0,
@@ -46,6 +43,10 @@ class App {
   void updateClockAnchor(uint32_t now_ms);
   bool getLocalTimeSnapshot(uint32_t now_ms, struct tm &local_tm, time_t &local_epoch) const;
   void updateCalendarAutoRefresh(uint32_t now_ms);
+  void updateDailyRefresh(uint32_t now_ms);
+  void updateSerialTestCommands(uint32_t now_ms);
+  void handleSerialTestCommand(String command, uint32_t now_ms);
+  bool queueSerialTestRefresh(AppState page, bool force_daily, uint32_t now_ms);
   void updateAppAutoSwitch(uint32_t now_ms);
   void updateCalendarBackgroundSync(uint32_t now_ms);
   void applyCalendarLayoutFromConfig(bool force_apply);
@@ -53,14 +54,15 @@ class App {
   void updatePhotoCarousel(uint32_t now_ms);
   void nextPhoto(const char *reason, uint32_t now_ms);
   void prevPhoto(const char *reason, uint32_t now_ms);
-  bool ensureCalendarSyncBeforeFullRefresh(uint32_t now_ms);
+  bool ensureDailySyncBeforeRefresh(uint32_t now_ms);
+  bool ensureCalendarStaStatusBeforeRefresh(uint32_t now_ms);
+  int32_t dailySyncKey(const struct tm &local_tm) const;
+  bool isDailySyncDue(uint32_t now_ms, int32_t *key_out = nullptr) const;
   void beginDisplaySession();
   void endDisplaySession();
   void setState(AppState next);
-  bool ensureCalendarFrameBuffer(const char *reason);
   bool ensureCalendarStripeBuffer();
   void rebuildCalendarSceneCache(const struct tm &local_tm, bool time_valid);
-  void logCalendarHeap(const char *tag) const;
   void renderPhotoPage();
   void initPhotoStorage();
   bool ensurePhotoStorageMounted();
@@ -70,8 +72,7 @@ class App {
   bool renderDecodedPhotoFile(const String &path);
   bool renderPngDirectToEpd(const String &path);
   bool renderJpegDirectToEpd(const String &path);
-  bool decodeBmpToPackedFrame(const String &path, uint8_t *frame);
-  bool pushPackedPhotoFrame(const uint8_t *frame, size_t len);
+  bool decodeBmpToPhotoStripe(const String &path);
   bool isEpd4Name(const String &name) const;
   bool isPngName(const String &name) const;
   bool isJpegName(const String &name) const;
@@ -79,24 +80,6 @@ class App {
   bool isAlbumPhotoName(const String &name) const;
   String photoEntryPath(const String &name) const;
   void renderCalendarPage(uint32_t now_ms);
-  void clearCalendarFrame(uint8_t color_nibble);
-  bool calendarUsesPortraitRotation() const;
-  uint16_t calendarLogicalWidth() const;
-  uint16_t calendarLogicalHeight() const;
-  bool calendarLogicalToPhysical(uint16_t x, uint16_t y, uint16_t &physical_x,
-                                 uint16_t &physical_y) const;
-  calendar::Rect calendarLogicalRectToPhysical(const calendar::Rect &rect) const;
-  void setCalendarPixel(uint16_t x, uint16_t y, uint8_t color_nibble);
-  void fillCalendarRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble);
-  void drawCalendarRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t color_nibble);
-  void drawCalendarText3x5(uint16_t x, uint16_t y, const String &text, uint8_t pixel_height,
-                            uint8_t color_nibble,
-                            calendar::TextFont font = calendar::TextFont::Auto,
-                            calendar::TextAAMode aa_mode = calendar::TextAAMode::Threshold);
-  void drawCalendarNumberInCell(uint16_t x, uint16_t y, uint16_t w, uint16_t h, int day_number,
-                                uint8_t scale, uint8_t color_nibble);
-  void drawCalendarScene(const struct tm &local_tm, bool time_valid);
-  void pushCalendarFullRefresh();
   void pushCalendarFullRefreshStriped(const calendar::CalendarModel &model,
                                       const calendar::CalendarLayout &layout);
   void renderWhiteScreen();
@@ -114,24 +97,23 @@ class App {
   uint16_t last_logged_photo_file_count_ = 0xFFFF;
   bool needs_render_ = true;
   bool peripheral_power_on_ = false;
-  static constexpr size_t kCalendarFrameBytes = (800u * 480u) / 2u;
   static constexpr uint16_t kCalendarStripeRows = 32u;
-  uint8_t *calendar_frame_ = nullptr;
   render::StripeBuffer calendar_stripe_;
   CalendarLayout calendar_layout_ = CalendarLayout::LandscapeSplit;
   calendar::CalendarModel calendar_model_cache_{};
   calendar::CalendarLayout calendar_layout_cache_{};
   bool force_calendar_full_refresh_ = true;
-  bool calendar_pre_refresh_sync_waiting_ = false;
-  bool calendar_pre_refresh_sync_started_session_ = false;
-  bool calendar_skip_presync_once_ = false;
-  bool calendar_start_background_sync_after_render_ = false;
   bool calendar_background_sync_active_ = false;
   bool calendar_background_sync_started_session_ = false;
+  bool calendar_sta_probe_waiting_ = false;
+  bool calendar_sta_probe_started_session_ = false;
   bool calendar_stop_sta_after_render_ = false;
-  bool calendar_pre_refresh_led_active_ = false;
   bool calendar_pre_refresh_wifi_connected_ = false;
-  bool calendar_pre_refresh_failed_ = false;
+  bool daily_sync_waiting_ = false;
+  bool daily_sync_started_session_ = false;
+  bool daily_sync_failed_ = false;
+  int32_t daily_sync_pending_key_ = -1;
+  int32_t daily_sync_unavailable_key_ = -1;
   uint32_t calendar_background_sync_signature_ = 0;
   uint32_t last_calendar_check_ms_ = 0;
   int32_t last_calendar_day_key_ = -1;
@@ -154,7 +136,8 @@ class App {
   uint32_t pending_wake_slept_ms_ = 0;
   String pending_wake_led_;
   String calendar_layout_cfg_cache_;
-  bool calendar_frame_unavailable_logged_ = false;
+  String serial_test_command_buffer_;
+  bool serial_test_mode_ = false;
 
   appfw::InputManager input_;
   appfw::ModeManager mode_manager_;
@@ -163,7 +146,6 @@ class App {
 
   static constexpr uint32_t kLightSleepWakeInhibitMs = 1200u;
 
-  friend class CalendarFrameSink;
 };
 
 #endif

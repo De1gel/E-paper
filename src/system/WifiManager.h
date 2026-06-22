@@ -23,7 +23,9 @@ class WifiManager {
   void startAP();
   void startSTA();
   void startStaAutoSync();
-  void startStaPreRefreshSync();
+  void startStaDailySync();
+  void startStaStatusProbe();
+  void startStaBackgroundSync();
   void stop(const char *reason);
 
   bool consumeAutoExitRequested();
@@ -39,7 +41,9 @@ class WifiManager {
   void requestCalendarSyncNow();
   bool ensureLocalCalendarLoaded(time_t now_epoch, const char *reason = nullptr);
   bool syncCalendarNow(const char *reason = nullptr);
-  bool syncWeatherNow(const char *reason = nullptr);
+  bool syncWeatherNow(const char *reason = nullptr, bool request_ntp = true);
+  int32_t lastDailySyncDay() const { return settings_.last_daily_sync_day; }
+  bool markDailySyncDay(int32_t day_key);
   const Settings &settings() const;
   size_t calendarEventCount() const;
   bool calendarEventAt(size_t index, CalendarEvent &event) const;
@@ -65,7 +69,9 @@ class WifiManager {
     None = 0,
     ManualConfig,
     ApBackground,
-    CalendarPreRefresh,
+    DailyRefresh,
+    StatusProbe,
+    CalendarBackground,
     AutoSync,
   };
 
@@ -74,6 +80,10 @@ class WifiManager {
   void applyDefaultSettings();
   void maybeSyncCalendarUrl(uint32_t now_ms);
   bool syncCalendarFromUrl(String &error_msg, time_t now_epoch_override = 0);
+  bool loadCalendarMonthCache();
+  bool loadCalendarMonthCacheFile(const char *path);
+  bool saveCalendarMonthCache();
+  void clearCalendarMonthCache(bool remove_files);
   void pruneExpiredCalendarEvents();
   void registerWifiEvents();
   void handleWifiEvent(arduino_event_id_t event, arduino_event_info_t info);
@@ -113,12 +123,11 @@ class WifiManager {
   String currentIp() const;
   bool syncClockFromWeather(String &resolved_timezone, bool &timezone_updated, String &local_time,
                             String &time_sync_error, String &preview, int &http_status,
-                            String &request_error);
+                            String &request_error, bool request_ntp = true);
   void initSensors();
   void updateSensors(uint32_t now_ms);
   bool readAHT20(float &temperature_c, float &humidity_pct);
   int readBatteryMilliVolts(int pin) const;
-  void detectBatteryPin();
   float estimateBatteryPercent(int battery_mv) const;
 
   void handleRoot();
@@ -139,6 +148,9 @@ class WifiManager {
   void handleReboot();
   void handleFileUpload();
   void handleNotFound();
+  bool fetchWeatherCityCoordinates(const String &city, String &resolved_name, String &lat,
+                                   String &lon, String &weather_url, String &error_msg);
+  bool refreshWeatherLocationFromCity(const char *reason);
 
   State state_ = State::Idle;
   Settings settings_{};

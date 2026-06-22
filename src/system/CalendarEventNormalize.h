@@ -12,6 +12,7 @@ String normalizeCalendarRepeatValue(const String &raw);
 String normalizeCalendarSourceValue(const String &raw);
 String normalizeCalendarExternalIdValue(const String &raw);
 String normalizeCalendarUpdatedAtValue(const String &raw);
+String truncateCalendarUtf8Value(const String &raw, size_t max_bytes);
 
 }  // namespace appfw
 

@@ -30,6 +30,41 @@ int32_t minuteKeyFromTm(const struct tm &t) {
                               t.tm_hour * 60 + t.tm_min);
 }
 
+int32_t dailySyncCycleKey(const struct tm &local_tm, uint16_t wake_minute) {
+  struct tm cycle_tm = local_tm;
+  const uint16_t minute_of_day =
+      static_cast<uint16_t>(local_tm.tm_hour * 60 + local_tm.tm_min);
+  if (wake_minute < 1440u && minute_of_day < wake_minute) {
+    cycle_tm.tm_mday -= 1;
+    cycle_tm.tm_isdst = -1;
+    if (mktime(&cycle_tm) < 0) return -1;
+  }
+  return dayKeyFromTm(cycle_tm);
+}
+
+RefreshSyncPlan selectRefreshSyncPlan(bool calendar_page, bool daily_sync_due,
+                                      bool has_sta_credentials) {
+  if (daily_sync_due) {
+    return RefreshSyncPlan::SyncBeforeRender;
+  }
+  if (calendar_page && has_sta_credentials) {
+    return RefreshSyncPlan::RenderThenSync;
+  }
+  return RefreshSyncPlan::RenderOnly;
+}
+
+const char *refreshSyncPlanName(RefreshSyncPlan plan) {
+  switch (plan) {
+    case RefreshSyncPlan::SyncBeforeRender:
+      return "sync_before_render";
+    case RefreshSyncPlan::RenderThenSync:
+      return "render_then_sync";
+    case RefreshSyncPlan::RenderOnly:
+    default:
+      return "render_only";
+  }
+}
+
 int32_t refreshBucketKey(int32_t minute_key, uint32_t interval_sec) {
   if (minute_key < 0 || interval_sec == 0u) {
     return -1;

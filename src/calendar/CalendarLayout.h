@@ -25,7 +25,6 @@ struct CalendarLayout {
   uint8_t title_scale = 0;
   uint8_t weekday_scale = 0;
   uint8_t day_scale = 0;
-  uint8_t list_scale = 2;
   uint16_t weekday_y = 0;
   uint16_t weekday_h = 0;
   uint16_t cell_w = 0;
@@ -34,13 +33,6 @@ struct CalendarLayout {
   uint8_t cell_pad_y = 2;
   uint16_t list_top = 0;
   uint16_t list_bottom = 0;
-  uint16_t row_h = 0;
-  uint16_t content_x = 0;
-  uint16_t items_x = 0;
-  uint16_t items_w = 0;
-  uint16_t lane_w = 0;
-  uint8_t lane_count = 1;
-  uint8_t max_rows = 0;
   bool has_grid = false;
 };
 

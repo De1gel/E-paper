@@ -34,6 +34,33 @@ bool calendarEventMatchesToday(const char *repeat, int weekday, const char *date
   return equalsText(date, today_ymd);
 }
 
+bool clipTimelineSegment(uint16_t event_start, uint16_t event_end, uint16_t period_start,
+                         uint16_t period_end, TimelineSegment &segment) {
+  segment = TimelineSegment{};
+  if (event_end <= event_start || period_end <= period_start ||
+      event_end <= period_start || event_start >= period_end) {
+    return false;
+  }
+  segment.start_minute = (event_start < period_start) ? period_start : event_start;
+  segment.end_minute = (event_end > period_end) ? period_end : event_end;
+  segment.continues_before = event_start < period_start;
+  segment.continues_after = event_end > period_end;
+  return segment.end_minute > segment.start_minute;
+}
+
+uint16_t timelineOffsetForMinute(uint16_t minute_value, uint16_t period_start,
+                                 uint16_t period_end, uint16_t height) {
+  if (minute_value <= period_start || period_end <= period_start) {
+    return 0;
+  }
+  if (minute_value >= period_end) {
+    return height;
+  }
+  return static_cast<uint16_t>(
+      (static_cast<uint32_t>(minute_value - period_start) * height) /
+      static_cast<uint32_t>(period_end - period_start));
+}
+
 void assignTimelineLanes(TimelineEventSlot *events, size_t event_count, size_t max_lanes) {
   if (events == nullptr || event_count == 0 || max_lanes == 0) {
     return;

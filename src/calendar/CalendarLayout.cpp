@@ -1,7 +1,5 @@
 #include "calendar/CalendarLayout.h"
 
-#include "calendar/CalendarText.h"
-
 namespace calendar {
 
 namespace {
@@ -103,36 +101,6 @@ bool buildCalendarLayout(CalendarLayout &layout, LayoutMode mode, uint16_t scree
   layout.list_bottom = (schedule_bottom > layout.list_top + 8)
                            ? static_cast<uint16_t>(schedule_bottom - 8)
                            : layout.list_top;
-  layout.max_rows = 28;
-  const uint16_t usable_h = (layout.list_bottom > layout.list_top)
-                                ? static_cast<uint16_t>(layout.list_bottom - layout.list_top)
-                                : 0;
-  layout.row_h = (layout.max_rows > 0) ? static_cast<uint16_t>(usable_h / layout.max_rows) : usable_h;
-  if (layout.row_h < 10) {
-    layout.row_h = 10;
-  }
-
-  const uint16_t left_margin = 8;
-  const uint16_t right_margin = 8;
-  const uint16_t time_col_w = static_cast<uint16_t>(textWidth3x5("22", layout.list_scale) + 16);
-  layout.content_x = static_cast<uint16_t>(layout.schedule_inner.x + left_margin);
-  layout.items_x = static_cast<uint16_t>(layout.content_x + time_col_w);
-  layout.items_w = static_cast<uint16_t>(
-      (layout.schedule_inner.w > (left_margin + right_margin + time_col_w))
-          ? (layout.schedule_inner.w - left_margin - right_margin - time_col_w)
-          : 0);
-  if (layout.items_w >= 220) {
-    layout.lane_count = 3;
-  } else if (layout.items_w >= 120) {
-    layout.lane_count = 2;
-  }
-  layout.lane_w =
-      (layout.lane_count > 0) ? static_cast<uint16_t>(layout.items_w / layout.lane_count)
-                              : layout.items_w;
-  if (layout.lane_w < 50) {
-    layout.lane_count = 1;
-    layout.lane_w = layout.items_w;
-  }
   return true;
 }
 

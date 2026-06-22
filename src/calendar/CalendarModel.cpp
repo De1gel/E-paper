@@ -10,9 +10,6 @@
 namespace calendar {
 namespace {
 
-constexpr const char kZhScheduleTitle[] = "\xE5\xAE\x89\xE6\x8E\x92";
-constexpr const char kZhNoTimeLabel[] = "\xE6\x97\xA0\xE6\x97\xB6\xE9\x97\xB4";
-constexpr const char kZhMoreLabel[] = "\xE6\x9B\xB4\xE5\xA4\x9A";
 constexpr const char *kZhWeekdayLabels[] = {
     "\xE6\x97\xA5", "\xE4\xB8\x80", "\xE4\xBA\x8C", "\xE4\xB8\x89",
     "\xE5\x9B\x9B", "\xE4\xBA\x94", "\xE5\x85\xAD",
@@ -44,10 +41,6 @@ String twoDigits(int value) {
 String formatDateYmd(const struct tm &local_tm) {
   return String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) + "-" +
          twoDigits(local_tm.tm_mday);
-}
-
-String formatTimeHm(const struct tm &local_tm) {
-  return twoDigits(local_tm.tm_hour) + ":" + twoDigits(local_tm.tm_min);
 }
 
 String formatYmd(int year, int month, int day) {
@@ -231,9 +224,6 @@ String normalizeUiLanguage(const String &raw) {
 
 void fillUiStrings(CalendarModel &model) {
   if (model.ui_language == "fr") {
-    model.schedule_title = "";
-    model.no_time_label = "";
-    model.more_label = "PLUS";
     const char *labels[7] = {"DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"};
     for (uint8_t i = 0; i < 7; ++i) {
       model.weekday_labels[i] = labels[i];
@@ -242,9 +232,6 @@ void fillUiStrings(CalendarModel &model) {
   }
 
   if (model.ui_language == "zh") {
-    model.schedule_title = "";
-    model.no_time_label = "";
-    model.more_label = fallbackMissingGlyphs(kZhMoreLabel, TextFont::Cjk16, "GENG DUO");
     for (uint8_t i = 0; i < 7; ++i) {
       model.weekday_labels[i] =
           fallbackMissingGlyphs(kZhWeekdayLabels[i], TextFont::Cjk26, kZhWeekdayFallbacks[i]);
@@ -252,9 +239,6 @@ void fillUiStrings(CalendarModel &model) {
     return;
   }
 
-  model.schedule_title = "";
-  model.no_time_label = "";
-  model.more_label = "MORE";
   const char *labels[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
   for (uint8_t i = 0; i < 7; ++i) {
     model.weekday_labels[i] = labels[i];
@@ -361,16 +345,13 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
                         bool force_header_wifi_connected) {
   model = CalendarModel{};
   model.time_valid = time_valid;
+  model.schedule_two_columns = wifi_manager.settings().schedule_columns == "two_columns";
   model.layout_mode = layout_mode;
   model.current_minute_of_day = static_cast<uint16_t>(local_tm.tm_hour * 60 + local_tm.tm_min);
   model.ui_language = normalizeUiLanguage(ui_language);
   fillUiStrings(model);
-  model.title = "-- -- --";
-  model.title = String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) + "-" +
-                twoDigits(local_tm.tm_mday);
-  model.header_date = model.title;
-  model.header_time = formatTimeHm(local_tm);
-
+  model.header_date = String(local_tm.tm_year + 1900) + "-" + twoDigits(local_tm.tm_mon + 1) +
+                      "-" + twoDigits(local_tm.tm_mday);
   String weather_label = wifi_manager.weatherCity();
   weather_label.trim();
   if (weather_label.length() == 0) {
@@ -399,9 +380,6 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
   for (size_t i = 0; i < wifi_manager.calendarEventCount(); ++i) {
     appfw::CalendarEvent event;
     if (!wifi_manager.calendarEventAt(i, event)) {
-      continue;
-    }
-    if (event.source == "ics") {
       continue;
     }
     if (!time_valid || calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday,
@@ -526,9 +504,6 @@ void buildCalendarModel(CalendarModel &model, const struct tm &local_tm, bool ti
     for (size_t event_index = 0; event_index < wifi_manager.calendarEventCount(); ++event_index) {
       appfw::CalendarEvent event;
       if (!wifi_manager.calendarEventAt(event_index, event)) {
-        continue;
-      }
-      if (event.source == "ics") {
         continue;
       }
       if (!calendar::calendarEventMatchesToday(event.repeat.c_str(), event.weekday, event.date.c_str(),

@@ -21,7 +21,6 @@
 
 #include "system/CalendarEventNormalize.h"
 #include "system/CalendarIcsCore.h"
-#include "system/CalendarSyncService.h"
 #include "system/LogConfig.h"
 #include "system/SdCard.h"
 #include "system/SettingsStore.h"
@@ -32,12 +31,60 @@ constexpr const char *kDefaultApSsid = "PhotoFrame_Config";
 constexpr const char *kDefaultApPass = "12345678";
 constexpr const char *kDefaultHostname = "epaper";
 constexpr const char *kPortalHtmlPath = "/portal.html";
+constexpr const char *kCalendarCachePath = "/calendar-month.cache";
+constexpr const char *kCalendarCacheTempPath = "/calendar-month.tmp";
+constexpr const char *kCalendarCacheBackupPath = "/calendar-month.bak";
+constexpr const char *kCalendarCacheMagic = "EPAPER_CALENDAR_CACHE_V1";
+constexpr size_t kCalendarCacheMaxBytes = 65536u;
+constexpr size_t kCalendarSourceMaxBytes = 65536u;
+constexpr size_t kGeocodeResponseMaxBytes = 16384u;
+constexpr size_t kWeatherResponseMaxBytes = 32768u;
 constexpr uint16_t kHttpPort = 80;
 constexpr uint8_t kI2cSdaPin = 21;
 constexpr uint8_t kI2cSclPin = 22;
 constexpr uint8_t kAht20Address = 0x38;
 constexpr uint8_t kRx8025Address = 0x32;
 constexpr time_t kMinTrustedEpoch = 1704067200;  // 2024-01-01 00:00:00 UTC.
+
+class BoundedStringStream : public Stream {
+ public:
+  BoundedStringStream(String &target, size_t max_bytes)
+      : target_(target), max_bytes_(max_bytes) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1u); }
+
+  size_t write(const uint8_t *buffer, size_t size) override {
+    if (!buffer || size == 0u) return 0u;
+    if (target_.length() + size > max_bytes_) {
+      overflowed_ = true;
+      return 0u;
+    }
+    return target_.concat(reinterpret_cast<const char *>(buffer), size) ? size : 0u;
+  }
+
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+  bool overflowed() const { return overflowed_; }
+
+ private:
+  String &target_;
+  size_t max_bytes_;
+  bool overflowed_ = false;
+};
+
+bool readHttpBodyBounded(HTTPClient &http, size_t max_bytes, String &body) {
+  body = "";
+  const int content_length = http.getSize();
+  if (content_length > static_cast<int>(max_bytes)) return false;
+  const size_t reserve_bytes =
+      (content_length > 0) ? static_cast<size_t>(content_length) : std::min<size_t>(4096u, max_bytes);
+  if (!body.reserve(reserve_bytes)) return false;
+  BoundedStringStream sink(body, max_bytes);
+  const int written = http.writeToStream(&sink);
+  return written >= 0 && !sink.overflowed() && body.length() <= max_bytes;
+}
 
 int32_t dayIdFromTm(const struct tm &tm_value) {
   return static_cast<int32_t>((tm_value.tm_year + 1900) * 10000 + (tm_value.tm_mon + 1) * 100 +
@@ -731,6 +778,10 @@ bool applyKnownWeatherLocationDefaults(WifiSettings &settings) {
     settings.weather_url = beijing_url;
     changed = true;
   }
+  if (settings.weather_location_city != settings.weather_city) {
+    settings.weather_location_city = settings.weather_city;
+    changed = true;
+  }
   if (settings.timezone != "Asia/Shanghai") {
     settings.timezone = "Asia/Shanghai";
     changed = true;
@@ -767,6 +818,7 @@ bool syncClockWithTimezone(const String &timezone, String &local_time, String &e
     if (status == SNTP_SYNC_STATUS_COMPLETED && now_ts >= kMinValidEpoch) {
       struct tm tm_local {};
       if (localtime_r(&now_ts, &tm_local) == nullptr) {
+        sntp_stop();
         error_msg = "localtime_failed";
         return false;
       }
@@ -778,6 +830,7 @@ bool syncClockWithTimezone(const String &timezone, String &local_time, String &e
       }
       Serial.printf("[TIME] ntp sync completed epoch=%ld local=%s\n",
                     static_cast<long>(now_ts), local_time.c_str());
+      sntp_stop();
       return true;
     }
     delay(200);
@@ -786,6 +839,7 @@ bool syncClockWithTimezone(const String &timezone, String &local_time, String &e
   error_msg += sntpSyncStatusName(sntp_get_sync_status());
   error_msg += "_epoch_";
   error_msg += String(static_cast<long>(time(nullptr)));
+  sntp_stop();
   return false;
 }
 
@@ -1018,6 +1072,8 @@ void WifiManager::begin() {
   registerWifiEvents();
   initSensors();
   loadSettings();
+  initWebFs();
+  loadCalendarMonthCache();
   stop("boot");
 }
 
@@ -1062,6 +1118,12 @@ void WifiManager::update(uint32_t now_ms) {
         Serial.println("[WIFI] AP background STA connected");
         return;
       }
+      if (sta_session_role_ == StaSessionRole::StatusProbe) {
+        calendar_sync_pending_ = false;
+        last_calendar_sync_ms_ = 0;
+        Serial.println("[WIFI] STA status probe connected; network sync deferred");
+        return;
+      }
       String resolved_timezone;
       String local_time;
       String sync_error;
@@ -1069,14 +1131,25 @@ void WifiManager::update(uint32_t now_ms) {
       String request_error;
       bool timezone_updated = false;
       int http_status = 0;
-      if (syncClockFromWeather(resolved_timezone, timezone_updated, local_time, sync_error, preview,
-                               http_status, request_error)) {
+      const bool request_ntp =
+          sta_session_role_ == StaSessionRole::DailyRefresh ||
+          sta_session_role_ == StaSessionRole::AutoSync;
+      const bool clock_was_trusted = systemClockTrusted();
+      const bool weather_location_ready =
+          refreshWeatherLocationFromCity("sta_connected_pre_refresh");
+      if (!weather_location_ready) {
+        request_error = "city_resolve_failed";
+      }
+      if (weather_location_ready &&
+          syncClockFromWeather(resolved_timezone, timezone_updated, local_time, sync_error, preview,
+                               http_status, request_error, request_ntp)) {
         Serial.printf("[TIME] synced tz=%s local=%s\n",
                       resolved_timezone.c_str(), local_time.c_str());
-        writeClockToRtc("weather_sync");
+        if (request_ntp || !clock_was_trusted) writeClockToRtc("weather_sync");
       } else {
         const String effective_tz = timezoneForEsp(settings_.timezone, false, 0);
-        if (syncClockWithTimezone(effective_tz, local_time, sync_error)) {
+        if ((request_ntp || !systemClockTrusted()) &&
+            syncClockWithTimezone(effective_tz, local_time, sync_error)) {
           Serial.printf("[TIME] fallback synced tz=%s local=%s\n",
                         effective_tz.c_str(), local_time.c_str());
           writeClockToRtc("fallback_ntp");
@@ -1091,11 +1164,14 @@ void WifiManager::update(uint32_t now_ms) {
       Serial.printf("[WIFI] STA connect timeout -> stop (last_status=%s/%d)\n",
                     wifiStatusName(status), status);
       sta_connect_failed_ = true;
+      const bool status_probe = sta_session_role_ == StaSessionRole::StatusProbe;
       if (isApSessionActive()) {
         stopStaOnly("sta_connect_timeout_keep_ap");
       } else {
-        stop("sta_connect_timeout");
-        auto_exit_requested_ = true;
+        stop(status_probe ? "sta_status_probe_timeout" : "sta_connect_timeout");
+        if (!status_probe) {
+          auto_exit_requested_ = true;
+        }
       }
     }
     return;
@@ -1104,13 +1180,16 @@ void WifiManager::update(uint32_t now_ms) {
   if (state_ == State::StaRunning && WiFi.status() != WL_CONNECTED) {
     Serial.println("[WIFI] STA lost connection -> stop");
     sta_connect_failed_ = true;
+    const bool status_probe = sta_session_role_ == StaSessionRole::StatusProbe;
     if (sta_session_role_ == StaSessionRole::ManualConfig) {
       cleanupDisconnectedStaSession("manual_sta_lost_connection");
     } else if (isApSessionActive()) {
       stopStaOnly("sta_lost_connection_keep_ap");
     } else {
-      stop("sta_lost_connection");
-      auto_exit_requested_ = true;
+      stop(status_probe ? "sta_status_probe_lost_connection" : "sta_lost_connection");
+      if (!status_probe) {
+        auto_exit_requested_ = true;
+      }
     }
     return;
   }
@@ -1160,9 +1239,17 @@ void WifiManager::startStaAutoSync() {
   startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "auto_sync");
 }
 
-void WifiManager::startStaPreRefreshSync() {
-  Serial.println("[TIME] pre-refresh time sync required");
-  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "calendar_pre_refresh");
+void WifiManager::startStaDailySync() {
+  Serial.println("[SYNC] daily refresh sync required");
+  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "daily_refresh");
+}
+
+void WifiManager::startStaStatusProbe() {
+  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "calendar_probe");
+}
+
+void WifiManager::startStaBackgroundSync() {
+  startSTAWithTimeout(kStaConnectTimeoutAutoSyncMs, "calendar_background");
 }
 
 String WifiManager::effectiveStaAuthMode() const {
@@ -1288,6 +1375,7 @@ void WifiManager::cleanupDisconnectedStaSession(const char *reason) {
 
 void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag) {
   const bool keep_ap = isApSessionActive();
+  const bool status_probe = reason_tag && strcmp(reason_tag, "calendar_probe") == 0;
   if (!keep_ap) {
     stop("switch_to_sta");
   } else if (isStaActive()) {
@@ -1311,8 +1399,10 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
     if (keep_ap) {
       stopStaOnly("sta_auth_config_invalid_keep_ap");
     } else {
-      stop("sta_auth_config_invalid");
-      auto_exit_requested_ = true;
+      stop(status_probe ? "sta_status_probe_auth_invalid" : "sta_auth_config_invalid");
+      if (!status_probe) {
+        auto_exit_requested_ = true;
+      }
     }
     return;
   }
@@ -1323,8 +1413,12 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
     sta_session_role_ = StaSessionRole::ManualConfig;
   } else if (reason_tag && strcmp(reason_tag, "ap_config_background") == 0) {
     sta_session_role_ = StaSessionRole::ApBackground;
-  } else if (reason_tag && strcmp(reason_tag, "calendar_pre_refresh") == 0) {
-    sta_session_role_ = StaSessionRole::CalendarPreRefresh;
+  } else if (reason_tag && strcmp(reason_tag, "daily_refresh") == 0) {
+    sta_session_role_ = StaSessionRole::DailyRefresh;
+  } else if (reason_tag && strcmp(reason_tag, "calendar_probe") == 0) {
+    sta_session_role_ = StaSessionRole::StatusProbe;
+  } else if (reason_tag && strcmp(reason_tag, "calendar_background") == 0) {
+    sta_session_role_ = StaSessionRole::CalendarBackground;
   } else if (reason_tag && strcmp(reason_tag, "auto_sync") == 0) {
     sta_session_role_ = StaSessionRole::AutoSync;
   } else {
@@ -1557,10 +1651,143 @@ bool WifiManager::syncCalendarNow(const char *reason) {
   return true;
 }
 
-bool WifiManager::syncWeatherNow(const char *reason) {
+bool WifiManager::fetchWeatherCityCoordinates(const String &city_value, String &resolved_name,
+                                              String &lat, String &lon, String &weather_url,
+                                              String &error_msg) {
+  resolved_name = "";
+  lat = "";
+  lon = "";
+  weather_url = "";
+  error_msg = "";
+  if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
+    error_msg = "sta_required";
+    return false;
+  }
+
+  String city = city_value;
+  city.trim();
+  if (city.length() == 0u) {
+    error_msg = "empty_city";
+    return false;
+  }
+
+  String url = "https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&format=json&name=";
+  url += urlEncode(city);
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(8000);
+  if (!http.begin(url)) {
+    error_msg = "http_begin_failed";
+    return false;
+  }
+  const int code = http.GET();
+  if (code != 200) {
+    http.end();
+    error_msg = "geocode_http_failed";
+    return false;
+  }
+  String body;
+  const bool body_ok = readHttpBodyBounded(http, kGeocodeResponseMaxBytes, body);
+  http.end();
+  if (!body_ok) {
+    error_msg = "geocode_response_too_large";
+    return false;
+  }
+
+  const int results_idx = body.indexOf("\"results\":[");
+  if (results_idx < 0) {
+    error_msg = "city_not_found";
+    return false;
+  }
+  const int name_key = body.indexOf("\"name\":\"", results_idx);
+  const int lat_key = body.indexOf("\"latitude\":", results_idx);
+  const int lon_key = body.indexOf("\"longitude\":", results_idx);
+  if (name_key < 0 || lat_key < 0 || lon_key < 0) {
+    error_msg = "geocode_parse_failed";
+    return false;
+  }
+
+  const int name_start = name_key + 8;
+  const int name_end = body.indexOf('"', name_start);
+  const int lat_start = lat_key + 11;
+  int lat_end = body.indexOf(',', lat_start);
+  const int lon_start = lon_key + 12;
+  int lon_end = body.indexOf(',', lon_start);
+  if (lat_end < 0) lat_end = body.indexOf('}', lat_start);
+  if (lon_end < 0) lon_end = body.indexOf('}', lon_start);
+  if (name_end < 0 || lat_end < 0 || lon_end < 0) {
+    error_msg = "geocode_parse_failed";
+    return false;
+  }
+
+  resolved_name = body.substring(name_start, name_end);
+  lat = body.substring(lat_start, lat_end);
+  lon = body.substring(lon_start, lon_end);
+  lat.trim();
+  lon.trim();
+  if (lat.length() == 0u || lon.length() == 0u) {
+    error_msg = "geocode_parse_failed";
+    return false;
+  }
+  weather_url = "http://api.open-meteo.com/v1/forecast?latitude=" + lat +
+                "&longitude=" + lon +
+                "&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto";
+  return true;
+}
+
+bool WifiManager::refreshWeatherLocationFromCity(const char *reason) {
+  String requested_city = settings_.weather_city;
+  requested_city.trim();
+  String cached_city = settings_.weather_location_city;
+  cached_city.trim();
+  const bool cached_coordinates_valid =
+      settings_.weather_lat.length() > 0u && settings_.weather_lon.length() > 0u &&
+      (settings_.weather_url.startsWith("http://") ||
+       settings_.weather_url.startsWith("https://"));
+  if (cached_coordinates_valid && requested_city.equalsIgnoreCase(cached_city)) {
+    Serial.printf("[WEATHER] city coordinates cached reason=%s city=%s lat=%s lon=%s\n",
+                  reason ? reason : "unknown", requested_city.c_str(),
+                  settings_.weather_lat.c_str(), settings_.weather_lon.c_str());
+    return true;
+  }
+
+  String resolved_name;
+  String lat;
+  String lon;
+  String weather_url;
+  String error_msg;
+  if (!fetchWeatherCityCoordinates(settings_.weather_city, resolved_name, lat, lon, weather_url,
+                                   error_msg)) {
+    Serial.printf("[WEATHER] city resolve failed reason=%s city=%s err=%s\n",
+                  reason ? reason : "unknown", settings_.weather_city.c_str(),
+                  error_msg.c_str());
+    return false;
+  }
+  const bool changed = settings_.weather_lat != lat || settings_.weather_lon != lon ||
+                       settings_.weather_url != weather_url ||
+                       settings_.weather_location_city != requested_city;
+  settings_.weather_location_city = requested_city;
+  settings_.weather_lat = lat;
+  settings_.weather_lon = lon;
+  settings_.weather_url = weather_url;
+  if (changed && !saveSettings()) {
+    Serial.printf("[WEATHER] city resolve save failed reason=%s city=%s\n",
+                  reason ? reason : "unknown", settings_.weather_city.c_str());
+    return false;
+  }
+  Serial.printf("[WEATHER] city resolved reason=%s city=%s result=%s lat=%s lon=%s saved=%s\n",
+                reason ? reason : "unknown", settings_.weather_city.c_str(),
+                resolved_name.c_str(), lat.c_str(), lon.c_str(), changed ? "true" : "false");
+  return true;
+}
+
+bool WifiManager::syncWeatherNow(const char *reason, bool request_ntp) {
   if (state_ != State::StaRunning || WiFi.status() != WL_CONNECTED) {
     Serial.printf("[WEATHER] sync skipped reason=%s sta_not_connected\n",
                   reason ? reason : "manual");
+    return false;
+  }
+  if (!refreshWeatherLocationFromCity(reason ? reason : "weather_sync")) {
     return false;
   }
   String resolved_timezone;
@@ -1570,10 +1797,14 @@ bool WifiManager::syncWeatherNow(const char *reason) {
   String preview;
   int http_status = 0;
   String request_error;
+  const bool clock_was_trusted = systemClockTrusted();
   const bool ok = syncClockFromWeather(resolved_timezone, timezone_updated, local_time,
-                                       time_sync_error, preview, http_status, request_error);
+                                       time_sync_error, preview, http_status, request_error,
+                                       request_ntp);
   if (ok) {
-    writeClockToRtc(reason ? reason : "weather_sync");
+    if (request_ntp || !clock_was_trusted) {
+      writeClockToRtc(reason ? reason : "weather_sync");
+    }
     Serial.printf("[WEATHER] sync ok reason=%s code=%d city=%s\n",
                   reason ? reason : "manual", weather_code_, settings_.weather_city.c_str());
   } else {
@@ -1589,7 +1820,7 @@ const WifiManager::Settings &WifiManager::settings() const {
 
 bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone_updated,
                                        String &local_time, String &time_sync_error, String &preview,
-                                       int &http_status, String &request_error) {
+                                       int &http_status, String &request_error, bool request_ntp) {
   resolved_timezone = "";
   timezone_updated = false;
   local_time = "";
@@ -1618,8 +1849,13 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
     return false;
   }
 
-  String body = http.getString();
+  String body;
+  const bool body_ok = readHttpBodyBounded(http, kWeatherResponseMaxBytes, body);
   http.end();
+  if (!body_ok) {
+    request_error = "weather_response_too_large";
+    return false;
+  }
 
   preview = body;
   preview.replace("\r", " ");
@@ -1641,12 +1877,16 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
                 static_cast<long>(utc_offset_seconds), weather_local_time.c_str(),
                 settings_.weather_url.c_str());
   int32_t weather_code = -1;
+  bool settings_changed = false;
   if (extractJsonIntField(body, "weather_code", weather_code)) {
     weather_code_ = static_cast<int>(weather_code);
+    if (settings_.weather_code != weather_code_) {
+      settings_.weather_code = weather_code_;
+      settings_changed = true;
+    }
     Serial.printf("[WEATHER] code=%d\n", weather_code_);
   } else {
-    weather_code_ = -1;
-    Serial.println("[WEATHER] code missing");
+    Serial.printf("[WEATHER] code missing, keeping cached=%d\n", weather_code_);
   }
   if (resolved_timezone.length() == 0) {
     resolved_timezone = settings_.timezone;
@@ -1655,9 +1895,28 @@ bool WifiManager::syncClockFromWeather(String &resolved_timezone, bool &timezone
 
   if (resolved_timezone.length() > 0 && resolved_timezone != settings_.timezone) {
     settings_.timezone = resolved_timezone;
-    saveSettings();
+    settings_changed = true;
     timezone_updated = true;
     Serial.printf("[TIME] timezone updated from weather: %s\n", settings_.timezone.c_str());
+  }
+
+  if (settings_changed && !saveSettings()) {
+    Serial.println("[WEATHER] cache save failed");
+  }
+
+  if (!request_ntp && systemClockTrusted()) {
+    setenv("TZ", tz_for_sync.c_str(), 1);
+    tzset();
+    const time_t now_epoch = time(nullptr);
+    struct tm tm_local {};
+    char buf[40] = {0};
+    if (localtime_r(&now_epoch, &tm_local) != nullptr &&
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %z", &tm_local) > 0) {
+      local_time = String(buf);
+    }
+    Serial.printf("[TIME] ntp skipped reason=background trusted=true local=%s\n",
+                  local_time.c_str());
+    return true;
   }
 
   if (!syncClockWithTimezone(tz_for_sync, local_time, time_sync_error)) {
@@ -1709,6 +1968,20 @@ uint32_t WifiManager::calendarMonthSummarySignature() const {
   return calendar_month_summary_signature_;
 }
 
+bool WifiManager::markDailySyncDay(int32_t day_key) {
+  if (day_key <= 0 || settings_.last_daily_sync_day == day_key) {
+    return day_key > 0;
+  }
+  const int32_t previous = settings_.last_daily_sync_day;
+  settings_.last_daily_sync_day = day_key;
+  if (!saveSettings()) {
+    settings_.last_daily_sync_day = previous;
+    return false;
+  }
+  Serial.printf("[SYNC] daily marker saved day=%ld\n", static_cast<long>(day_key));
+  return true;
+}
+
 void WifiManager::loadSettings() {
   if (prefs_ == nullptr) {
     prefs_ = new Preferences();
@@ -1722,6 +1995,7 @@ void WifiManager::loadSettings() {
   calendar_store_.setNextId(next_calendar_event_id);
   calendar_store_.deserialize(packed_events);
   calendar_store_.setNextId(next_calendar_event_id);
+  weather_code_ = settings_.weather_code;
   if (applyKnownWeatherLocationDefaults(settings_)) {
     Serial.printf("[CFG] corrected known weather location city=%s lat=%s lon=%s\n",
                   settings_.weather_city.c_str(),
@@ -1867,6 +2141,11 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg, time_t now_epoch_overri
                     settings_.calendar_url.c_str());
       return false;
     }
+    if (file.size() == 0u || file.size() > kCalendarSourceMaxBytes) {
+      error_msg = "calendar_source_too_large";
+      file.close();
+      return false;
+    }
     body = file.readString();
     file.close();
     if (kDebugLogs) {
@@ -1895,8 +2174,12 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg, time_t now_epoch_overri
     }
 
     content_type = http.header("Content-Type");
-    body = http.getString();
+    const bool body_ok = readHttpBodyBounded(http, kCalendarSourceMaxBytes, body);
     http.end();
+    if (!body_ok) {
+      error_msg = "calendar_source_too_large";
+      return false;
+    }
     if (kDebugLogs) {
       Serial.printf("[CALSYNC] fetch ok code=%d bytes=%u content_type=%s elapsed=%lums\n",
                     http_code, static_cast<unsigned>(body.length()), content_type.c_str(),
@@ -1923,11 +2206,6 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg, time_t now_epoch_overri
                   static_cast<unsigned>(master_events.size()),
                   static_cast<unsigned>(override_events.size()));
   }
-  if (vevent_count == 0u) {
-    error_msg = "no_vevent";
-    return false;
-  }
-
   const time_t now_epoch = (now_epoch_override > 0) ? now_epoch_override : time(nullptr);
   if (now_epoch <= 0) {
     error_msg = "clock_invalid";
@@ -2019,21 +2297,16 @@ bool WifiManager::syncCalendarFromUrl(String &error_msg, time_t now_epoch_overri
   }
   calendar_month_summary_source_ = settings_.calendar_url;
 
-  const std::vector<CalendarEvent> normalized_imported;
-  const CalendarSyncMergeStats merge_stats =
-      CalendarSyncService::mergeImportedEvents(calendar_store_, normalized_imported);
   last_calendar_sync_epoch_ = time(nullptr);
   last_calendar_sync_status_ = "ok";
   last_calendar_sync_error_ = "";
-  last_calendar_sync_total_ =
-      static_cast<uint16_t>(std::min<size_t>(calendar_store_.count(), 65535u));
-  saveSettings();
-  Serial.printf("[CALSYNC] ok vevents=%u imported=%u month=%u stored_ics=%u kept_manual=%u total=%u elapsed=%lums window=%lu..%lu\n",
+  last_calendar_sync_total_ = static_cast<uint16_t>(calendar_month_summary_count_);
+  const bool cache_saved = saveCalendarMonthCache();
+  Serial.printf("[CALSYNC] ok vevents=%u imported=%u month=%u cache=%s manual=%u elapsed=%lums window=%lu..%lu\n",
                 static_cast<unsigned>(vevent_count),
                 static_cast<unsigned>(imported_items.size()),
                 static_cast<unsigned>(calendar_month_summary_count_),
-                static_cast<unsigned>(0),
-                static_cast<unsigned>(merge_stats.kept_manual),
+                cache_saved ? "saved" : "failed",
                 static_cast<unsigned>(calendar_store_.count()),
                 static_cast<unsigned long>(millis() - sync_start_ms),
                 static_cast<unsigned long>(window_start),
@@ -2207,6 +2480,209 @@ void WifiManager::initWebFs() {
   }
   web_fs_ready_ = SPIFFS.begin(false);
   Serial.printf("[WEB] SPIFFS init %s\n", web_fs_ready_ ? "ok" : "failed");
+}
+
+void WifiManager::clearCalendarMonthCache(bool remove_files) {
+  calendar_month_summary_count_ = 0;
+  calendar_month_summary_signature_ = 0;
+  calendar_month_summary_month_key_ = -1;
+  calendar_month_summary_source_ = "";
+  if (!remove_files) {
+    return;
+  }
+  initWebFs();
+  if (!web_fs_ready_) {
+    return;
+  }
+  SPIFFS.remove(kCalendarCachePath);
+  SPIFFS.remove(kCalendarCacheTempPath);
+  SPIFFS.remove(kCalendarCacheBackupPath);
+}
+
+bool WifiManager::loadCalendarMonthCacheFile(const char *path) {
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file || file.size() == 0u || file.size() > kCalendarCacheMaxBytes) {
+    if (file) file.close();
+    return false;
+  }
+
+  const size_t cache_bytes = file.size();
+  String magic = file.readStringUntil('\n');
+  magic.trim();
+  if (magic != kCalendarCacheMagic) {
+    file.close();
+    return false;
+  }
+
+  String header = file.readStringUntil('\n');
+  header.trim();
+  int cursor = 0;
+  auto nextField = [](const String &line, int &offset, String &value) -> bool {
+    if (offset < 0 || offset > static_cast<int>(line.length())) return false;
+    const int separator = line.indexOf('\t', offset);
+    if (separator < 0) {
+      value = line.substring(offset);
+      offset = static_cast<int>(line.length()) + 1;
+    } else {
+      value = line.substring(offset, separator);
+      offset = separator + 1;
+    }
+    return true;
+  };
+
+  String month_field;
+  String signature_field;
+  String count_field;
+  String source_field;
+  if (!nextField(header, cursor, month_field) ||
+      !nextField(header, cursor, signature_field) ||
+      !nextField(header, cursor, count_field) ||
+      !nextField(header, cursor, source_field)) {
+    file.close();
+    return false;
+  }
+  const int32_t month_key = static_cast<int32_t>(month_field.toInt());
+  const uint32_t stored_signature = static_cast<uint32_t>(strtoul(signature_field.c_str(), nullptr, 10));
+  const size_t expected_count = static_cast<size_t>(count_field.toInt());
+  const String source = urlDecode(source_field);
+  if (month_key <= 0 || expected_count > kMaxCalendarMonthSummaries ||
+      source.length() == 0u || source != settings_.calendar_url) {
+    file.close();
+    return false;
+  }
+
+  clearCalendarMonthCache(false);
+  uint32_t computed_signature = 2166136261UL;
+  while (file.available() && calendar_month_summary_count_ < expected_count) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0u) continue;
+    int field_cursor = 0;
+    String fields[5];
+    bool valid = true;
+    for (uint8_t i = 0; i < 5u; ++i) {
+      if (!nextField(line, field_cursor, fields[i])) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      clearCalendarMonthCache(false);
+      file.close();
+      return false;
+    }
+    CalendarMonthSummaryEvent &event =
+        calendar_month_summaries_[calendar_month_summary_count_++];
+    event.date = urlDecode(fields[0]);
+    event.time_hhmm = urlDecode(fields[1]);
+    event.end_time_hhmm = urlDecode(fields[2]);
+    event.color = urlDecode(fields[3]);
+    event.title = urlDecode(fields[4]);
+    mixCalendarHashString(computed_signature, event.date);
+    mixCalendarHashString(computed_signature, event.time_hhmm);
+    mixCalendarHashString(computed_signature, event.end_time_hhmm);
+    mixCalendarHashString(computed_signature, event.color);
+    mixCalendarHashString(computed_signature, event.title);
+  }
+  file.close();
+  mixCalendarHashInt(computed_signature,
+                     static_cast<uint32_t>(calendar_month_summary_count_));
+  if (calendar_month_summary_count_ != expected_count ||
+      computed_signature != stored_signature) {
+    clearCalendarMonthCache(false);
+    return false;
+  }
+
+  calendar_month_summary_signature_ = stored_signature;
+  calendar_month_summary_month_key_ = month_key;
+  calendar_month_summary_source_ = source;
+  last_calendar_sync_status_ = "cached";
+  last_calendar_sync_total_ = static_cast<uint16_t>(calendar_month_summary_count_);
+  Serial.printf("[CALCACHE] loaded path=%s month=%ld count=%u bytes=%u\n", path,
+                static_cast<long>(month_key),
+                static_cast<unsigned>(calendar_month_summary_count_),
+                static_cast<unsigned>(cache_bytes));
+  return true;
+}
+
+bool WifiManager::loadCalendarMonthCache() {
+  if (settings_.calendar_url.length() == 0u) {
+    clearCalendarMonthCache(true);
+    return false;
+  }
+  initWebFs();
+  if (!web_fs_ready_) return false;
+  if (SPIFFS.exists(kCalendarCachePath) && loadCalendarMonthCacheFile(kCalendarCachePath)) {
+    return true;
+  }
+  if (SPIFFS.exists(kCalendarCacheBackupPath) &&
+      loadCalendarMonthCacheFile(kCalendarCacheBackupPath)) {
+    SPIFFS.remove(kCalendarCachePath);
+    SPIFFS.rename(kCalendarCacheBackupPath, kCalendarCachePath);
+    return true;
+  }
+  clearCalendarMonthCache(true);
+  return false;
+}
+
+bool WifiManager::saveCalendarMonthCache() {
+  if (calendar_month_summary_source_.length() == 0u ||
+      calendar_month_summary_month_key_ <= 0) {
+    return false;
+  }
+  initWebFs();
+  if (!web_fs_ready_) return false;
+
+  SPIFFS.remove(kCalendarCacheTempPath);
+  File file = SPIFFS.open(kCalendarCacheTempPath, FILE_WRITE);
+  if (!file) return false;
+  file.println(kCalendarCacheMagic);
+  file.print(calendar_month_summary_month_key_);
+  file.print('\t');
+  file.print(calendar_month_summary_signature_);
+  file.print('\t');
+  file.print(calendar_month_summary_count_);
+  file.print('\t');
+  file.println(urlEncode(calendar_month_summary_source_));
+  for (size_t i = 0; i < calendar_month_summary_count_; ++i) {
+    const CalendarMonthSummaryEvent &event = calendar_month_summaries_[i];
+    file.print(urlEncode(event.date));
+    file.print('\t');
+    file.print(urlEncode(event.time_hhmm));
+    file.print('\t');
+    file.print(urlEncode(event.end_time_hhmm));
+    file.print('\t');
+    file.print(urlEncode(event.color));
+    file.print('\t');
+    file.println(urlEncode(event.title));
+  }
+  file.flush();
+  const bool write_ok = file.getWriteError() == 0 && file.size() <= kCalendarCacheMaxBytes;
+  const size_t written_bytes = file.size();
+  file.close();
+  if (!write_ok) {
+    SPIFFS.remove(kCalendarCacheTempPath);
+    return false;
+  }
+
+  SPIFFS.remove(kCalendarCacheBackupPath);
+  if (SPIFFS.exists(kCalendarCachePath) &&
+      !SPIFFS.rename(kCalendarCachePath, kCalendarCacheBackupPath)) {
+    SPIFFS.remove(kCalendarCacheTempPath);
+    return false;
+  }
+  if (!SPIFFS.rename(kCalendarCacheTempPath, kCalendarCachePath)) {
+    if (SPIFFS.exists(kCalendarCacheBackupPath)) {
+      SPIFFS.rename(kCalendarCacheBackupPath, kCalendarCachePath);
+    }
+    return false;
+  }
+  SPIFFS.remove(kCalendarCacheBackupPath);
+  Serial.printf("[CALCACHE] saved month=%ld count=%u bytes=%u\n",
+                static_cast<long>(calendar_month_summary_month_key_),
+                static_cast<unsigned>(calendar_month_summary_count_),
+                static_cast<unsigned>(written_bytes));
+  return true;
 }
 
 bool WifiManager::serveWebAsset(const char *path, const char *content_type) {
@@ -2527,8 +3003,6 @@ int WifiManager::readBatteryMilliVolts(int pin) const {
   return raw_mv * 2;
 }
 
-void WifiManager::detectBatteryPin() {}
-
 float WifiManager::estimateBatteryPercent(int battery_mv) const {
   if (battery_mv <= 0) {
     return -1.0f;
@@ -2568,889 +3042,6 @@ void WifiManager::handleRoot() {
       "</body></html>";
   server_->send(200, "text/html; charset=utf-8", fallback);
   return;
-  String html;
-  html.reserve(18000);
-  html += R"HTML(
-<!doctype html>
-<html>
-<head>
-  <meta charset='utf-8'>
-  <meta name='viewport' content='width=device-width,initial-scale=1'>
-  <title>E-paper 管理台</title>
-  <style>
-    :root {
-      --bg1:#eef3f8;
-      --bg2:#f7f9fc;
-      --card:#ffffffd9;
-      --line:#d7dee7;
-      --text:#1f2a36;
-      --muted:#5d6b79;
-      --accent:#0f7ae5;
-      --accent2:#2aa3f7;
-      --danger:#df4d4d;
-      --shadow:0 10px 24px rgba(17,34,68,.08);
-      --soft:#eef5fc;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin:0;
-      font-family:"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
-      background:
-        radial-gradient(1200px 500px at -10% -20%, #d5e7ff 0%, transparent 60%),
-        radial-gradient(1000px 600px at 110% -10%, #d8f1ff 0%, transparent 60%),
-        linear-gradient(180deg,var(--bg1),var(--bg2));
-      color:var(--text);
-      min-height:100vh;
-    }
-    .wrap { max-width: 980px; margin: 20px auto; padding: 0 12px; }
-    .top {
-      background:var(--card);
-      border:1px solid var(--line);
-      border-radius:14px;
-      padding:14px;
-      margin-bottom:12px;
-      backdrop-filter: blur(3px);
-      box-shadow: var(--shadow);
-    }
-    .title { font-size:24px; font-weight:700; margin-bottom:6px; letter-spacing:.3px; }
-    .meta { color:var(--muted); font-size:14px; }
-    .tabs { display:flex; gap:8px; margin-top:10px; }
-    .tab-btn {
-      border:1px solid var(--line);
-      background:#fff;
-      color:var(--text);
-      padding:8px 13px;
-      border-radius:10px;
-      cursor:pointer;
-      transition:.2s ease;
-    }
-    .tab-btn:hover { transform: translateY(-1px); border-color:#b9c7d6; }
-    .tab-btn.active {
-      background: linear-gradient(135deg,var(--accent),var(--accent2));
-      color:#fff;
-      border-color:transparent;
-      box-shadow: 0 4px 12px rgba(15,122,229,.28);
-    }
-    .card {
-      background:var(--card);
-      border:1px solid var(--line);
-      border-radius:14px;
-      padding:14px;
-      margin-bottom:12px;
-      backdrop-filter: blur(3px);
-      box-shadow: var(--shadow);
-    }
-    .tab-panel { display:none; }
-    .tab-panel.active { display:block; }
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    .field label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
-    .field input {
-      width:100%;
-      padding:9px 10px;
-      border:1px solid var(--line);
-      border-radius:10px;
-      background:#fff;
-      transition:.2s ease;
-    }
-    .field input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(15,122,229,.12); }
-    .btn {
-      padding:8px 12px;
-      border:1px solid var(--line);
-      border-radius:10px;
-      background:#fff;
-      cursor:pointer;
-      transition:.2s ease;
-    }
-    .btn:hover { transform: translateY(-1px); }
-    .btn.primary { background: linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; border-color:transparent; }
-    .btn.warn { background: var(--danger); color:#fff; border-color:var(--danger); }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    pre {
-      margin:0;
-      padding:10px;
-      background:#f5f7fa;
-      border:1px solid var(--line);
-      border-radius:10px;
-      overflow:auto;
-      line-height:1.45;
-    }
-    table { width:100%; border-collapse:collapse; margin-top:8px; }
-    th,td { padding:8px; border-bottom:1px solid var(--line); text-align:left; font-size:14px; }
-    th { color:var(--muted); font-weight:600; }
-    .small { font-size:12px; color:#6b7785; }
-    .status-grid { display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:10px; margin-top:10px; }
-    .status-item { border:1px solid var(--line); border-radius:10px; background:#f7f9fc; padding:10px; }
-    .status-item .k { font-size:12px; color:var(--muted); margin-bottom:4px; }
-    .status-item .v { font-size:16px; font-weight:600; color:var(--text); }
-    .notice {
-      margin-top:10px;
-      padding:10px 12px;
-      border:1px solid #cfe0f3;
-      background:#f3f8fe;
-      border-radius:10px;
-      color:#37516d;
-      white-space:pre-wrap;
-      display:none;
-    }
-    .path-bar {
-      display:flex;
-      gap:8px;
-      align-items:center;
-      justify-content:space-between;
-      flex-wrap:wrap;
-      margin-bottom:10px;
-    }
-    .path-tools { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .crumbs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-    .crumb {
-      border:1px solid var(--line);
-      background:var(--soft);
-      color:var(--text);
-      padding:6px 10px;
-      border-radius:999px;
-      cursor:pointer;
-    }
-    .crumb.current { background:#fff; font-weight:600; }
-    .quick-links { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-    .file-table td.actions { width:220px; }
-    .name-btn {
-      border:none;
-      background:none;
-      color:var(--text);
-      cursor:pointer;
-      padding:0;
-      font:inherit;
-      text-align:left;
-    }
-    .name-btn.dir { color:var(--accent); font-weight:600; }
-    .badge {
-      display:inline-block;
-      min-width:56px;
-      padding:4px 8px;
-      border-radius:999px;
-      background:#eef4fb;
-      color:#46627f;
-      font-size:12px;
-      text-align:center;
-    }
-    .badge.dir { background:#dff0ff; color:#185b91; }
-    .upload-extra {
-      margin-top:10px;
-      padding:12px;
-      border:1px solid var(--line);
-      border-radius:12px;
-      background:#f8fbff;
-      display:none;
-    }
-    .upload-extra.show { display:block; }
-    .hint-line { margin-top:8px; font-size:12px; color:#617180; line-height:1.6; }
-    .tooltip {
-      position:relative;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      width:18px;
-      height:18px;
-      border-radius:50%;
-      border:1px solid #b9c7d6;
-      color:#4c6075;
-      font-size:12px;
-      cursor:help;
-      background:#fff;
-    }
-    .tooltip .tip {
-      position:absolute;
-      left:50%;
-      bottom:calc(100% + 8px);
-      transform:translateX(-50%);
-      width:min(320px, 80vw);
-      padding:10px 12px;
-      border-radius:10px;
-      background:#1f2a36;
-      color:#fff;
-      font-size:12px;
-      line-height:1.6;
-      box-shadow:0 10px 24px rgba(17,34,68,.22);
-      opacity:0;
-      pointer-events:none;
-      transition:.18s ease;
-      white-space:normal;
-      z-index:10;
-    }
-    .tooltip:hover .tip { opacity:1; }
-    .range-wrap { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-    .range-wrap input[type='range'] { width:200px; }
-    .mode-note {
-      margin-top:8px;
-      padding:8px 10px;
-      border-radius:10px;
-      background:#fff;
-      border:1px dashed #c9d7e6;
-      color:#5b6a78;
-      font-size:12px;
-      line-height:1.5;
-    }
-    @media (max-width: 700px) {
-      .grid2 { grid-template-columns:1fr; }
-      .status-grid { grid-template-columns:1fr; }
-      .file-table td.actions { width:auto; }
-    }
-  </style>
-</head>
-<body>
-  <div class='wrap'>
-    <div class='top'>
-      <div class='title'>E-paper 管理台</div>
-      <div class='meta'>默认首页：设备状态</div>
-      <div class='tabs'>
-        <button class='tab-btn active' data-tab='status'>设备状态</button>
-        <button class='tab-btn' data-tab='config'>配置</button>
-        <button class='tab-btn' data-tab='files'>目录</button>
-      </div>
-    </div>
-
-    <section id='tab-status' class='tab-panel active'>
-      <div class='card'>
-        <div class='row'>
-          <button class='btn primary' onclick='loadStatus()'>刷新状态</button>
-          <button class='btn warn' onclick='stopPortal()'>停止 WiFi 门户</button>
-        </div>
-        <div class='small' style='margin-top:8px'>当前设备状态</div>
-        <div class='status-grid'>
-          <div class='status-item'><div class='k'>运行模式</div><div class='v' id='st_mode'>--</div></div>
-          <div class='status-item'><div class='k'>设备 IP</div><div class='v' id='st_ip'>--</div></div>
-          <div class='status-item'><div class='k'>AP IP</div><div class='v' id='st_apip'>--</div></div>
-          <div class='status-item'><div class='k'>SD 卡状态</div><div class='v' id='st_sd'>--</div></div>
-          <div class='status-item'><div class='k'>已运行时长</div><div class='v' id='st_uptime'>--</div></div>
-          <div class='status-item'><div class='k'>超时剩余</div><div class='v' id='st_timeout'>--</div></div>
-          <div class='status-item'><div class='k'>温度</div><div class='v' id='st_temp'>未接入</div></div>
-          <div class='status-item'><div class='k'>电量</div><div class='v' id='st_battery'>未接入</div></div>
-        </div>
-        <div id='statusNote' class='notice'></div>
-      </div>
-    </section>
-
-    <section id='tab-config' class='tab-panel'>
-      <div class='card'>
-        <div class='grid2'>
-          <div class='field'><label>STA SSID</label><input id='ssid'></div>
-          <div class='field'><label>STA 密码</label><input id='pass' type='password'></div>
-          <div class='field'><label>账号 / 身份</label><input id='staUser'></div>
-          <div class='field'><label>连接类型</label><select id='staAuthMode'><option value='auto'>自动</option><option value='personal'>普通密码 WiFi</option><option value='enterprise'>企业/校园网 802.1X</option><option value='open'>开放网络</option></select></div>
-          <div class='field'><label>轮播间隔（小时）</label><input id='sec' type='number' min='0.01' max='24' step='0.01' placeholder='2'></div>
-          <div class='field' style='grid-column:1/3'><label>天气接口 URL</label><input id='wurl'></div>
-        </div>
-        <div class='row' style='margin-top:10px'>
-          <button class='btn primary' onclick='saveCfg()'>保存配置</button>
-          <button class='btn' onclick='testWeather()'>测试天气服务</button>
-        </div>
-        <pre id='cfgBox' style='margin-top:8px'>等待操作...</pre>
-      </div>
-    </section>
-
-    <section id='tab-files' class='tab-panel'>
-      <div class='card'>
-        <div class='path-bar'>
-          <div class='path-tools'>
-            <button class='btn' onclick='goRoot()'>根目录</button>
-            <button class='btn' onclick='goUpDir()'>上一级</button>
-            <button class='btn primary' onclick='listFiles()'>刷新目录</button>
-          </div>
-          <div class='small'>双击目录名或点击进入按钮即可浏览下一层</div>
-        </div>
-        <div id='crumbs' class='crumbs'></div>
-        <div class='quick-links'>
-          <button class='btn' onclick='openDir("/pic")'>图片目录 /pic</button>
-          <button class='btn' onclick='openDir("/")'>存储根目录 /</button>
-        </div>
-        <table class='file-table'>
-          <thead><tr><th>名称</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
-          <tbody id='fileRows'></tbody>
-        </table>
-        <div class='small' id='fileSummary' style='margin-top:8px'>等待加载...</div>
-      </div>
-      <div class='card'>
-        <div class='row'>
-          <input id='uploadFile' type='file'>
-          <select id='uploadMode' style='padding:8px;border:1px solid var(--line);border-radius:8px;min-width:220px;'>
-            <option value='normal'>普通文件上传</option>
-            <option value='fit'>图片缩放上传</option>
-            <option value='crop'>图片裁剪上传</option>
-          </select>
-          <button class='btn primary' onclick='uploadFile()'>执行上传</button>
-        </div>
-        <div id='uploadExtra' class='upload-extra'>
-          <div class='grid2'>
-            <div class='field'>
-              <label>抖动算法</label>
-              <select id='ditherMode' style='padding:8px;border:1px solid var(--line);border-radius:8px;'>
-                <option value='atkinson' selected>Atkinson（插画 / 图标推荐）</option>
-                <option value='fs_serpentine'>Floyd-Steinberg（通用 / 人像推荐）</option>
-              </select>
-              <div id='ditherHint' class='hint-line'></div>
-            </div>
-            <div class='field'>
-              <label style='display:flex;align-items:center;gap:6px;'>
-                Gamma
-                <span class='tooltip'>?
-                  <span class='tip'>推荐值：1.00 为默认通用值；0.90-0.98 适合偏暗照片，可提亮暗部；1.05-1.15 适合风景或高亮场景，层次更稳；高于 1.20 会让画面更重、更深，但暗部细节更容易丢失；低于 0.90 会整体更亮，但可能发灰、对比下降。</span>
-                </span>
-              </label>
-              <div class='range-wrap'>
-                <input id='gammaCtrl' type='range' min='0.80' max='1.40' step='0.01' value='1.00'>
-                <span id='gammaVal'>1.00</span>
-              </div>
-              <div id='gammaHint' class='hint-line'></div>
-            </div>
-          </div>
-          <div id='modeNote' class='mode-note'></div>
-        </div>
-        <pre id='uploadBox' style='margin-top:8px'>等待上传...</pre>
-      </div>
-    </section>
-  </div>
-
-  <script>
-    const tabs = [...document.querySelectorAll('.tab-btn')];
-    const panels = {
-      status: document.getElementById('tab-status'),
-      config: document.getElementById('tab-config'),
-      files: document.getElementById('tab-files'),
-    };
-    tabs.forEach(btn => btn.addEventListener('click', () => {
-      tabs.forEach(b => b.classList.remove('active'));
-      Object.values(panels).forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      panels[btn.dataset.tab].classList.add('active');
-    }));
-    const statusNote = document.getElementById('statusNote');
-    const crumbs = document.getElementById('crumbs');
-    const fileRows = document.getElementById('fileRows');
-    const fileSummary = document.getElementById('fileSummary');
-    const gammaCtrl = document.getElementById('gammaCtrl');
-    const gammaVal = document.getElementById('gammaVal');
-    const uploadModeSel = document.getElementById('uploadMode');
-    const ditherModeSel = document.getElementById('ditherMode');
-    const uploadExtra = document.getElementById('uploadExtra');
-    const uploadBtn = document.querySelector("button[onclick='uploadFile()']");
-    const uploadBox = document.getElementById('uploadBox');
-    const ditherHint = document.getElementById('ditherHint');
-    const gammaHint = document.getElementById('gammaHint');
-    const modeNote = document.getElementById('modeNote');
-    let currentDir = '/pic';
-
-    function setNotice(text) {
-      if (!statusNote) return;
-      if (!text) {
-        statusNote.style.display = 'none';
-        statusNote.textContent = '';
-        return;
-      }
-      statusNote.style.display = 'block';
-      statusNote.textContent = text;
-    }
-
-    const syncGammaLabel = () => {
-      if (!gammaCtrl || !gammaVal) return;
-      const g = Number.parseFloat(gammaCtrl.value);
-      gammaVal.textContent = Number.isFinite(g) ? g.toFixed(2) : '1.00';
-    };
-    const ditherAdvice = {
-      fs_serpentine: '通用默认。人像、日常照片优先用这个，边缘和肤色过渡更自然。',
-      atkinson: '对比更干净，适合图标、漫画、线稿和高反差插画。'
-    };
-    function normalizeDir(path) {
-      let out = path || '/';
-      if (!out.startsWith('/')) out = '/' + out;
-      out = out.replace(/\/+/g, '/');
-      if (out.length > 1 && out.endsWith('/')) out = out.slice(0, -1);
-      return out || '/';
-    }
-    function parentDir(path) {
-      const dir = normalizeDir(path);
-      if (dir === '/') return '/';
-      const idx = dir.lastIndexOf('/');
-      return idx <= 0 ? '/' : dir.slice(0, idx);
-    }
-    function joinPath(dir, name){
-      const base = normalizeDir(dir);
-      if (!name) return base;
-      if (name.startsWith('/')) return normalizeDir(name);
-      return normalizeDir((base === '/' ? '' : base) + '/' + name);
-    }
-    function formatSize(bytes) {
-      const n = Number(bytes || 0);
-      if (n < 1024) return `${n} B`;
-      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-      return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-    }
-    function renderBreadcrumb(path) {
-      const dir = normalizeDir(path);
-      crumbs.innerHTML = '';
-      const parts = dir === '/' ? [] : dir.slice(1).split('/');
-      const rootBtn = document.createElement('button');
-      rootBtn.className = 'crumb' + (dir === '/' ? ' current' : '');
-      rootBtn.textContent = '/';
-      rootBtn.onclick = () => openDir('/');
-      crumbs.appendChild(rootBtn);
-      let acc = '';
-      parts.forEach((part, idx) => {
-        const sep = document.createElement('span');
-        sep.className = 'small';
-        sep.textContent = '/';
-        crumbs.appendChild(sep);
-        acc += '/' + part;
-        const btn = document.createElement('button');
-        btn.className = 'crumb' + (idx === parts.length - 1 ? ' current' : '');
-        btn.textContent = part;
-        const target = acc;
-        btn.onclick = () => openDir(target);
-        crumbs.appendChild(btn);
-      });
-    }
-    function syncGammaHint() {
-      if (!gammaHint || !gammaCtrl) return;
-      const g = Number.parseFloat(gammaCtrl.value);
-      if (!Number.isFinite(g)) {
-        gammaHint.textContent = '当前为默认值。';
-      } else if (g < 0.95) {
-        gammaHint.textContent = '当前偏亮：暗部会被抬起，适合原图偏暗，但可能降低整体对比。';
-      } else if (g <= 1.08) {
-        gammaHint.textContent = '当前均衡：适合作为通用起点，先看效果再微调。';
-      } else if (g <= 1.20) {
-        gammaHint.textContent = '当前偏重：中间调和颜色更扎实，适合风景和高亮场景。';
-      } else {
-        gammaHint.textContent = '当前较重：画面对比更强，但暗部细节更容易丢失。';
-      }
-    }
-    function syncUploadOptions() {
-      const mode = uploadModeSel ? uploadModeSel.value : 'normal';
-      const isImageMode = mode === 'fit' || mode === 'crop';
-      if (uploadExtra) uploadExtra.classList.toggle('show', isImageMode);
-      if (ditherHint && ditherModeSel) {
-        ditherHint.textContent = ditherAdvice[ditherModeSel.value] || '';
-      }
-      if (modeNote) {
-        if (mode === 'normal') {
-          modeNote.textContent = '普通文件上传会直接保存到当前浏览目录。';
-        } else if (mode === 'fit') {
-          modeNote.textContent = '图片缩放上传会按比例适配到 800x480，并生成 .epd4 文件后保存到 /pic。';
-        } else {
-          modeNote.textContent = '图片裁剪上传会优先铺满 800x480，可能裁掉边缘，再生成 .epd4 文件后保存到 /pic。';
-        }
-      }
-      syncGammaHint();
-    }
-    if (uploadModeSel) {
-      uploadModeSel.value = 'normal';
-      uploadModeSel.addEventListener('change', syncUploadOptions);
-    }
-    if (ditherModeSel) {
-      ditherModeSel.value = 'atkinson';
-      ditherModeSel.addEventListener('change', syncUploadOptions);
-    }
-    if (gammaCtrl) {
-      gammaCtrl.addEventListener('input', syncGammaLabel);
-      gammaCtrl.addEventListener('input', syncGammaHint);
-    }
-    syncGammaLabel();
-    syncUploadOptions();
-
-    function fmtMs(ms){
-      const s = Math.floor((ms||0)/1000);
-      const h = Math.floor(s/3600);
-      const m = Math.floor((s%3600)/60);
-      const ss = s%60;
-      return `${h}h ${m}m ${ss}s`;
-    }
-    function secondsToHoursValue(seconds, fallbackSeconds) {
-      const sec = Number(seconds || fallbackSeconds || 0);
-      if (!Number.isFinite(sec) || sec <= 0) return '';
-      const hours = Math.round((sec / 3600) * 100) / 100;
-      return String(hours);
-    }
-    function hoursToSecondsValue(value, fallbackSeconds, minSeconds, maxSeconds) {
-      const hours = Number.parseFloat(String(value || '').trim().replace(',', '.'));
-      let seconds = Number.isFinite(hours) && hours > 0 ? Math.round(hours * 3600) : fallbackSeconds;
-      if (!Number.isFinite(seconds) || seconds <= 0) seconds = fallbackSeconds;
-      if (seconds < minSeconds) seconds = minSeconds;
-      if (seconds > maxSeconds) seconds = maxSeconds;
-      return String(seconds);
-    }
-    async function loadStatus() {
-      const r = await fetch('/api/status');
-      const txt = await r.text();
-      try {
-        const j = JSON.parse(txt);
-        document.getElementById('st_mode').textContent = j.state || '--';
-        document.getElementById('st_ip').textContent = j.ip || '--';
-        document.getElementById('st_apip').textContent = j.ap_ip || '--';
-        document.getElementById('st_sd').textContent = j.sd_ready ? '已挂载' : '未挂载';
-        document.getElementById('st_uptime').textContent = fmtMs(j.uptime_ms || 0);
-        const tmo = j.idle_remaining_ms ?? j.connect_remaining_ms ?? j.session_remaining_ms ?? 0;
-        document.getElementById('st_timeout').textContent = fmtMs(tmo);
-        document.getElementById('st_temp').textContent = (typeof j.temperature_c === 'number' && j.temperature_c >= -100) ? `${j.temperature_c.toFixed(1)} °C` : '未接入';
-        const mv = Number(j.battery_mv || 0);
-        const pct = Number(j.battery_pct);
-        const pin = j.battery_pin ?? '?';
-        if (mv > 0 && Number.isFinite(pct) && pct > 0.1) {
-          document.getElementById('st_battery').textContent = `${pct.toFixed(1)}%（${mv} mV，IO${pin}）`;
-        } else if (mv > 0) {
-          document.getElementById('st_battery').textContent = `${mv} mV（IO${pin}，仅显示电压）`;
-        } else {
-          document.getElementById('st_battery').textContent = '未接入';
-        }
-        setNotice('');
-      } catch {
-        setNotice(txt || '状态读取失败');
-      }
-    }
-
-    async function loadCfg() {
-      const r = await fetch('/api/settings');
-      const j = await r.json();
-      ssid.value = j.sta_ssid || '';
-      staUser.value = j.sta_user || '';
-      pass.value = j.sta_pass || '';
-      staAuthMode.value = j.sta_auth_mode || 'auto';
-      sec.value = secondsToHoursValue(j.photo_interval_sec, 7200);
-      wurl.value = j.weather_url || '';
-    }
-
-    async function saveCfg() {
-      const photoInterval = hoursToSecondsValue(sec.value, 7200, 30, 86400);
-      const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser.value)}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(staAuthMode.value)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&weather_url=${encodeURIComponent(wurl.value)}`;
-      const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
-      document.getElementById('cfgBox').textContent = await r.text();
-    }
-
-    async function testWeather() {
-      const r = await fetch('/api/weather_test');
-      document.getElementById('cfgBox').textContent = await r.text();
-    }
-
-    async function stopPortal() {
-      const r = await fetch('/api/stop', { method:'POST' });
-      const txt = await r.text();
-      let msg = '停止请求已发送。';
-      try {
-        const j = JSON.parse(txt);
-        if (j && j.ok) {
-          msg = j.stopping ? '停止请求已发送，WiFi 门户即将关闭。' : '请求已完成。';
-        }
-      } catch {}
-      setNotice(msg);
-    }
-
-    async function openDir(path) {
-      currentDir = normalizeDir(path);
-      await listFiles(currentDir);
-    }
-    function goRoot() {
-      openDir('/');
-    }
-    function goUpDir() {
-      openDir(parentDir(currentDir));
-    }
-    async function listFiles(path) {
-      const dir = normalizeDir(path || currentDir || '/pic');
-      currentDir = dir;
-      renderBreadcrumb(dir);
-      const r = await fetch('/api/files?path=' + encodeURIComponent(dir));
-      const txt = await r.text();
-      let j = null;
-      try { j = JSON.parse(txt); } catch {}
-      fileRows.innerHTML = '';
-      if (!j || !j.ok || !Array.isArray(j.items)) {
-        fileSummary.textContent = txt || '目录读取失败';
-        return;
-      }
-      currentDir = normalizeDir(j.path || dir);
-      renderBreadcrumb(currentDir);
-      const items = [...j.items].sort((a, b) => {
-        if (!!a.dir !== !!b.dir) return a.dir ? -1 : 1;
-        return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
-      });
-      let count = 0;
-      items.forEach(it => {
-        count++;
-        const p = joinPath(currentDir, it.name || '');
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td></td><td>${it.dir ? '--' : formatSize(it.size || 0)}</td><td><span class="badge${it.dir ? ' dir' : ''}">${it.dir ? '目录' : '文件'}</span></td><td class='actions'></td>`;
-        const nameCell = tr.children[0];
-        const nameBtn = document.createElement('button');
-        nameBtn.className = 'name-btn' + (it.dir ? ' dir' : '');
-        nameBtn.textContent = it.name || '';
-        if (it.dir) {
-          nameBtn.onclick = () => openDir(p);
-          nameBtn.ondblclick = () => openDir(p);
-        } else {
-          nameBtn.onclick = () => window.open('/api/file?path=' + encodeURIComponent(p), '_blank');
-        }
-        nameCell.appendChild(nameBtn);
-        const ops = tr.children[3];
-        if (it.dir) {
-          const openBtn = document.createElement('button');
-          openBtn.className = 'btn';
-          openBtn.textContent = '进入';
-          openBtn.onclick = () => openDir(p);
-          ops.appendChild(openBtn);
-        } else {
-          const a = document.createElement('a');
-          a.href = '/api/file?path=' + encodeURIComponent(p);
-          a.textContent = '下载';
-          a.style.marginRight = '8px';
-          ops.appendChild(a);
-          const del = document.createElement('button');
-          del.className = 'btn';
-          del.textContent = '删除';
-          del.onclick = async () => {
-            const rr = await fetch('/api/file?path=' + encodeURIComponent(p), { method:'DELETE' });
-            alert(await rr.text());
-            listFiles(currentDir);
-          };
-          ops.appendChild(del);
-        }
-        fileRows.appendChild(tr);
-      });
-      fileSummary.textContent = `当前位置：${currentDir}，共 ${count} 项`;
-    }
-
-    function dist2Weighted(a, b) {
-      const dr = a[0] - b[0];
-      const dg = a[1] - b[1];
-      const db = a[2] - b[2];
-      return 3 * dr * dr + 6 * dg * dg + db * db;
-    }
-
-    function nearestTwoPalette(rgb, palette) {
-      let first = 0;
-      let second = 0;
-      let best = Number.MAX_SAFE_INTEGER;
-      let next = Number.MAX_SAFE_INTEGER;
-      for (let pi = 0; pi < palette.length; pi++) {
-        const d = dist2Weighted(rgb, palette[pi].rgb);
-        if (d < best) {
-          next = best;
-          second = first;
-          best = d;
-          first = pi;
-        } else if (d < next) {
-          next = d;
-          second = pi;
-        }
-      }
-      return { first, second, best, next };
-    }
-
-    function quantizeImageToEpd4(rgba, W, H, palette, ditherMode, gammaValue) {
-      const out = new Uint8Array((W * H) >> 1);
-      const pix = new Uint8Array(W * H);
-
-      // Error-diffusion working buffer.
-      const work = new Float32Array(W * H * 3);
-      const gamma = (Number.isFinite(gammaValue) && gammaValue > 0) ? gammaValue : 1.0;
-      const invGamma = 1.0 / gamma;
-      for (let i = 0, p = 0; i < W * H; i++, p += 4) {
-        const a = rgba[p + 3];
-        let r = (a < 8) ? 255 : rgba[p + 0];
-        let g = (a < 8) ? 255 : rgba[p + 1];
-        let b = (a < 8) ? 255 : rgba[p + 2];
-        r = 255 * Math.pow(r / 255, invGamma);
-        g = 255 * Math.pow(g / 255, invGamma);
-        b = 255 * Math.pow(b / 255, invGamma);
-        work[i * 3 + 0] = r;
-        work[i * 3 + 1] = g;
-        work[i * 3 + 2] = b;
-      }
-
-      const clamp255 = (v) => (v < 0 ? 0 : (v > 255 ? 255 : v));
-      const addErr = (x, y, er, eg, eb, ratio) => {
-        if (x < 0 || x >= W || y < 0 || y >= H) return;
-        const idx = (y * W + x) * 3;
-        work[idx + 0] += er * ratio;
-        work[idx + 1] += eg * ratio;
-        work[idx + 2] += eb * ratio;
-      };
-
-      const mode = (ditherMode || 'atkinson').toLowerCase();
-      for (let y = 0; y < H; y++) {
-        const reverse = (mode === 'fs_serpentine') && ((y & 1) === 1);
-        const xStart = reverse ? (W - 1) : 0;
-        const xEnd = reverse ? -1 : W;
-        const step = reverse ? -1 : 1;
-        for (let x = xStart; x !== xEnd; x += step) {
-          const wi = (y * W + x) * 3;
-          const rgb = [
-            clamp255(work[wi + 0]),
-            clamp255(work[wi + 1]),
-            clamp255(work[wi + 2]),
-          ];
-          const pick = nearestTwoPalette(rgb, palette);
-          const chosen = palette[pick.first].rgb;
-          const er = rgb[0] - chosen[0];
-          const eg = rgb[1] - chosen[1];
-          const eb = rgb[2] - chosen[2];
-          pix[y * W + x] = palette[pick.first].nib;
-
-          if (mode === 'fs_serpentine') {
-            if (!reverse) {
-              addErr(x + 1, y, er, eg, eb, 7 / 16);
-              addErr(x - 1, y + 1, er, eg, eb, 3 / 16);
-              addErr(x, y + 1, er, eg, eb, 5 / 16);
-              addErr(x + 1, y + 1, er, eg, eb, 1 / 16);
-            } else {
-              addErr(x - 1, y, er, eg, eb, 7 / 16);
-              addErr(x + 1, y + 1, er, eg, eb, 3 / 16);
-              addErr(x, y + 1, er, eg, eb, 5 / 16);
-              addErr(x - 1, y + 1, er, eg, eb, 1 / 16);
-            }
-          } else if (mode === 'atkinson') {
-            const r = 1 / 8;
-            addErr(x + 1, y, er, eg, eb, r);
-            addErr(x + 2, y, er, eg, eb, r);
-            addErr(x - 1, y + 1, er, eg, eb, r);
-            addErr(x, y + 1, er, eg, eb, r);
-            addErr(x + 1, y + 1, er, eg, eb, r);
-            addErr(x, y + 2, er, eg, eb, r);
-        }
-      }
-      let outIdx = 0;
-      for (let i = 0; i < W * H; i += 2) {
-        out[outIdx++] = ((pix[i] & 0x0F) << 4) | (pix[i + 1] & 0x0F);
-      }
-      return out;
-    }
-
-    async function preprocessImageToEpd4Blob(file, cropMode, ditherMode = 'atkinson', gammaValue = 1.0) {
-      const img = new Image();
-      const dataUrl = await new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(fr.result);
-        fr.onerror = () => reject(new Error('read_failed'));
-        fr.readAsDataURL(file);
-      });
-      await new Promise((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('decode_failed'));
-        img.src = dataUrl;
-      });
-
-      const W = 800;
-      const H = 480;
-      const canvas = document.createElement('canvas');
-      canvas.width = W;
-      canvas.height = H;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const srcLandscape = img.width >= img.height;
-      const frameLandscape = W >= H;
-      const rotate90 = (srcLandscape !== frameLandscape);
-      const srcW = rotate90 ? img.height : img.width;
-      const srcH = rotate90 ? img.width : img.height;
-      const sx = W / srcW;
-      const sy = H / srcH;
-      const scale = cropMode ? Math.max(sx, sy) : Math.min(sx, sy);
-      const dw = srcW * scale;
-      const dh = srcH * scale;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, W, H);
-      if (!rotate90) {
-        const dx = (W - dw) * 0.5;
-        const dy = (H - dh) * 0.5;
-        ctx.drawImage(img, dx, dy, dw, dh);
-      } else {
-        // Rotate portrait input to landscape first, then apply fit/crop scaling.
-        // Use -90deg to match expected orientation on this frame.
-        ctx.save();
-        ctx.translate(W * 0.5, H * 0.5);
-        ctx.rotate(-Math.PI / 2);
-        ctx.drawImage(img, -dh * 0.5, -dw * 0.5, dh, dw);
-        ctx.restore();
-      }
-      const rgba = ctx.getImageData(0, 0, W, H).data;
-
-      const paletteNative = [
-        { rgb:[0,0,0], nib:0x00 },
-        { rgb:[255,255,255], nib:0x01 },
-        { rgb:[255,255,0], nib:0x02 }, // yellow
-        { rgb:[255,0,0], nib:0x03 },   // red
-        { rgb:[0,0,255], nib:0x05 },   // blue
-        { rgb:[0,255,0], nib:0x06 },   // green
-      ];
-      const palette = paletteNative;
-
-      const out = quantizeImageToEpd4(rgba, W, H, palette, ditherMode, gammaValue);
-      return new Blob([out], { type: 'application/octet-stream' });
-    }
-
-    async function uploadFile() {
-      const dir = currentDir || '/';
-      const mode = document.getElementById('uploadMode').value || 'normal';
-      const ditherMode = document.getElementById('ditherMode')
-        ? (document.getElementById('ditherMode').value || 'atkinson')
-        : 'atkinson';
-      const gammaValue = document.getElementById('gammaCtrl')
-        ? Number.parseFloat(document.getElementById('gammaCtrl').value || '1.0')
-        : 1.0;
-      const gammaText = Number.isFinite(gammaValue) ? gammaValue.toFixed(2) : '1.00';
-      const f = document.getElementById('uploadFile').files[0];
-      if (uploadBox && f) {
-        uploadBox.textContent = `开始上传：模式=${mode}，算法=${ditherMode}，Gamma=${gammaText}，文件=${f.name || 'unknown'}`;
-      }
-      console.log('[UPLOAD]', { mode, ditherMode, gamma: gammaText, file: f ? (f.name || '') : '' });
-      if (!f) {
-        document.getElementById('uploadBox').textContent = '请选择要上传的文件';
-        return;
-      }
-      if (mode === 'normal') {
-        if (uploadBtn) uploadBtn.disabled = true;
-        const fd = new FormData();
-        fd.append('file', f);
-        const q = '/api/upload?dir=' + encodeURIComponent(dir) + '&mode=normal'
-          + '&algo=' + encodeURIComponent(ditherMode)
-          + '&gamma=' + encodeURIComponent(gammaText);
-        const r = await fetch(q, { method:'POST', body:fd });
-        document.getElementById('uploadBox').textContent = await r.text();
-        listFiles(currentDir);
-        if (uploadBtn) uploadBtn.disabled = false;
-        return;
-      }
-      const lower = (f.name || '').toLowerCase();
-      if (!(lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.bmp'))) {
-        document.getElementById('uploadBox').textContent = '缩放/裁剪上传仅支持 bmp/jpg/png';
-        return;
-      }
-      document.getElementById('uploadBox').textContent = '正在预处理并转换为 EPD4...';
-      if (uploadBtn) uploadBtn.disabled = true;
-      try {
-        const epdBlob = await preprocessImageToEpd4Blob(f, mode === 'crop', ditherMode, gammaValue);
-        const algoSuffix = ditherMode === 'atkinson' ? 'atk' : 'fs';
-        const outName = (f.name.replace(/\.[^.]+$/, '') || 'image')
-          + '_' + algoSuffix + '.epd4';
-        const fd = new FormData();
-        fd.append('file', epdBlob, outName);
-        const q = '/api/upload?dir=' + encodeURIComponent('/pic') + '&mode=normal'
-          + '&algo=' + encodeURIComponent(ditherMode)
-          + '&gamma=' + encodeURIComponent(gammaText);
-        const r = await fetch(q, { method:'POST', body:fd });
-        document.getElementById('uploadBox').textContent = await r.text();
-        currentDir = '/pic';
-        listFiles('/pic');
-        if (uploadBtn) uploadBtn.disabled = false;
-      } catch (e) {
-        if (uploadBtn) uploadBtn.disabled = false;
-        document.getElementById('uploadBox').textContent = '预处理失败: ' + (e && e.message ? e.message : String(e));
-      }
-    }
-
-    loadStatus();
-    loadCfg();
-    listFiles();
-  </script>
-</body>
-</html>
-)HTML";
-  server_->send(200, "text/html", html);
 }
 
 void WifiManager::handleStatus() {
@@ -3583,6 +3174,7 @@ void WifiManager::handleSettingsGet() {
   json += "\"calendar_enabled\":";
   json += settings_.calendar_enabled ? "true," : "false,";
   json += "\"calendar_layout\":\"" + jsonEscape(settings_.calendar_layout) + "\",";
+  json += "\"schedule_columns\":\"" + jsonEscape(settings_.schedule_columns) + "\",";
   json += "\"calendar_refresh_sec\":" + String(settings_.calendar_refresh_sec) + ",";
   json += "\"sleep_start\":\"" + formatMinuteHm(settings_.sleep_start_minute) + "\",";
   json += "\"sleep_end\":\"" + formatMinuteHm(settings_.sleep_end_minute) + "\",";
@@ -3602,7 +3194,7 @@ void WifiManager::handleSettingsPost() {
   const bool previous_calendar_enabled = settings_.calendar_enabled;
   const String previous_calendar_url = settings_.calendar_url;
   const uint32_t previous_calendar_refresh_sec = settings_.calendar_refresh_sec;
-  const String previous_weather_url = settings_.weather_url;
+  const String previous_weather_city = settings_.weather_city;
   if (server_->hasArg("sta_ssid")) settings_.sta_ssid = server_->arg("sta_ssid");
   if (server_->hasArg("sta_user")) settings_.sta_user = server_->arg("sta_user");
   if (server_->hasArg("sta_pass")) settings_.sta_pass = server_->arg("sta_pass");
@@ -3631,6 +3223,9 @@ void WifiManager::handleSettingsPost() {
     settings_.calendar_enabled = (enabled == "1" || enabled == "true" || enabled == "on");
   }
   if (server_->hasArg("calendar_layout")) settings_.calendar_layout = server_->arg("calendar_layout");
+  if (server_->hasArg("schedule_columns")) {
+    settings_.schedule_columns = server_->arg("schedule_columns");
+  }
   if (server_->hasArg("calendar_refresh_sec")) {
     settings_.calendar_refresh_sec =
         static_cast<uint32_t>(server_->arg("calendar_refresh_sec").toInt());
@@ -3657,6 +3252,9 @@ void WifiManager::handleSettingsPost() {
 
   SettingsStore::normalize(settings_);
   SettingsStore::fillEmptyValues(settings_);
+  if (!settings_.weather_city.equalsIgnoreCase(previous_weather_city)) {
+    settings_.weather_location_city = "";
+  }
   if (applyKnownWeatherLocationDefaults(settings_)) {
     Serial.printf("[CFG] corrected posted weather location city=%s lat=%s lon=%s\n",
                   settings_.weather_city.c_str(),
@@ -3675,6 +3273,9 @@ void WifiManager::handleSettingsPost() {
   if (!saveSettings()) {
     server_->send(500, "application/json", "{\"ok\":false,\"error\":\"save_failed\"}");
     return;
+  }
+  if (settings_.calendar_url != previous_calendar_url) {
+    clearCalendarMonthCache(true);
   }
   settings_apply_refresh_pending_ = true;
   server_->send(200, "application/json", "{\"ok\":true}");
@@ -3743,8 +3344,8 @@ void WifiManager::handleCalendarEventsPost() {
   if (e.title.length() == 0) {
     e.title = "Event";
   }
-  if (e.title.length() > 32) {
-    e.title = e.title.substring(0, 32);
+  if (e.title.length() > 96) {
+    e.title = truncateCalendarUtf8Value(e.title, 96);
   }
   if (server_->hasArg("location")) {
     e.title = buildImportedTitle(e.title, server_->arg("location"), "");
@@ -3782,8 +3383,7 @@ void WifiManager::handleCalendarEventsPost() {
       normalizeCalendarColorValue(server_->hasArg("color") ? server_->arg("color") : "blue");
   e.repeat =
       normalizeCalendarRepeatValue(server_->hasArg("repeat") ? server_->arg("repeat") : "weekly");
-  e.source =
-      normalizeCalendarSourceValue(server_->hasArg("source") ? server_->arg("source") : "manual");
+  e.source = "manual";
   e.external_id =
       normalizeCalendarExternalIdValue(server_->hasArg("external_id") ? server_->arg("external_id")
                                                                       : "");
@@ -3828,9 +3428,7 @@ void WifiManager::handleCalendarEventsPost() {
   }
   const int existing_idx = calendar_store_.findIndexByExternal(e.source, e.external_id);
   CalendarEvent previous_event;
-  CalendarEvent evicted_event;
   bool updated_existing = false;
-  bool evicted_ics = false;
   bool inserted_new = false;
   if (existing_idx >= 0) {
     previous_event = calendar_store_.data()[existing_idx];
@@ -3839,23 +3437,12 @@ void WifiManager::handleCalendarEventsPost() {
     updated_existing = true;
   } else {
     if (calendar_store_.count() >= static_cast<size_t>(kMaxCalendarEvents)) {
-      const int evict_ics_index = calendar_store_.findLastIndexBySource("ics");
-      if (evict_ics_index >= 0) {
-        calendar_store_.eventAt(static_cast<size_t>(evict_ics_index), evicted_event);
-        calendar_store_.removeAt(static_cast<size_t>(evict_ics_index));
-        evicted_ics = true;
-        Serial.println("[CAL] evicted one cached ICS event to add manual event");
-      } else {
-        server_->send(409, "application/json",
-                      "{\"ok\":false,\"error\":\"manual_calendar_events_full\"}");
-        return;
-      }
+      server_->send(409, "application/json",
+                    "{\"ok\":false,\"error\":\"manual_calendar_events_full\"}");
+      return;
     }
     e.id = calendar_store_.allocateId();
     if (!calendar_store_.push(e)) {
-      if (evicted_ics) {
-        calendar_store_.push(evicted_event);
-      }
       server_->send(500, "application/json", "{\"ok\":false,\"error\":\"store_push_failed\"}");
       return;
     }
@@ -3868,9 +3455,6 @@ void WifiManager::handleCalendarEventsPost() {
       const int inserted_idx = calendar_store_.findIndexById(e.id);
       if (inserted_idx >= 0) {
         calendar_store_.removeAt(static_cast<size_t>(inserted_idx));
-      }
-      if (evicted_ics) {
-        calendar_store_.push(evicted_event);
       }
     }
     server_->send(500, "application/json", "{\"ok\":false,\"error\":\"save_failed\"}");
@@ -3903,8 +3487,8 @@ void WifiManager::handleCalendarEventsDelete() {
     return;
   }
   CalendarEvent target;
-  if (calendar_store_.eventAt(static_cast<size_t>(idx), target) && target.source == "ics") {
-    server_->send(403, "application/json", "{\"ok\":false,\"error\":\"ics_event_readonly\"}");
+  if (!calendar_store_.eventAt(static_cast<size_t>(idx), target)) {
+    server_->send(404, "application/json", "{\"ok\":false,\"error\":\"event_not_found\"}");
     return;
   }
 
@@ -3939,58 +3523,43 @@ void WifiManager::handleGeocode() {
     return;
   }
 
-  String url = "https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&format=json&name=";
-  url += urlEncode(city);
   Serial.printf("[HTTP] GET /api/geocode city=%s\n", city.c_str());
-
-  HTTPClient http;
-  http.setConnectTimeout(8000);
-  http.setTimeout(8000);
-  if (!http.begin(url)) {
-    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"http_begin_failed\"}");
-    return;
-  }
-  const int code = http.GET();
-  if (code != 200) {
-    http.end();
-    server_->send(502, "application/json", "{\"ok\":false,\"error\":\"geocode_http_failed\"}");
-    return;
-  }
-  const String body = http.getString();
-  http.end();
-
-  const int results_idx = body.indexOf("\"results\":[");
-  if (results_idx < 0) {
-    server_->send(404, "application/json", "{\"ok\":false,\"error\":\"city_not_found\"}");
+  String resolved_name;
+  String lat;
+  String lon;
+  String weather_url;
+  String error_msg;
+  if (!fetchWeatherCityCoordinates(city, resolved_name, lat, lon, weather_url, error_msg)) {
+    int status = 500;
+    if (error_msg == "sta_required" || error_msg == "empty_city") status = 400;
+    if (error_msg == "city_not_found") status = 404;
+    if (error_msg == "geocode_http_failed") status = 502;
+    String json = "{\"ok\":false,\"error\":\"" + jsonEscape(error_msg) + "\"}";
+    server_->send(status, "application/json", json);
     return;
   }
 
-  const int name_key = body.indexOf("\"name\":\"", results_idx);
-  const int lat_key = body.indexOf("\"latitude\":", results_idx);
-  const int lon_key = body.indexOf("\"longitude\":", results_idx);
-  if (name_key < 0 || lat_key < 0 || lon_key < 0) {
-    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"geocode_parse_failed\"}");
+  const String previous_city = settings_.weather_city;
+  const String previous_location_city = settings_.weather_location_city;
+  const String previous_lat = settings_.weather_lat;
+  const String previous_lon = settings_.weather_lon;
+  const String previous_url = settings_.weather_url;
+  settings_.weather_city = city;
+  settings_.weather_location_city = city;
+  settings_.weather_lat = lat;
+  settings_.weather_lon = lon;
+  settings_.weather_url = weather_url;
+  if (!saveSettings()) {
+    settings_.weather_city = previous_city;
+    settings_.weather_location_city = previous_location_city;
+    settings_.weather_lat = previous_lat;
+    settings_.weather_lon = previous_lon;
+    settings_.weather_url = previous_url;
+    server_->send(500, "application/json",
+                  "{\"ok\":false,\"error\":\"save_failed\"}");
     return;
   }
-
-  const int name_start = name_key + 8;
-  const int name_end = body.indexOf('"', name_start);
-  const int lat_start = lat_key + 11;
-  int lat_end = body.indexOf(',', lat_start);
-  const int lon_start = lon_key + 12;
-  int lon_end = body.indexOf(',', lon_start);
-  if (lat_end < 0) lat_end = body.indexOf('}', lat_start);
-  if (lon_end < 0) lon_end = body.indexOf('}', lon_start);
-  if (name_end < 0 || lat_end < 0 || lon_end < 0) {
-    server_->send(500, "application/json", "{\"ok\":false,\"error\":\"geocode_parse_failed\"}");
-    return;
-  }
-
-  String resolved_name = body.substring(name_start, name_end);
-  String lat = body.substring(lat_start, lat_end);
-  String lon = body.substring(lon_start, lon_end);
-  lat.trim();
-  lon.trim();
+  settings_apply_refresh_pending_ = true;
 
   String json = "{\"ok\":true,\"city\":\"";
   json += jsonEscape(resolved_name);
@@ -3998,11 +3567,9 @@ void WifiManager::handleGeocode() {
   json += jsonEscape(lat);
   json += "\",\"lon\":\"";
   json += jsonEscape(lon);
-  json += "\",\"weather_url\":\"http://api.open-meteo.com/v1/forecast?latitude=";
-  json += jsonEscape(lat);
-  json += "&longitude=";
-  json += jsonEscape(lon);
-  json += "&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto\"}";
+  json += "\",\"weather_url\":\"";
+  json += jsonEscape(weather_url);
+  json += "\"}";
   server_->send(200, "application/json", json);
 }
 

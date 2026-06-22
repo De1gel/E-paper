@@ -22,7 +22,7 @@ const uploadBtn = document.querySelector("button[onclick='uploadFile()']");
 const uploadBox = document.getElementById("uploadBox");
 const uploadPreview = document.getElementById("uploadPreview");
 const uploadPreviewImg = document.getElementById("uploadPreviewImg");
-const WEB_APP_VERSION = "20260620d";
+const WEB_APP_VERSION = "20260620g";
 const ditherHint = document.getElementById("ditherHint");
 const gammaHint = document.getElementById("gammaHint");
 const modeNote = document.getElementById("modeNote");
@@ -44,6 +44,7 @@ const sleepStart = document.getElementById("sleepStart");
 const sleepEnd = document.getElementById("sleepEnd");
 const calendarUrl = document.getElementById("calendarUrl");
 const calendarLayout = document.getElementById("calendarLayout");
+const scheduleColumns = document.getElementById("scheduleColumns");
 const weatherLocation = document.getElementById("weatherLocation");
 const weatherLat = document.getElementById("weatherLat");
 const weatherLon = document.getElementById("weatherLon");
@@ -75,7 +76,6 @@ let filesLoadedOnce = false;
 let schedulesLoadedOnce = false;
 let statusPollTimer = null;
 let statusPollInFlight = false;
-let loadedWeatherCity = "";
 
 const STATUS_POLL_MS_ACTIVE = 8000;
 const STATUS_POLL_MS_IDLE = 30000;
@@ -138,6 +138,9 @@ const I18N = {
     "cfg.calendar.layout": "日历布局",
     "cfg.calendar.layout_landscape": "横屏半屏（左日历 / 右日程）",
     "cfg.calendar.layout_portrait": "竖屏半屏（上日历 / 下日程）",
+    "cfg.calendar.schedule_columns": "日程显示",
+    "cfg.calendar.schedule_one_column": "一列（08:00-22:00）",
+    "cfg.calendar.schedule_two_columns": "两列（上午 / 下午）",
     "cfg.calendar.refresh_sec": "日历刷新间隔（小时）",
     "cfg.calendar.sleep_start": "休眠开始",
     "cfg.calendar.sleep_end": "休眠结束",
@@ -360,6 +363,9 @@ const I18N = {
     "cfg.calendar.layout": "Layout",
     "cfg.calendar.layout_landscape": "Landscape Split (calendar left / schedule right)",
     "cfg.calendar.layout_portrait": "Portrait Split (calendar top / schedule bottom)",
+    "cfg.calendar.schedule_columns": "Schedule display",
+    "cfg.calendar.schedule_one_column": "One column (08:00-22:00)",
+    "cfg.calendar.schedule_two_columns": "Two columns (AM / PM)",
     "cfg.calendar.refresh_sec": "Refresh interval (hours)",
     "cfg.calendar.sleep_start": "Sleep starts",
     "cfg.calendar.sleep_end": "Sleep ends",
@@ -582,6 +588,9 @@ const I18N = {
     "cfg.calendar.layout": "Disposition",
     "cfg.calendar.layout_landscape": "Partage paysage (calendrier gauche / planning droite)",
     "cfg.calendar.layout_portrait": "Partage portrait (calendrier haut / planning bas)",
+    "cfg.calendar.schedule_columns": "Affichage du planning",
+    "cfg.calendar.schedule_one_column": "Une colonne (08:00-22:00)",
+    "cfg.calendar.schedule_two_columns": "Deux colonnes (matin / apres-midi)",
     "cfg.calendar.refresh_sec": "Intervalle de rafraichissement (heures)",
     "cfg.calendar.sleep_start": "Debut veille",
     "cfg.calendar.sleep_end": "Fin veille",
@@ -1166,12 +1175,14 @@ async function loadCfg() {
   if (calendarLayout) {
     calendarLayout.value = j.calendar_layout || "landscape_split";
   }
+  if (scheduleColumns) {
+    scheduleColumns.value = j.schedule_columns || "one_column";
+  }
   calendarSec.value = secondsToHoursValue(j.calendar_refresh_sec, 7200);
   if (sleepStart) sleepStart.value = j.sleep_start || "22:00";
   if (sleepEnd) sleepEnd.value = j.sleep_end || "08:00";
   calendarUrl.value = j.calendar_url || "";
   weatherLocation.value = j.weather_city || "";
-  loadedWeatherCity = (j.weather_city || "").trim();
   weatherLat.value = j.weather_lat || "";
   weatherLon.value = j.weather_lon || "";
   wurl.value = j.weather_url || "";
@@ -1185,21 +1196,13 @@ async function saveCfg() {
     let lon = (weatherLon.value || "").trim();
     let weatherUrl = (wurl.value || "").trim();
 
-    const canResolveCity = latestStatusState === "sta_running";
-    if (city && canResolveCity) {
-      const resolved = await resolveCity();
-      if (!resolved) {
-        return;
-      }
-      lat = (weatherLat.value || "").trim();
-      lon = (weatherLon.value || "").trim();
-      weatherUrl = (wurl.value || "").trim();
-    } else if (lat && lon && !weatherUrl) {
+    if (lat && lon && !weatherUrl) {
       weatherUrl = buildOpenMeteoUrl(lat, lon);
       wurl.value = weatherUrl;
     }
 
     const calendarLayoutValue = calendarLayout ? calendarLayout.value : "landscape_split";
+    const scheduleColumnsValue = scheduleColumns ? scheduleColumns.value : "one_column";
     const sleepStartValue = sleepStart ? sleepStart.value : "22:00";
     const sleepEndValue = sleepEnd ? sleepEnd.value : "08:00";
     const appSwitchEnabled = appAutoSwitch && appAutoSwitch.checked ? "1" : "0";
@@ -1210,7 +1213,7 @@ async function saveCfg() {
     const authMode = manualAuthToggle && manualAuthToggle.checked && staAuthMode
       ? normalizeAuthMode(staAuthMode.value)
       : "auto";
-    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&calendar_refresh_sec=${encodeURIComponent(calendarRefreshInterval)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
+    const body = `sta_ssid=${encodeURIComponent(ssid.value)}&sta_user=${encodeURIComponent(staUser ? staUser.value : "")}&sta_pass=${encodeURIComponent(pass.value)}&sta_auth_mode=${encodeURIComponent(authMode)}&ui_language=${encodeURIComponent(langValue)}&photo_interval_sec=${encodeURIComponent(photoInterval)}&app_auto_switch_enabled=${encodeURIComponent(appSwitchEnabled)}&app_switch_interval_sec=${encodeURIComponent(appSwitchInterval)}&calendar_enabled=1&calendar_layout=${encodeURIComponent(calendarLayoutValue)}&schedule_columns=${encodeURIComponent(scheduleColumnsValue)}&calendar_refresh_sec=${encodeURIComponent(calendarRefreshInterval)}&sleep_start=${encodeURIComponent(sleepStartValue)}&sleep_end=${encodeURIComponent(sleepEndValue)}&calendar_url=${encodeURIComponent(calendarUrl.value)}&weather_city=${encodeURIComponent(city)}&weather_lat=${encodeURIComponent(lat)}&weather_lon=${encodeURIComponent(lon)}&weather_url=${encodeURIComponent(weatherUrl)}`;
 
     const r = await fetch("/api/settings", {
       method: "POST",
@@ -1222,7 +1225,6 @@ async function saveCfg() {
     let parseError = false;
     try { j = JSON.parse(txt); } catch { parseError = true; }
     if (j && j.ok) {
-      loadedWeatherCity = city;
       cfgBox.textContent = t("common.saved");
       window.alert(t("common.saved"));
     } else {

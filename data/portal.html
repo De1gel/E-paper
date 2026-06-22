@@ -382,6 +382,13 @@
             </select>
           </div>
           <div class="field">
+            <label data-i18n="cfg.calendar.schedule_columns">日程显示</label>
+            <select id="scheduleColumns">
+              <option value="one_column" data-i18n="cfg.calendar.schedule_one_column">一列（08:00-22:00）</option>
+              <option value="two_columns" data-i18n="cfg.calendar.schedule_two_columns">两列（上午 / 下午）</option>
+            </select>
+          </div>
+          <div class="field">
             <label data-i18n="cfg.calendar.refresh_sec">日历刷新间隔（小时）</label>
             <input id="calendarSec" type="number" min="0.02" max="24" step="0.01" placeholder="2">
           </div>

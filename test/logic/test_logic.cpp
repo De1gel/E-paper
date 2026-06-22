@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <time.h>
 #include <vector>
@@ -6,12 +7,24 @@
 #include "app/RefreshPolicy.h"
 #include "calendar/CalendarLogic.h"
 #include "system/CalendarStore.h"
-#include "system/CalendarSyncService.h"
 #include "system/CalendarSettings.h"
 #include "system/CalendarEventNormalize.h"
 #include "system/CalendarIcsCore.h"
 
 namespace {
+
+void assertRefreshPlan(const char *scenario, bool calendar_page, bool daily_sync_due,
+                       bool has_sta_credentials, appfw::RefreshSyncPlan expected) {
+  const appfw::RefreshSyncPlan actual = appfw::selectRefreshSyncPlan(
+      calendar_page, daily_sync_due, has_sta_credentials);
+  printf("[TEST][REFRESH] scenario=%s page=%s daily_due=%s sta_credentials=%s "
+         "plan=%s result=%s\n",
+         scenario, calendar_page ? "calendar" : "photo",
+         daily_sync_due ? "true" : "false",
+         has_sta_credentials ? "true" : "false",
+         appfw::refreshSyncPlanName(actual), actual == expected ? "PASS" : "FAIL");
+  assert(actual == expected);
+}
 
 void testRefreshPolicy() {
   struct tm a {};
@@ -29,6 +42,42 @@ void testRefreshPolicy() {
   assert(appfw::refreshBucketKey(minute_key, 600u) == (minute_key / 10));
   assert(appfw::refreshBucketKey(minute_key, 0u) == -1);
   assert(appfw::dayKeyFromTm(a) == 2026104);
+  struct tm before_wake {};
+  before_wake.tm_year = 126;
+  before_wake.tm_mon = 3;
+  before_wake.tm_mday = 15;
+  before_wake.tm_hour = 7;
+  before_wake.tm_min = 59;
+  before_wake.tm_isdst = -1;
+  mktime(&before_wake);
+  struct tm at_wake = before_wake;
+  at_wake.tm_hour = 8;
+  at_wake.tm_min = 0;
+  mktime(&at_wake);
+  assert(appfw::dailySyncCycleKey(before_wake, 8 * 60) == 2026103);
+  assert(appfw::dailySyncCycleKey(at_wake, 8 * 60) == 2026104);
+  struct tm new_year_before_wake {};
+  new_year_before_wake.tm_year = 126;
+  new_year_before_wake.tm_mon = 0;
+  new_year_before_wake.tm_mday = 1;
+  new_year_before_wake.tm_hour = 7;
+  new_year_before_wake.tm_min = 59;
+  new_year_before_wake.tm_isdst = -1;
+  mktime(&new_year_before_wake);
+  assert(appfw::dailySyncCycleKey(new_year_before_wake, 8 * 60) == 2025364);
+
+  assertRefreshPlan("daily_photo_with_wifi", false, true, true,
+                    appfw::RefreshSyncPlan::SyncBeforeRender);
+  assertRefreshPlan("daily_calendar_with_wifi", true, true, true,
+                    appfw::RefreshSyncPlan::SyncBeforeRender);
+  assertRefreshPlan("regular_photo_with_wifi", false, false, true,
+                    appfw::RefreshSyncPlan::RenderOnly);
+  assertRefreshPlan("regular_calendar_with_wifi", true, false, true,
+                    appfw::RefreshSyncPlan::RenderThenSync);
+  assertRefreshPlan("regular_calendar_without_wifi", true, false, false,
+                    appfw::RefreshSyncPlan::RenderOnly);
+  assertRefreshPlan("daily_photo_without_wifi", false, true, false,
+                    appfw::RefreshSyncPlan::SyncBeforeRender);
 
   const time_t fallback = appfw::fallbackClockBaseEpoch();
   assert(fallback > 0);
@@ -64,6 +113,28 @@ void testCalendarLogicLanes() {
   assert(events[3].lane_count == 2);
 }
 
+void testCalendarTimelinePeriods() {
+  calendar::TimelineSegment segment;
+  assert(calendar::clipTimelineSegment(13u * 60u + 30u, 14u * 60u + 30u,
+                                       8u * 60u, 14u * 60u, segment));
+  assert(segment.start_minute == 13u * 60u + 30u);
+  assert(segment.end_minute == 14u * 60u);
+  assert(!segment.continues_before);
+  assert(segment.continues_after);
+
+  assert(calendar::clipTimelineSegment(13u * 60u + 30u, 14u * 60u + 30u,
+                                       14u * 60u, 22u * 60u, segment));
+  assert(segment.start_minute == 14u * 60u);
+  assert(segment.end_minute == 14u * 60u + 30u);
+  assert(segment.continues_before);
+  assert(!segment.continues_after);
+
+  assert(!calendar::clipTimelineSegment(7u * 60u, 8u * 60u,
+                                        8u * 60u, 14u * 60u, segment));
+  assert(calendar::timelineOffsetForMinute(11u * 60u, 8u * 60u, 14u * 60u, 360u) == 180u);
+  assert(calendar::timelineOffsetForMinute(18u * 60u, 14u * 60u, 22u * 60u, 400u) == 200u);
+}
+
 void testCalendarSettings() {
   assert(appfw::normalizeSleepWindowMinute(0u, 60u) == 0u);
   assert(appfw::normalizeSleepWindowMinute(1439u, 60u) == 1439u);
@@ -78,6 +149,8 @@ void testCalendarEventNormalize() {
 
   assert(appfw::normalizeCalendarDateValue("2026-04-15", normalized));
   assert(normalized == "2026-04-15");
+  assert(appfw::truncateCalendarUtf8Value("123456", 4) == "1234");
+  assert(appfw::truncateCalendarUtf8Value("\xE5\x9C\xB0\xE5\x9D\x80", 4) == "\xE5\x9C\xB0");
   assert(!appfw::normalizeCalendarDateValue("2026-02-30", normalized));
 
   assert(appfw::normalizeCalendarColorValue("RED") == "red");
@@ -241,22 +314,13 @@ void testCalendarStore() {
   event.updated_at = "1";
   assert(store.push(event));
 
-  appfw::CalendarEvent imported = event;
-  imported.id = store.allocateId();
-  imported.source = "ics";
-  imported.external_id = "uid#2026-04-15T09:00";
-  imported.title = "Imported";
-  assert(store.push(imported));
-
-  assert(store.count() == 2);
+  assert(store.count() == 1);
   assert(store.findIndexById(event.id) == 0);
-  assert(store.findIndexByExternal("ics", "uid#2026-04-15T09:00") == 1);
 
   const String packed = store.serialize();
   assert(packed.indexOf("Morning") >= 0);
   const String json = store.toJson();
   assert(json.indexOf("\"ok\":true") >= 0);
-  assert(json.indexOf("Imported") >= 0);
 
   appfw::CalendarStore restored;
   restored.deserialize(packed);
@@ -266,83 +330,6 @@ void testCalendarStore() {
   assert(restored_event.title == "Morning");
 
   assert(store.removeAt(0));
-  assert(store.count() == 1);
-  appfw::CalendarEvent remaining;
-  assert(store.eventAt(0, remaining));
-  assert(remaining.title == "Imported");
-}
-
-void testCalendarSyncMerge() {
-  appfw::CalendarStore store;
-  appfw::CalendarEvent manual;
-  manual.id = store.allocateId();
-  manual.title = "Manual";
-  manual.source = "manual";
-  assert(store.push(manual));
-
-  appfw::CalendarEvent old_ics;
-  old_ics.id = store.allocateId();
-  old_ics.title = "Old ICS";
-  old_ics.source = "ics";
-  old_ics.external_id = "uid#1";
-  assert(store.push(old_ics));
-
-  std::vector<appfw::CalendarEvent> imported;
-  appfw::CalendarEvent new_ics = old_ics;
-  new_ics.title = "Updated ICS";
-  imported.push_back(new_ics);
-
-  appfw::CalendarEvent fresh_ics;
-  fresh_ics.title = "Fresh ICS";
-  fresh_ics.source = "ics";
-  fresh_ics.external_id = "uid#2";
-  imported.push_back(fresh_ics);
-
-  const appfw::CalendarSyncMergeStats stats =
-      appfw::CalendarSyncService::mergeImportedEvents(store, imported);
-  assert(stats.kept_manual == 1);
-  assert(stats.total == 3);
-
-  appfw::CalendarEvent event0;
-  appfw::CalendarEvent event1;
-  appfw::CalendarEvent event2;
-  assert(store.eventAt(0, event0));
-  assert(store.eventAt(1, event1));
-  assert(store.eventAt(2, event2));
-  assert(event0.title == "Manual");
-  assert(event1.title == "Updated ICS");
-  assert(event1.id == old_ics.id);
-  assert(event2.title == "Fresh ICS");
-  assert(event2.id != 0);
-}
-
-void testCalendarSyncNormalizeImported() {
-  std::vector<appfw::ImportedCalendarEvent> imported;
-
-  appfw::ImportedCalendarEvent a;
-  a.event.title = "  ";
-  a.event.color = "RED";
-  a.event.external_id = "  uid#1  ";
-  imported.push_back(a);
-
-  appfw::ImportedCalendarEvent b;
-  b.event.title = "This title is intentionally longer than thirty two chars";
-  b.event.color = "bad";
-  b.event.external_id = "uid#2";
-  imported.push_back(b);
-
-  const std::vector<appfw::CalendarEvent> normalized =
-      appfw::CalendarSyncService::normalizeImportedEvents(imported, 1710000000);
-  assert(normalized.size() == 2);
-  assert(normalized[0].title == "Busy");
-  assert(normalized[0].color == "red");
-  assert(normalized[0].repeat == "once");
-  assert(normalized[0].weekday == -1);
-  assert(normalized[0].source == "ics");
-  assert(normalized[0].external_id == "uid#1");
-  assert(normalized[0].updated_at == "1710000000");
-  assert(normalized[1].title.length() == 32);
-  assert(normalized[1].color == "blue");
 }
 
 }  // namespace
@@ -351,11 +338,10 @@ int main() {
   testRefreshPolicy();
   testCalendarLogicMatchesToday();
   testCalendarLogicLanes();
+  testCalendarTimelinePeriods();
   testCalendarSettings();
   testCalendarEventNormalize();
   testCalendarIcsCore();
   testCalendarStore();
-  testCalendarSyncNormalizeImported();
-  testCalendarSyncMerge();
   return 0;
 }

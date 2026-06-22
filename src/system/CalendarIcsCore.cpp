@@ -4,7 +4,14 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "system/CalendarEventNormalize.h"
+
 namespace appfw {
+
+static constexpr size_t kMaxUnfoldedIcsLines = 4096u;
+static constexpr size_t kMaxIcsLineBytes = 2048u;
+static constexpr size_t kMaxParsedIcsEvents = 256u;
+static constexpr size_t kMaxIcsPropertiesPerEvent = 128u;
 
 bool parseDigits(const String &value, int start, int count, int &out) {
   if (start < 0 || count <= 0 || (start + count) > static_cast<int>(value.length())) {
@@ -339,20 +346,29 @@ void appendUnfoldedIcsLines(const String &body, std::vector<String> &lines) {
     }
     if (c == '\n') {
       if ((current.startsWith(" ") || current.startsWith("\t")) && !lines.empty()) {
-        lines.back() += current.substring(1);
+        const size_t available =
+            (lines.back().length() < kMaxIcsLineBytes)
+                ? (kMaxIcsLineBytes - lines.back().length())
+                : 0u;
+        if (available > 0u) lines.back() += current.substring(1, 1 + available);
       } else {
+        if (lines.size() >= kMaxUnfoldedIcsLines) return;
         lines.push_back(current);
       }
       current = "";
       continue;
     }
-    current += c;
+    if (current.length() < kMaxIcsLineBytes) current += c;
   }
   if (current.length() > 0) {
     if ((current.startsWith(" ") || current.startsWith("\t")) && !lines.empty()) {
-      lines.back() += current.substring(1);
+      const size_t available =
+          (lines.back().length() < kMaxIcsLineBytes)
+              ? (kMaxIcsLineBytes - lines.back().length())
+              : 0u;
+      if (available > 0u) lines.back() += current.substring(1, 1 + available);
     } else {
-      lines.push_back(current);
+      if (lines.size() < kMaxUnfoldedIcsLines) lines.push_back(current);
     }
   }
 }
@@ -504,16 +520,16 @@ String trimDisplayField(const String &raw, size_t max_len) {
     line = "";
   }
   if (value.length() > max_len) {
-    value = value.substring(0, max_len);
+    value = truncateCalendarUtf8Value(value, max_len);
   }
   return value;
 }
 
 String buildImportedTitle(const String &summary, const String &location, const String &description) {
-  String title = trimDisplayField(summary, 32);
+  String title = trimDisplayField(summary, 96);
   const bool has_summary = title.length() > 0;
-  String trimmed_location = trimDisplayField(location, 18);
-  String trimmed_description = trimDisplayField(description, 18);
+  String trimmed_location = trimDisplayField(location, 96);
+  String trimmed_description = trimDisplayField(description, 96);
   if (title.length() == 0) {
     title = (trimmed_location.length() > 0) ? trimmed_location : trimmed_description;
   }
@@ -531,8 +547,8 @@ String buildImportedTitle(const String &summary, const String &location, const S
     title += " - ";
     title += trimmed_description;
   }
-  if (title.length() > 32) {
-    title = title.substring(0, 32);
+  if (title.length() > 128) {
+    title = truncateCalendarUtf8Value(title, 128);
   }
   return title;
 }
@@ -659,7 +675,8 @@ void parseIcsBodyIntoEvents(const String &body, std::vector<ParsedIcsEvent> &mas
     if (line == "END:VEVENT") {
       if (in_vevent) {
         ParsedIcsEvent event;
-        if (parseIcsEventFromLines(vevent_lines, event)) {
+        if ((masters.size() + overrides.size()) < kMaxParsedIcsEvents &&
+            parseIcsEventFromLines(vevent_lines, event)) {
           ++vevent_count;
           if (event.recurrence_id_valid) {
             overrides.push_back(event);
@@ -673,7 +690,9 @@ void parseIcsBodyIntoEvents(const String &body, std::vector<ParsedIcsEvent> &mas
       continue;
     }
     if (in_vevent) {
-      vevent_lines.push_back(line);
+      if (vevent_lines.size() < kMaxIcsPropertiesPerEvent) {
+        vevent_lines.push_back(line);
+      }
     }
   }
 }

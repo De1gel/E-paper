@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FONT = ROOT / "MSYH.TTC"
 DEFAULT_OUT = ROOT / "src" / "fonts" / "AsciiSmoothFontExtra.cpp"
-GLYPH_CHARS = " ?%+-./0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ~"
+GLYPH_CHARS = " ?%+-./0123456789:@ABCDEFGHIJKLMNOPQRSTUVWXYZ~"
 
 
 @dataclass(frozen=True)
@@ -58,8 +58,10 @@ def render_glyph(font: ImageFont.FreeTypeFont, ch: str, px: int) -> Glyph:
 
 def glyphs_for_size(px: int) -> list[Glyph]:
   # Microsoft YaHei renders smaller than its point size; a slight oversize keeps
-  # the visual height close to the target pixel box.
-  font = ImageFont.truetype(str(DEFAULT_FONT), max(8, round(px * 1.06)), index=0)
+  # the 14 px face visually aligned. The 16 px face is rasterized at its exact
+  # target size so its strokes come from the vector outline rather than scaling.
+  font_size = px if px == 16 else max(8, round(px * 1.06))
+  font = ImageFont.truetype(str(DEFAULT_FONT), font_size, index=0)
   glyphs = [render_glyph(font, ch, px) for ch in GLYPH_CHARS]
   offset = 0
   with_offsets: list[Glyph] = []
@@ -92,13 +94,13 @@ def emit_size(px: int) -> str:
   row_bytes = [g.row_bytes for g in glyphs]
   offsets = [g.offset for g in glyphs]
   return f"""
-constexpr uint8_t kGlyphWidths{px}[kAsciiSmoothGlyphCount] = {{
+constexpr uint8_t kGlyphWidths{px}[kAsciiSmoothExtraGlyphCount] = {{
 {format_array(widths)}
 }};
-constexpr uint8_t kGlyphRowBytes{px}[kAsciiSmoothGlyphCount] = {{
+constexpr uint8_t kGlyphRowBytes{px}[kAsciiSmoothExtraGlyphCount] = {{
 {format_array(row_bytes)}
 }};
-constexpr uint16_t kGlyphOffsets{px}[kAsciiSmoothGlyphCount] = {{
+constexpr uint16_t kGlyphOffsets{px}[kAsciiSmoothExtraGlyphCount] = {{
 {format_array(offsets)}
 }};
 constexpr uint8_t kGlyphData{px}[{len(data)}] = {{
@@ -113,12 +115,13 @@ def main() -> None:
 namespace fonts {{
 namespace {{
 
-constexpr char kGlyphChars[kAsciiSmoothGlyphCount + 1] = "{GLYPH_CHARS}";
+constexpr size_t kAsciiSmoothExtraGlyphCount = {len(GLYPH_CHARS)}u;
+constexpr char kGlyphChars[kAsciiSmoothExtraGlyphCount + 1] = "{GLYPH_CHARS}";
 {emit_size(16)}
 {emit_size(14)}
 int glyphIndexForCharExtra(char c) {{
   if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-  for (size_t i = 0; i < kAsciiSmoothGlyphCount; ++i) {{
+  for (size_t i = 0; i < kAsciiSmoothExtraGlyphCount; ++i) {{
     if (kGlyphChars[i] == c) return static_cast<int>(i);
   }}
   return -1;

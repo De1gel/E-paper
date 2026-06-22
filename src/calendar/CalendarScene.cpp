@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "Display_EPD_W21.h"
+#include "calendar/CalendarLogic.h"
 #include "calendar/CalendarText.h"
 
 namespace calendar {
@@ -25,8 +26,9 @@ constexpr uint16_t kHeaderMetaBlockLandscapeW = 168u;
 constexpr uint16_t kHeaderMetaBlockPortraitW = 136u;
 constexpr bool kShowAATestPanel = false;
 constexpr uint16_t kScheduleStartMinute = 8u * 60u;
+constexpr uint16_t kScheduleSplitMinute = 14u * 60u;
 constexpr uint16_t kScheduleEndMinute = 22u * 60u;
-constexpr uint8_t kScheduleSlotCount = 28u;
+constexpr uint8_t kSchedulePeriodHeaderH = 22u;
 constexpr uint16_t kMonthSummaryCircleGap = 3u;
 constexpr uint16_t kMonthSummaryOffsetUp = 3u;
 
@@ -170,8 +172,10 @@ TextFont weatherCandidateFont(const String &text, uint8_t requested_px) {
 
 TextAAMode preferredAsciiAAMode(const String &text, TextFont font, uint8_t pixel_height) {
   (void)text;
-  (void)font;
   (void)pixel_height;
+  if (font == TextFont::AsciiSmooth || font == TextFont::AsciiSmooth14) {
+    return TextAAMode::Burkes;
+  }
   return TextAAMode::Threshold;
 }
 
@@ -309,16 +313,40 @@ void emitDitheredText(SceneSink &sink, uint16_t x, uint16_t y, const String &tex
   freeTextCoverageMap(map);
 }
 
-constexpr uint8_t kScheduleTitleAsciiPx = 10u;
-constexpr uint8_t kScheduleTitleCjkPx = 12u;
-constexpr uint16_t kScheduleEventMinVisualH = kScheduleTitleCjkPx + 4u;
+constexpr uint8_t kScheduleTitleAsciiPx = 16u;
+constexpr uint8_t kScheduleTitleCjkPx = 16u;
+constexpr uint8_t kScheduleCompactAsciiPx = 10u;
+constexpr uint8_t kScheduleCompactCjkPx = 12u;
+constexpr uint8_t kScheduleMaxTextLines = 8u;
+constexpr uint8_t kScheduleLineGap = 2u;
 
-uint16_t scheduleTitleRunWidth(const String &run, bool ascii_run) {
-  return textWidthPx(run, ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx,
-                     ascii_run ? TextFont::Ascii10 : TextFont::Cjk10);
+struct ScheduleTextStyle {
+  uint8_t ascii_px;
+  uint8_t cjk_px;
+  TextFont ascii_font;
+  TextFont cjk_font;
+};
+
+constexpr ScheduleTextStyle kScheduleLargeTextStyle = {
+    kScheduleTitleAsciiPx, kScheduleTitleCjkPx, TextFont::AsciiSmooth16, TextFont::Cjk16};
+constexpr ScheduleTextStyle kScheduleCompactTextStyle = {
+    kScheduleCompactAsciiPx, kScheduleCompactCjkPx, TextFont::Ascii10, TextFont::Cjk10};
+
+struct ScheduleTitleLayout {
+  String lines[kScheduleMaxTextLines];
+  uint8_t line_count = 0u;
+  uint16_t line_height = 0u;
+  uint16_t total_height = 0u;
+  const ScheduleTextStyle *style = &kScheduleLargeTextStyle;
+};
+
+uint16_t scheduleTitleRunWidth(const String &run, bool ascii_run,
+                               const ScheduleTextStyle &style) {
+  return textWidthPx(run, ascii_run ? style.ascii_px : style.cjk_px,
+                     ascii_run ? style.ascii_font : style.cjk_font);
 }
 
-uint16_t scheduleTitleWidth(const String &text) {
+uint16_t scheduleTitleWidth(const String &text, const ScheduleTextStyle &style) {
   uint16_t total = 0;
   size_t byte_index = 0;
   while (byte_index < text.length()) {
@@ -329,17 +357,33 @@ uint16_t scheduleTitleWidth(const String &text) {
       byte_index += (char_len > 0u) ? char_len : 1u;
     }
     total = static_cast<uint16_t>(
-        total + scheduleTitleRunWidth(text.substring(run_start, byte_index), ascii_run));
+        total + scheduleTitleRunWidth(text.substring(run_start, byte_index), ascii_run, style));
   }
   return total;
 }
 
-uint16_t scheduleTitleHeight(const String &text) {
-  return isAsciiOnlyText(text) ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
+uint16_t scheduleTitleHeight(const String &text, const ScheduleTextStyle &style) {
+  uint16_t max_height = 0u;
+  size_t byte_index = 0u;
+  while (byte_index < text.length()) {
+    const bool ascii_run = isAsciiAt(text, byte_index);
+    const size_t run_start = byte_index;
+    while (byte_index < text.length() && isAsciiAt(text, byte_index) == ascii_run) {
+      const uint8_t char_len = utf8CharByteLen(text, byte_index);
+      byte_index += (char_len > 0u) ? char_len : 1u;
+    }
+    const uint16_t run_height =
+        textHeightPx(text.substring(run_start, byte_index),
+                     ascii_run ? style.ascii_px : style.cjk_px,
+                     ascii_run ? style.ascii_font : style.cjk_font);
+    max_height = std::max<uint16_t>(max_height, run_height);
+  }
+  return max_height;
 }
 
-String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
-  if (scheduleTitleWidth(text) <= max_width) {
+String truncateScheduleTitleToWidth(const String &text, uint16_t max_width,
+                                    const ScheduleTextStyle &style) {
+  if (scheduleTitleWidth(text, style) <= max_width) {
     return text;
   }
   String out;
@@ -349,7 +393,7 @@ String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
     const uint8_t char_len = utf8CharByteLen(text, byte_index);
     const size_t next = byte_index + ((char_len > 0u) ? char_len : 1u);
     String candidate = out + text.substring(byte_index, next);
-    if (scheduleTitleWidth(candidate) > max_width) {
+    if (scheduleTitleWidth(candidate, style) > max_width) {
       break;
     }
     out = candidate;
@@ -358,9 +402,107 @@ String truncateScheduleTitleToWidth(const String &text, uint16_t max_width) {
   return out;
 }
 
+bool isScheduleBreakSpace(const String &text, size_t byte_index) {
+  return byte_index < text.length() && text[byte_index] == ' ';
+}
+
+bool wrapScheduleTitle(const String &text, uint16_t max_width, uint8_t max_lines,
+                       const ScheduleTextStyle &style, bool truncate_overflow,
+                       ScheduleTitleLayout &layout) {
+  layout = ScheduleTitleLayout{};
+  layout.style = &style;
+  layout.line_height = scheduleTitleHeight(text, style);
+  if (text.length() == 0u || max_width == 0u || max_lines == 0u) {
+    return text.length() == 0u;
+  }
+
+  size_t line_start = 0u;
+  while (line_start < text.length() && layout.line_count < max_lines) {
+    while (isScheduleBreakSpace(text, line_start)) {
+      ++line_start;
+    }
+    if (line_start >= text.length()) {
+      break;
+    }
+
+    if (layout.line_count + 1u == max_lines && truncate_overflow) {
+      layout.lines[layout.line_count++] =
+          truncateScheduleTitleToWidth(text.substring(line_start), max_width, style);
+      line_start = text.length();
+      break;
+    }
+
+    size_t byte_index = line_start;
+    size_t fit_end = line_start;
+    size_t break_end = line_start;
+    while (byte_index < text.length()) {
+      const uint8_t char_len = utf8CharByteLen(text, byte_index);
+      const size_t next = byte_index + ((char_len > 0u) ? char_len : 1u);
+      const String candidate = text.substring(line_start, next);
+      if (scheduleTitleWidth(candidate, style) > max_width) {
+        break;
+      }
+      fit_end = next;
+      if (isScheduleBreakSpace(text, byte_index)) {
+        break_end = byte_index;
+      }
+      byte_index = next;
+    }
+
+    if (fit_end == line_start) {
+      const uint8_t char_len = utf8CharByteLen(text, line_start);
+      fit_end = line_start + ((char_len > 0u) ? char_len : 1u);
+    }
+    const bool has_more = fit_end < text.length();
+    const size_t line_end = (has_more && break_end > line_start) ? break_end : fit_end;
+    layout.lines[layout.line_count++] = text.substring(line_start, line_end);
+    line_start = (line_end < fit_end) ? line_end + 1u : fit_end;
+  }
+
+  while (isScheduleBreakSpace(text, line_start)) {
+    ++line_start;
+  }
+  const bool complete = line_start >= text.length();
+  layout.total_height = static_cast<uint16_t>(
+      layout.line_count * layout.line_height +
+      ((layout.line_count > 0u) ? (layout.line_count - 1u) * kScheduleLineGap : 0u));
+  return complete;
+}
+
+uint8_t scheduleLineCapacity(uint16_t max_height, uint16_t line_height) {
+  if (line_height == 0u || max_height < line_height) {
+    return 0u;
+  }
+  const uint16_t count = static_cast<uint16_t>(
+      (max_height + kScheduleLineGap) / (line_height + kScheduleLineGap));
+  return static_cast<uint8_t>(std::min<uint16_t>(count, kScheduleMaxTextLines));
+}
+
+ScheduleTitleLayout layoutScheduleTitle(const String &text, uint16_t max_width,
+                                        uint16_t max_height) {
+  ScheduleTitleLayout layout;
+  const uint8_t large_lines = scheduleLineCapacity(
+      max_height, scheduleTitleHeight(text, kScheduleLargeTextStyle));
+  if (wrapScheduleTitle(text, max_width, large_lines, kScheduleLargeTextStyle, false,
+                        layout)) {
+    return layout;
+  }
+
+  const uint8_t compact_lines = scheduleLineCapacity(
+      max_height, scheduleTitleHeight(text, kScheduleCompactTextStyle));
+  if (wrapScheduleTitle(text, max_width, compact_lines, kScheduleCompactTextStyle, false,
+                        layout)) {
+    return layout;
+  }
+
+  wrapScheduleTitle(text, max_width, compact_lines, kScheduleCompactTextStyle, true, layout);
+  return layout;
+}
+
 void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String &text,
-                           uint8_t color_nibble, bool dithered) {
-  const uint16_t line_h = scheduleTitleHeight(text);
+                           const ScheduleTextStyle &style, uint8_t color_nibble,
+                           bool dithered) {
+  const uint16_t line_h = scheduleTitleHeight(text, style);
   uint16_t pen_x = x;
   size_t byte_index = 0;
   while (byte_index < text.length()) {
@@ -372,8 +514,8 @@ void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String
     }
 
     const String run = text.substring(run_start, byte_index);
-    const uint8_t px = ascii_run ? kScheduleTitleAsciiPx : kScheduleTitleCjkPx;
-    const TextFont font = ascii_run ? TextFont::Ascii10 : TextFont::Cjk10;
+    const uint8_t px = ascii_run ? style.ascii_px : style.cjk_px;
+    const TextFont font = ascii_run ? style.ascii_font : style.cjk_font;
     const uint16_t run_y =
         static_cast<uint16_t>(y + ((line_h > px) ? ((line_h - px) / 2u) : 0u));
     if (dithered) {
@@ -382,7 +524,8 @@ void emitScheduleTitleText(SceneSink &sink, uint16_t x, uint16_t y, const String
       sink.text(pen_x, run_y, run, px, color_nibble, font,
                 preferredAsciiAAMode(run, font, px));
     }
-    pen_x = static_cast<uint16_t>(pen_x + scheduleTitleRunWidth(run, ascii_run));
+    pen_x =
+        static_cast<uint16_t>(pen_x + scheduleTitleRunWidth(run, ascii_run, style));
   }
 }
 
@@ -961,19 +1104,81 @@ void emitAATestPanel(SceneSink &sink, const CalendarLayout &layout) {
   }
 }
 
-uint16_t timelineYForMinute(const CalendarLayout &layout, uint16_t minute_value) {
-  if (minute_value <= kScheduleStartMinute) {
-    return layout.list_top;
-  }
-  if (minute_value >= kScheduleEndMinute) {
-    return layout.list_bottom;
-  }
-  const uint32_t usable_h =
-      (layout.list_bottom > layout.list_top) ? static_cast<uint32_t>(layout.list_bottom - layout.list_top) : 0u;
+struct SchedulePeriodGeometry {
+  Rect bounds;
+  uint16_t start_minute = 0;
+  uint16_t end_minute = 0;
+  uint16_t axis_x = 0;
+  uint16_t timeline_left = 0;
+  uint16_t timeline_right = 0;
+  uint16_t timeline_top = 0;
+  uint16_t timeline_bottom = 0;
+};
+
+SchedulePeriodGeometry schedulePeriodGeometry(const CalendarLayout &layout, uint8_t period_index,
+                                              bool two_columns) {
+  constexpr uint16_t kOuterPad = 7u;
+  constexpr uint16_t kColumnGap = 8u;
+  const uint16_t column_gap = two_columns ? kColumnGap : 0u;
+  const uint16_t available_w =
+      (layout.schedule_inner.w > kOuterPad * 2u + column_gap)
+          ? static_cast<uint16_t>(layout.schedule_inner.w - kOuterPad * 2u - column_gap)
+          : 0u;
+  const uint16_t left_w = two_columns ? static_cast<uint16_t>(available_w / 2u) : available_w;
+  const uint16_t right_w = two_columns ? static_cast<uint16_t>(available_w - left_w) : 0u;
+  const uint16_t left_x = static_cast<uint16_t>(layout.schedule_inner.x + kOuterPad);
+  const uint16_t right_x = static_cast<uint16_t>(left_x + left_w + kColumnGap);
+
+  SchedulePeriodGeometry period;
+  period.bounds =
+      (period_index == 0u) ? makeRect(left_x, layout.list_top, left_w,
+                                      static_cast<uint16_t>(layout.list_bottom - layout.list_top))
+                           : makeRect(right_x, layout.list_top, right_w,
+                                      static_cast<uint16_t>(layout.list_bottom - layout.list_top));
+  period.start_minute =
+      (!two_columns || period_index == 0u) ? kScheduleStartMinute : kScheduleSplitMinute;
+  period.end_minute = !two_columns ? kScheduleEndMinute
+                                   : ((period_index == 0u) ? kScheduleSplitMinute
+                                                           : kScheduleEndMinute);
+  period.axis_x = static_cast<uint16_t>(period.bounds.x + 1u);
+  const uint16_t axis_label_w = textWidthPx("22", 10u, TextFont::Digit10);
+  period.timeline_left = static_cast<uint16_t>(period.axis_x + axis_label_w + 5u);
+  period.timeline_right =
+      static_cast<uint16_t>(period.bounds.x + period.bounds.w - 2u);
+  period.timeline_top = static_cast<uint16_t>(
+      layout.list_top + (two_columns ? kSchedulePeriodHeaderH : 0u));
+  period.timeline_bottom = layout.list_bottom;
+  return period;
+}
+
+uint16_t timelineYForMinute(const SchedulePeriodGeometry &period, uint16_t minute_value) {
+  const uint16_t height =
+      (period.timeline_bottom > period.timeline_top)
+          ? static_cast<uint16_t>(period.timeline_bottom - period.timeline_top)
+          : 0u;
   return static_cast<uint16_t>(
-      layout.list_top +
-      ((static_cast<uint32_t>(minute_value - kScheduleStartMinute) * usable_h) /
-       static_cast<uint32_t>(kScheduleEndMinute - kScheduleStartMinute)));
+      period.timeline_top +
+      timelineOffsetForMinute(minute_value, period.start_minute, period.end_minute, height));
+}
+
+void emitScheduleContinuation(const Rect &block, bool continues_before, bool continues_after,
+                              uint8_t color_nibble, SceneSink &sink) {
+  const uint16_t cx = static_cast<uint16_t>(block.x + block.w / 2u);
+  if (continues_before && block.y >= 1u) {
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 1u), block.y, 3u, 1u), color_nibble);
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 2u), static_cast<uint16_t>(block.y + 1u),
+                           5u, 1u), color_nibble);
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 3u), static_cast<uint16_t>(block.y + 2u),
+                           7u, 1u), color_nibble);
+  }
+  if (continues_after && block.h >= 3u) {
+    const uint16_t bottom = static_cast<uint16_t>(block.y + block.h - 1u);
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 3u), static_cast<uint16_t>(bottom - 2u),
+                           7u, 1u), color_nibble);
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 2u), static_cast<uint16_t>(bottom - 1u),
+                           5u, 1u), color_nibble);
+    sink.fillRect(makeRect(static_cast<uint16_t>(cx - 1u), bottom, 3u, 1u), color_nibble);
+  }
 }
 
 }  // namespace
@@ -989,7 +1194,7 @@ void emitCalendarWeatherHeader(const CalendarModel &model, const CalendarLayout 
   const uint16_t battery_x = batteryHeaderIconX(header);
   const uint16_t status_y = statusHeaderIconY(header);
   sink.text(location_text.x, location_text.y, location_text.text, location_text.px, green,
-            location_text.font, location_text.aa);
+            location_text.font, TextAAMode::Threshold);
   emitBatteryIcon(sink, battery_x, status_y, model.header_battery_pct);
   emitWeatherIcon(sink, icon_x, icon_y, kHeaderWeatherIconSize, model.header_weather_code);
   emitWifiIcon(sink, wifi_x, status_y, model.header_wifi_connected);
@@ -1014,10 +1219,8 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
       preferredTextFont(model.header_date, header_font, header_date_px);
   const TextFont header_sensors_font =
       preferredTextFont(model.header_sensors, header_font, header_sensors_px);
-  const TextAAMode header_date_aa =
-      preferredAsciiAAMode(model.header_date, header_date_font, header_date_px);
-  const TextAAMode header_sensors_aa =
-      preferredAsciiAAMode(model.header_sensors, header_sensors_font, header_sensors_px);
+  const TextAAMode header_date_aa = TextAAMode::Threshold;
+  const TextAAMode header_sensors_aa = TextAAMode::Threshold;
   const HeaderMetrics header = computeHeaderMetrics(layout, model, header_date_font);
   const Rect header_card = makeRect(header.card_x, header.card_y, header.card_w, header.card_h);
   emitRoundedOutline(sink, header_card, 12u, black, white, 2u);
@@ -1052,35 +1255,65 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     return;
   }
 
-  const uint16_t axis_x = static_cast<uint16_t>(layout.schedule_inner.x + 8);
-  const uint16_t timeline_left = static_cast<uint16_t>(layout.items_x + 2);
-  const uint16_t timeline_right =
-      static_cast<uint16_t>(layout.schedule_inner.x + layout.schedule_inner.w - 8);
-  const uint16_t timeline_w =
-      (timeline_right > timeline_left) ? static_cast<uint16_t>(timeline_right - timeline_left) : 0u;
   const uint8_t axis_label_px = 10u;
   const TextFont axis_label_font = TextFont::Digit10;
   const uint16_t axis_label_h = textHeightPx("22", axis_label_px, axis_label_font);
+  const bool two_columns = model.schedule_two_columns;
+  const uint8_t period_count = two_columns ? 2u : 1u;
+  SchedulePeriodGeometry periods[2] = {
+      schedulePeriodGeometry(layout, 0u, two_columns),
+      schedulePeriodGeometry(layout, 1u, two_columns),
+  };
+  const uint16_t divider_x =
+      static_cast<uint16_t>(periods[0].bounds.x + periods[0].bounds.w + 3u);
+  if (two_columns && layout.list_bottom > layout.list_top) {
+    sink.fillRect(makeRect(divider_x, layout.list_top, 1u,
+                           static_cast<uint16_t>(layout.list_bottom - layout.list_top)),
+                  black);
+  }
 
-  for (uint8_t slot = 0; slot <= kScheduleSlotCount; ++slot) {
-    const uint16_t minute_value = static_cast<uint16_t>(kScheduleStartMinute + slot * 30u);
-    const uint16_t y = timelineYForMinute(layout, minute_value);
-    const bool is_hour_line = ((slot % 2u) == 0u);
-    if (is_hour_line) {
+  for (uint8_t period_index = 0; period_index < period_count; ++period_index) {
+    const SchedulePeriodGeometry &period = periods[period_index];
+    if (two_columns) {
+      String period_label;
+      if (zh_ui) {
+        period_label = (period_index == 0u) ? "\xE4\xB8\x8A\xE5\x8D\x88"
+                                           : "\xE4\xB8\x8B\xE5\x8D\x88";
+      } else if (model.ui_language == "fr") {
+        period_label = (period_index == 0u) ? "MATIN" : "APRES-MIDI";
+      } else {
+        period_label = (period_index == 0u) ? "AM" : "PM";
+      }
+      const TextFont period_font = zh_ui ? TextFont::Cjk16 : TextFont::AsciiSmooth16;
+      const uint16_t period_label_w = textWidthPx(period_label, 16u, period_font);
+      const uint16_t period_label_x =
+          (period.bounds.w > period_label_w)
+              ? static_cast<uint16_t>(period.bounds.x + (period.bounds.w - period_label_w) / 2u)
+              : period.bounds.x;
+      sink.text(period_label_x, layout.list_top, period_label, 16u, black, period_font,
+                preferredAsciiAAMode(period_label, period_font, 16u));
+    }
+
+    const uint16_t timeline_w =
+        (period.timeline_right > period.timeline_left)
+            ? static_cast<uint16_t>(period.timeline_right - period.timeline_left)
+            : 0u;
+    for (uint16_t minute_value = period.start_minute; minute_value <= period.end_minute;
+         minute_value = static_cast<uint16_t>(minute_value + 60u)) {
+      const uint16_t y = timelineYForMinute(period, minute_value);
       const String hour_label =
           String((minute_value / 60u < 10u) ? "0" : "") + String(minute_value / 60u);
-      const uint16_t label_y =
+      uint16_t label_y =
           (y > (axis_label_h / 2u)) ? static_cast<uint16_t>(y - axis_label_h / 2u) : 0u;
-      sink.text(axis_x, label_y, hour_label, axis_label_px, black, axis_label_font,
+      if (label_y + axis_label_h > period.timeline_bottom) {
+        label_y = static_cast<uint16_t>(period.timeline_bottom - axis_label_h);
+      }
+      sink.text(period.axis_x, label_y, hour_label, axis_label_px, black, axis_label_font,
                 TextAAMode::Threshold);
+      if (timeline_w > 0u) {
+        sink.fillRect(makeRect(period.timeline_left, y, timeline_w, 1u), blue);
+      }
     }
-    if (timeline_w == 0) {
-      continue;
-    }
-    if (!is_hour_line) {
-      continue;
-    }
-    sink.fillRect(makeRect(timeline_left, y, timeline_w, 1), blue);
   }
 
   for (size_t i = 0; i < model.visible_event_count; ++i) {
@@ -1090,58 +1323,87 @@ void emitCalendarScene(const CalendarModel &model, const CalendarLayout &layout,
     if (end_minute <= start_minute) {
       end_minute = static_cast<uint16_t>(start_minute + 30u);
     }
-    if (end_minute <= kScheduleStartMinute || start_minute >= kScheduleEndMinute) {
-      continue;
-    }
-    if (start_minute < kScheduleStartMinute) {
-      start_minute = kScheduleStartMinute;
-    }
-    if (end_minute > kScheduleEndMinute) {
-      end_minute = kScheduleEndMinute;
-    }
+    for (uint8_t period_index = 0u; period_index < period_count; ++period_index) {
+      const SchedulePeriodGeometry &period = periods[period_index];
+      TimelineSegment segment;
+      if (!clipTimelineSegment(start_minute, end_minute, period.start_minute,
+                               period.end_minute, segment)) {
+        continue;
+      }
+      const uint16_t timeline_w =
+          (period.timeline_right > period.timeline_left)
+              ? static_cast<uint16_t>(period.timeline_right - period.timeline_left)
+              : 0u;
+      if (timeline_w == 0u) {
+        continue;
+      }
+      const uint16_t y0 = timelineYForMinute(period, segment.start_minute);
+      const uint16_t y1 = timelineYForMinute(period, segment.end_minute);
+      const uint16_t block_h =
+          (y1 > y0) ? static_cast<uint16_t>(y1 - y0) : 1u;
+      const uint16_t block_y = y0;
 
-    const uint16_t y0 = timelineYForMinute(layout, start_minute);
-    const uint16_t y1 = timelineYForMinute(layout, end_minute);
-    uint16_t block_h = (y1 > y0) ? static_cast<uint16_t>(y1 - y0) : static_cast<uint16_t>(layout.row_h);
-    if (block_h < kScheduleEventMinVisualH) {
-      block_h = kScheduleEventMinVisualH;
-    }
+      const uint8_t lane_count = (event.lane_count == 0u) ? 1u : event.lane_count;
+      const uint16_t lane_gap = 3u;
+      const uint16_t available_w =
+          (timeline_w > static_cast<uint16_t>((lane_count - 1u) * lane_gap))
+              ? static_cast<uint16_t>(timeline_w - (lane_count - 1u) * lane_gap)
+              : timeline_w;
+      const uint16_t lane_w =
+          (lane_count > 0u) ? static_cast<uint16_t>(available_w / lane_count) : available_w;
+      const uint16_t block_x = static_cast<uint16_t>(
+          period.timeline_left + event.lane * static_cast<uint16_t>(lane_w + lane_gap));
+      const uint16_t block_w = (lane_w > 1u) ? static_cast<uint16_t>(lane_w - 1u) : lane_w;
+      if (block_w == 0u) {
+        continue;
+      }
+      const Rect block = makeRect(block_x, block_y, block_w, block_h);
+      const uint8_t accent_color = (event.color_nibble == white) ? blue : event.color_nibble;
+      emitRoundedOutline(sink, block, 4u, accent_color, white, 1u);
+      const uint16_t accent_y =
+          (block.h > 4u) ? static_cast<uint16_t>(block.y + 2u) : block.y;
+      const uint16_t accent_h =
+          (block.h > 4u) ? static_cast<uint16_t>(block.h - 4u) : block.h;
+      const Rect accent = makeRect(static_cast<uint16_t>(block.x + 2u),
+                                   accent_y, 4u, accent_h);
+      sink.fillRect(accent, accent_color);
+      emitScheduleContinuation(block, segment.continues_before, segment.continues_after,
+                               accent_color, sink);
 
-    const uint8_t lane_count = (event.lane_count == 0) ? 1 : event.lane_count;
-    const uint16_t lane_gap = 3;
-    const uint16_t available_w =
-        (timeline_w > static_cast<uint16_t>((lane_count - 1u) * lane_gap))
-            ? static_cast<uint16_t>(timeline_w - (lane_count - 1u) * lane_gap)
-            : timeline_w;
-    const uint16_t lane_w =
-        (lane_count > 0) ? static_cast<uint16_t>(available_w / lane_count) : available_w;
-    const uint16_t block_x = static_cast<uint16_t>(
-        timeline_left + event.lane * static_cast<uint16_t>(lane_w + lane_gap));
-    const uint16_t block_w =
-        (lane_w > 1) ? static_cast<uint16_t>(lane_w - 1) : lane_w;
-    const Rect block = makeRect(block_x, static_cast<uint16_t>(y0 + 1), block_w,
-                                static_cast<uint16_t>(block_h > 2 ? block_h - 2 : block_h));
-    emitRoundedOutline(sink, block, 4u, black, white, 1u);
-    const uint8_t accent_color = (event.color_nibble == white) ? blue : event.color_nibble;
-    const uint16_t accent_h = (block.h > 6u) ? static_cast<uint16_t>(block.h - 4u) : block.h;
-    const Rect accent = makeRect(static_cast<uint16_t>(block.x + 2u),
-                                 static_cast<uint16_t>(block.y + 2u), 4u, accent_h);
-    sink.fillRect(accent, accent_color);
-
-    const uint16_t text_pad_x = 9;
-    const uint16_t text_space =
-        (block.w > text_pad_x * 2) ? static_cast<uint16_t>(block.w - text_pad_x * 2) : 0u;
-    if (text_space == 0 || block.h < 8) {
-      continue;
+      const uint16_t text_pad_x = 9u;
+      const uint16_t text_space =
+          (block.w > text_pad_x * 2u)
+              ? static_cast<uint16_t>(block.w - text_pad_x * 2u)
+              : 0u;
+      const uint16_t continuation_top = segment.continues_before ? 3u : 0u;
+      const uint16_t continuation_bottom = segment.continues_after ? 3u : 0u;
+      const uint16_t vertical_pad =
+          (block.h >= static_cast<uint16_t>(kScheduleTitleCjkPx + 2u)) ? 1u : 0u;
+      const uint16_t content_y =
+          static_cast<uint16_t>(block.y + vertical_pad + continuation_top);
+      const uint16_t content_bottom =
+          static_cast<uint16_t>(block.y + block.h - vertical_pad - continuation_bottom);
+      const uint16_t content_h =
+          (content_bottom > content_y) ? static_cast<uint16_t>(content_bottom - content_y) : 0u;
+      if (text_space == 0u) {
+        continue;
+      }
+      const ScheduleTitleLayout title_layout =
+          layoutScheduleTitle(event.title, text_space, content_h);
+      if (title_layout.line_count == 0u || content_h < title_layout.total_height) {
+        continue;
+      }
+      const uint16_t text_y = static_cast<uint16_t>(
+          content_y + ((content_h > title_layout.total_height)
+                           ? ((content_h - title_layout.total_height) / 2u)
+                           : 0u));
+      for (uint8_t line_index = 0u; line_index < title_layout.line_count; ++line_index) {
+        const uint16_t line_y = static_cast<uint16_t>(
+            text_y + line_index * (title_layout.line_height + kScheduleLineGap));
+        emitScheduleTitleText(sink, static_cast<uint16_t>(block.x + text_pad_x), line_y,
+                              title_layout.lines[line_index], *title_layout.style, black, false);
+      }
     }
-    const String visible_title = truncateScheduleTitleToWidth(event.title, text_space);
-    const uint16_t title_h = scheduleTitleHeight(visible_title);
-    const uint16_t content_y = static_cast<uint16_t>(block.y + 1u);
-    const uint16_t content_h = (block.h > 2u) ? static_cast<uint16_t>(block.h - 2u) : block.h;
-    const uint16_t text_y = static_cast<uint16_t>(
-        content_y + ((content_h > title_h) ? ((content_h - title_h) / 2u) : 0u));
-    emitScheduleTitleText(sink, static_cast<uint16_t>(block.x + text_pad_x), text_y,
-                          visible_title, black, false);
   }
 
   if (!model.time_valid || !layout.has_grid) {

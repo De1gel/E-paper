@@ -134,4 +134,16 @@ String normalizeCalendarUpdatedAtValue(const String &raw) {
   return value;
 }
 
+String truncateCalendarUtf8Value(const String &raw, size_t max_bytes) {
+  if (raw.length() <= max_bytes) {
+    return raw;
+  }
+  size_t end = max_bytes;
+  while (end > 0u &&
+         (static_cast<uint8_t>(raw[end]) & 0xC0u) == 0x80u) {
+    --end;
+  }
+  return raw.substring(0u, end);
+}
+
 }  // namespace appfw

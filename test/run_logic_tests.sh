@@ -11,7 +11,6 @@ g++ -std=c++17 -Wall -Wextra -pedantic \
   "${repo_root}/src/app/RefreshPolicy.cpp" \
   "${repo_root}/src/calendar/CalendarLogic.cpp" \
   "${repo_root}/src/system/CalendarStore.cpp" \
-  "${repo_root}/src/system/CalendarSyncService.cpp" \
   "${repo_root}/src/system/CalendarSettings.cpp" \
   "${repo_root}/src/system/CalendarEventNormalize.cpp" \
   "${repo_root}/src/system/CalendarIcsCore.cpp" \

@@ -21,7 +21,6 @@ class CalendarStore {
 
   int findIndexById(uint16_t id) const;
   int findIndexByExternal(const String &source, const String &external_id) const;
-  int findLastIndexBySource(const String &source) const;
   bool removeAt(size_t index);
   size_t removeExpiredBefore(const String &min_date);
   size_t removeOnceOutsideRange(const String &min_date, const String &max_date_exclusive);

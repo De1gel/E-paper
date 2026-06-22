@@ -20,14 +20,18 @@ struct WifiSettings {
   uint32_t app_switch_interval_sec = 3600;
   bool calendar_enabled = true;
   String calendar_layout;
+  String schedule_columns;
   uint32_t calendar_refresh_sec = 7200;
   uint16_t sleep_start_minute = 22 * 60;
   uint16_t sleep_end_minute = 8 * 60;
   String calendar_url;
   String weather_city;
+  String weather_location_city;
   String weather_lat;
   String weather_lon;
   String weather_url;
+  int32_t weather_code = -1;
+  int32_t last_daily_sync_day = -1;
 };
 
 class SettingsStore {

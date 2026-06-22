@@ -59,19 +59,6 @@ int CalendarStore::findIndexByExternal(const String &source, const String &exter
   return -1;
 }
 
-int CalendarStore::findLastIndexBySource(const String &source) const {
-  if (source.length() == 0) {
-    return -1;
-  }
-  for (size_t i = count_; i > 0; --i) {
-    const size_t index = i - 1u;
-    if (events_[index].source == source) {
-      return static_cast<int>(index);
-    }
-  }
-  return -1;
-}
-
 bool CalendarStore::removeAt(size_t index) {
   if (index >= count_) {
     return false;
@@ -147,9 +134,6 @@ String CalendarStore::serialize() const {
   bool first_item = true;
   for (size_t i = 0; i < count_; ++i) {
     const CalendarEvent &e = events_[i];
-    if (e.source == "ics") {
-      continue;
-    }
     if (!first_item) {
       out += "\n";
     }
@@ -291,6 +275,7 @@ void CalendarStore::deserialize(const String &packed) {
     event.color = normalizeCalendarColorValue(event.color);
     event.repeat = normalizeCalendarRepeatValue(event.repeat);
     event.source = normalizeCalendarSourceValue(event.source);
+    // Remote ICS events moved to the SPIFFS month cache in settings revision 3.
     if (event.source == "ics") {
       continue;
     }
