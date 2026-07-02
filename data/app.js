@@ -13,6 +13,11 @@ const fileSelectAll = document.getElementById("fileSelectAll");
 const batchDeleteBtn = document.getElementById("batchDeleteBtn");
 const batchDownloadBtn = document.getElementById("batchDownloadBtn");
 const batchProgress = document.getElementById("batchProgress");
+const filePreview = document.getElementById("filePreview");
+const filePreviewTitle = document.getElementById("filePreviewTitle");
+const filePreviewStatus = document.getElementById("filePreviewStatus");
+const filePreviewImg = document.getElementById("filePreviewImg");
+const filePreviewClose = document.getElementById("filePreviewClose");
 const gammaCtrl = document.getElementById("gammaCtrl");
 const gammaVal = document.getElementById("gammaVal");
 const uploadModeSel = document.getElementById("uploadMode");
@@ -22,7 +27,7 @@ const uploadBtn = document.querySelector("button[onclick='uploadFile()']");
 const uploadBox = document.getElementById("uploadBox");
 const uploadPreview = document.getElementById("uploadPreview");
 const uploadPreviewImg = document.getElementById("uploadPreviewImg");
-const WEB_APP_VERSION = "20260620g";
+const WEB_APP_VERSION = "20260622b";
 const ditherHint = document.getElementById("ditherHint");
 const gammaHint = document.getElementById("gammaHint");
 const modeNote = document.getElementById("modeNote");
@@ -76,6 +81,7 @@ let filesLoadedOnce = false;
 let schedulesLoadedOnce = false;
 let statusPollTimer = null;
 let statusPollInFlight = false;
+let filePreviewObjectUrl = "";
 
 const STATUS_POLL_MS_ACTIVE = 8000;
 const STATUS_POLL_MS_IDLE = 30000;
@@ -226,6 +232,10 @@ const I18N = {
     "common.readonly": "只读",
     "common.open": "打开",
     "common.download": "下载",
+    "common.preview": "预览",
+    "common.close": "关闭",
+    "common.preview_loading": "正在加载预览...",
+    "common.preview_failed": "预览失败",
     "common.select_all": "全选",
     "common.batch_delete": "批量删除",
     "common.batch_download": "批量下载",
@@ -451,6 +461,10 @@ const I18N = {
     "common.readonly": "Read-only",
     "common.open": "Open",
     "common.download": "Download",
+    "common.preview": "Preview",
+    "common.close": "Close",
+    "common.preview_loading": "Loading preview...",
+    "common.preview_failed": "Preview failed",
     "common.select_all": "Select all",
     "common.batch_delete": "Delete selected",
     "common.batch_download": "Download selected",
@@ -676,6 +690,10 @@ const I18N = {
     "common.readonly": "Lecture seule",
     "common.open": "Ouvrir",
     "common.download": "Telecharger",
+    "common.preview": "Apercu",
+    "common.close": "Fermer",
+    "common.preview_loading": "Chargement de l'apercu...",
+    "common.preview_failed": "Echec de l'apercu",
     "common.select_all": "Tout selectionner",
     "common.batch_delete": "Supprimer la selection",
     "common.batch_download": "Telecharger la selection",
@@ -1764,6 +1782,64 @@ if (fileSelectAll) {
   fileSelectAll.addEventListener("change", () => toggleSelectAll(fileSelectAll.checked));
 }
 
+function isPreviewableImage(name) {
+  return /\.(png|jpe?g|bmp)$/i.test(String(name || ""));
+}
+
+function closeFilePreview() {
+  if (filePreviewObjectUrl) {
+    URL.revokeObjectURL(filePreviewObjectUrl);
+    filePreviewObjectUrl = "";
+  }
+  if (filePreviewImg) {
+    filePreviewImg.removeAttribute("src");
+    filePreviewImg.hidden = true;
+  }
+  if (filePreviewStatus) filePreviewStatus.textContent = "";
+  if (filePreviewTitle) filePreviewTitle.textContent = "";
+  if (filePreview) {
+    filePreview.hidden = true;
+    filePreview.removeAttribute("data-path");
+  }
+}
+
+async function previewImageFile(path, name) {
+  if (!filePreview || !filePreviewImg || !isPreviewableImage(name)) return;
+  closeFilePreview();
+  filePreview.hidden = false;
+  filePreview.dataset.path = path;
+  filePreviewTitle.textContent = name;
+  filePreviewStatus.textContent = t("common.preview_loading");
+
+  try {
+    const response = await fetch("/api/file?path=" + encodeURIComponent(path));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (filePreview.dataset.path !== path) return;
+    filePreviewObjectUrl = URL.createObjectURL(blob);
+    filePreviewImg.onload = () => {
+      if (filePreviewStatus) filePreviewStatus.textContent = "";
+    };
+    filePreviewImg.onerror = () => {
+      if (filePreviewStatus) filePreviewStatus.textContent = t("common.preview_failed");
+      filePreviewImg.hidden = true;
+    };
+    filePreviewImg.src = filePreviewObjectUrl;
+    filePreviewImg.alt = name;
+    filePreviewImg.hidden = false;
+    filePreview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    console.warn("[FILES] preview failed", path, error);
+    if (filePreview.dataset.path === path) {
+      filePreviewStatus.textContent = `${t("common.preview_failed")}: ${error.message || error}`;
+    }
+  }
+}
+
+if (filePreviewClose) {
+  filePreviewClose.addEventListener("click", closeFilePreview);
+}
+
 function renderRows(items) {
   lastFileItems = Array.isArray(items) ? items.slice() : [];
   const visiblePaths = new Set(lastFileItems.map((item) => joinPath(currentDir, item.name || "")));
@@ -1832,6 +1908,14 @@ function renderRows(items) {
       opTd.appendChild(openBtn);
       opTd.appendChild(delBtn);
     } else {
+      if (isPreviewableImage(name)) {
+        const previewBtn = document.createElement("button");
+        previewBtn.className = "btn";
+        previewBtn.textContent = t("common.preview");
+        previewBtn.onclick = () => previewImageFile(path, name);
+        opTd.appendChild(previewBtn);
+      }
+
       const dl = document.createElement("a");
       dl.className = "btn";
       dl.textContent = t("common.download");
@@ -1860,6 +1944,7 @@ function renderRows(items) {
 
 async function listFiles(path) {
   const nextDir = normalizeDir(path || currentDir || "/pic");
+  closeFilePreview();
   if (nextDir !== selectionDir) {
     selectedFilePaths.clear();
     selectionDir = nextDir;

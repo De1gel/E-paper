@@ -1091,6 +1091,16 @@ void WifiManager::update(uint32_t now_ms) {
       Serial.printf("[WIFI] STA status -> %s (%d)\n", wifiStatusName(status), status);
       last_sta_wifi_status_ = status;
     }
+    const bool ap_background_terminal_failure =
+        sta_session_role_ == StaSessionRole::ApBackground &&
+        (status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED);
+    if (ap_background_terminal_failure) {
+      Serial.printf("[WIFI] AP background STA single attempt failed status=%s/%d -> keep AP\n",
+                    wifiStatusName(status), status);
+      sta_connect_failed_ = true;
+      stopStaOnly("ap_background_terminal_failure_keep_ap");
+      return;
+    }
     if (status == WL_CONNECTED) {
       state_ = State::StaRunning;
       sta_session_start_ms_ = now_ms;
@@ -1198,7 +1208,10 @@ void WifiManager::update(uint32_t now_ms) {
     maybeSyncCalendarUrl(now_ms);
   }
 
-  updateTimeout(now_ms);
+  // HTTP handlers and network syncs can call markActivity(millis()) after the
+  // caller captured now_ms. Use a fresh snapshot so timeout subtraction cannot
+  // underflow when the activity timestamp is a few milliseconds newer.
+  updateTimeout(millis());
 }
 
 void WifiManager::startAP() {
@@ -1376,6 +1389,8 @@ void WifiManager::cleanupDisconnectedStaSession(const char *reason) {
 void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *reason_tag) {
   const bool keep_ap = isApSessionActive();
   const bool status_probe = reason_tag && strcmp(reason_tag, "calendar_probe") == 0;
+  const bool ap_background_attempt =
+      keep_ap && reason_tag && strcmp(reason_tag, "ap_config_background") == 0;
   if (!keep_ap) {
     stop("switch_to_sta");
   } else if (isStaActive()) {
@@ -1384,6 +1399,7 @@ void WifiManager::startSTAWithTimeout(uint32_t connect_timeout_ms, const char *r
   digitalWrite(kPeripheralPowerPin, HIGH);
   delay(3);
   WiFi.mode(keep_ap ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setAutoReconnect(!ap_background_attempt);
   WiFi.setSleep(true);
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
   WiFi.setHostname(kDefaultHostname);
@@ -2423,7 +2439,11 @@ void WifiManager::updateTimeout(uint32_t now_ms) {
     if (sta_num > 0) {
       markActivity(now_ms);
     }
-    const uint32_t idle_ms = now_ms - last_activity_ms_;
+    const int32_t signed_idle_ms = static_cast<int32_t>(now_ms - last_activity_ms_);
+    if (signed_idle_ms < 0) {
+      return;
+    }
+    const uint32_t idle_ms = static_cast<uint32_t>(signed_idle_ms);
     if (idle_ms >= kApIdleTimeoutMs) {
       Serial.printf("[WIFI] AP idle timeout -> stop (idle_ms=%lu, sta_num=%d)\n",
                     static_cast<unsigned long>(idle_ms), sta_num);
@@ -2445,7 +2465,11 @@ void WifiManager::updateTimeout(uint32_t now_ms) {
                     static_cast<unsigned long>(now_ms));
       return;
     }
-    const uint32_t idle_ms = now_ms - base_ms;
+    const int32_t signed_idle_ms = static_cast<int32_t>(now_ms - base_ms);
+    if (signed_idle_ms < 0) {
+      return;
+    }
+    const uint32_t idle_ms = static_cast<uint32_t>(signed_idle_ms);
     if (idle_ms >= kStaSessionTimeoutMs) {
       Serial.printf("[WIFI] STA idle timeout -> stop (idle_ms=%lu base_ms=%lu now_ms=%lu last_activity_ms=%lu session_start_ms=%lu)\n",
                     static_cast<unsigned long>(idle_ms),

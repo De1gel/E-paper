@@ -113,7 +113,17 @@
     .btn:disabled { opacity:.5; cursor:not-allowed; }
     .crumb { background:var(--soft); border-radius:999px; padding:6px 10px; }
     .crumb.current { background:#fff; font-weight:600; }
-    .file-table td.actions { width:220px; }
+    .file-table td:nth-child(2) { overflow-wrap:anywhere; }
+    .file-table td.actions {
+      width:300px;
+      white-space:nowrap;
+    }
+    .file-table td.actions .btn {
+      padding:8px 7px;
+      text-align:center;
+      white-space:nowrap;
+    }
+    .file-table td.actions .btn + .btn { margin-left:6px; }
     .name-btn {
       border:none;
       background:none;
@@ -158,6 +168,37 @@
       max-width:800px;
       aspect-ratio:5 / 3;
       object-fit:contain;
+    }
+    .file-preview {
+      margin-top:12px;
+      padding:10px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#f8fbff;
+    }
+    .file-preview-head {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:8px;
+    }
+    .file-preview-title {
+      min-width:0;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+      font-weight:600;
+    }
+    .file-preview img {
+      display:block;
+      width:100%;
+      max-width:800px;
+      max-height:70vh;
+      margin:0 auto;
+      object-fit:contain;
+      image-rendering:auto;
+      background:#fff;
     }
     .hint-line { margin-top:8px; font-size:12px; color:#617180; line-height:1.6; }
     .tooltip {
@@ -262,7 +303,60 @@
     }
     @media (max-width:700px) {
       .grid2,.status-grid { grid-template-columns:1fr; }
-      .file-table td.actions { width:auto; }
+      .file-table thead { display:none; }
+      .file-table,
+      .file-table tbody { display:block; width:100%; }
+      .file-table tr {
+        display:grid;
+        grid-template-columns:28px minmax(0,1fr);
+        gap:4px 8px;
+        padding:10px 0;
+        border-bottom:1px solid var(--line);
+      }
+      .file-table td {
+        padding:0;
+        border:0;
+        min-width:0;
+      }
+      .file-table td:first-child {
+        grid-column:1;
+        grid-row:1 / span 2;
+        width:28px;
+        padding-top:2px;
+      }
+      .file-table td:nth-child(2) {
+        grid-column:2;
+        grid-row:1;
+        font-weight:600;
+      }
+      .file-table td:nth-child(3) {
+        grid-column:2;
+        grid-row:2;
+        color:var(--muted);
+        font-size:12px;
+      }
+      .file-table td:nth-child(4) { display:none; }
+      .file-table td[colspan] {
+        display:block;
+        grid-column:1 / -1;
+        grid-row:auto;
+        width:auto;
+        text-align:left;
+      }
+      .file-table td.actions {
+        grid-column:1 / -1;
+        grid-row:3;
+        width:auto;
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(72px,1fr));
+        gap:6px;
+        margin-top:6px;
+      }
+      .file-table td.actions .btn {
+        width:100%;
+        min-height:38px;
+        margin-left:0;
+      }
     }
   </style>
 </head>
@@ -544,6 +638,14 @@
           </thead>
           <tbody id="fileRows"></tbody>
         </table>
+        <div id="filePreview" class="file-preview" hidden>
+          <div class="file-preview-head">
+            <div id="filePreviewTitle" class="file-preview-title"></div>
+            <button id="filePreviewClose" class="btn" type="button" data-i18n="common.close">Close</button>
+          </div>
+          <div id="filePreviewStatus" class="small"></div>
+          <img id="filePreviewImg" alt="" hidden>
+        </div>
         <div class="small" id="fileSummary" style="margin-top:8px" data-i18n="files.loading">等待加载...</div>
       </div>
 
@@ -591,6 +693,6 @@
     </section>
   </div>
 
-<script src="/app.js?v=20260620d"></script>
+<script src="/app.js?v=20260622b"></script>
 </body>
 </html>

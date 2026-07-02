@@ -5,8 +5,113 @@
 #include <esp_system.h>
 
 #include "app/App.h"
+#include "Display_EPD_W21.h"
+#include "Display_EPD_W21_spi.h"
 #include "system/LightSleepController.h"
 #include "system/LogConfig.h"
+
+#ifndef APP_GREEN_CALIBRATION_FIRMWARE
+#define APP_GREEN_CALIBRATION_FIRMWARE 0
+#endif
+#ifndef APP_EPD_POST_REFRESH_SETTLE_MS
+#define APP_EPD_POST_REFRESH_SETTLE_MS 0
+#endif
+
+#if APP_GREEN_CALIBRATION_FIRMWARE
+namespace {
+constexpr uint8_t kBayer4x4[4][4] = {
+    {0, 8, 2, 10},
+    {12, 4, 14, 6},
+    {3, 11, 1, 9},
+    {15, 7, 13, 5},
+};
+
+// Five-bit-wide glyphs for the B00..B15 cell labels.
+constexpr uint8_t kGlyphs[11][7] = {
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E},  // B
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},  // 0
+    {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},  // 1
+    {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},  // 2
+    {0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E},  // 3
+    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},  // 4
+    {0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E},  // 5
+    {0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E},  // 6
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},  // 7
+    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},  // 8
+    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E},  // 9
+};
+
+uint8_t calibrationLabelPixel(uint8_t value, uint16_t local_x, uint16_t local_y) {
+  if (local_x >= 48u || local_y >= 18u) {
+    return 0xFFu;
+  }
+  if (local_x < 4u || local_y < 2u) {
+    return white;
+  }
+  const uint16_t text_x = local_x - 4u;
+  const uint16_t text_y = local_y - 2u;
+  if (text_y >= 14u) {
+    return white;
+  }
+  const uint8_t character = static_cast<uint8_t>(text_x / 12u);
+  const uint8_t character_x = static_cast<uint8_t>(text_x % 12u);
+  if (character >= 3u || character_x >= 10u) {
+    return white;
+  }
+  const uint8_t glyph = (character == 0u)
+                            ? 0u
+                            : static_cast<uint8_t>(1u + ((character == 1u)
+                                                            ? value / 10u
+                                                            : value % 10u));
+  const uint8_t row = static_cast<uint8_t>(text_y / 2u);
+  const uint8_t column = static_cast<uint8_t>(character_x / 2u);
+  return (kGlyphs[glyph][row] & (0x10u >> column)) ? black : white;
+}
+
+uint8_t calibrationPixel(uint16_t x, uint16_t y) {
+  constexpr uint16_t kCellWidth = 200u;
+  constexpr uint16_t kCellHeight = 120u;
+  const uint8_t column = static_cast<uint8_t>(x / kCellWidth);
+  const uint8_t row = static_cast<uint8_t>(y / kCellHeight);
+  const uint8_t blue_count = static_cast<uint8_t>(row * 4u + column);
+  const uint16_t local_x = static_cast<uint16_t>(x % kCellWidth);
+  const uint16_t local_y = static_cast<uint16_t>(y % kCellHeight);
+  const uint8_t label = calibrationLabelPixel(blue_count, local_x, local_y);
+  if (label != 0xFFu) {
+    return label;
+  }
+  return (kBayer4x4[y & 3u][x & 3u] < blue_count) ? blue : green;
+}
+
+void showGreenCalibrationCard() {
+  Serial.println("[CALIBRATION] rendering B00..B15 green/blue card");
+  EPD_init_fast();
+  EPD_W21_WriteCMD(0x10);
+  for (uint16_t y = 0; y < EPD_HEIGHT; ++y) {
+    for (uint16_t x = 0; x < EPD_WIDTH; x += 2u) {
+      const uint8_t high = calibrationPixel(x, y);
+      const uint8_t low = calibrationPixel(static_cast<uint16_t>(x + 1u), y);
+      EPD_W21_WriteDATA(static_cast<uint8_t>((high << 4u) | low));
+    }
+    if ((y & 0x1Fu) == 0u) {
+      yield();
+    }
+  }
+  EPD_W21_WriteCMD(0x12);
+  EPD_W21_WriteDATA(0x00);
+  delay(1);
+  while (!isEPD_W21_BUSY) {
+    delay(2);
+  }
+#if APP_EPD_POST_REFRESH_SETTLE_MS > 0
+  delay(APP_EPD_POST_REFRESH_SETTLE_MS);
+#endif
+  EPD_sleep();
+  digitalWrite(32, LOW);
+  Serial.println("[CALIBRATION] done; report the most natural Bxx cell");
+}
+}  // namespace
+#endif
 
 App g_app;
 appfw::LightSleepController g_light_sleep;
@@ -121,10 +226,17 @@ void setup() {
   Serial.println("[INIT] SPI configured: SCK=13 MISO=12 MOSI=14 CS=33");
   Serial.println("[BOOT] setup done");
 
+#if APP_GREEN_CALIBRATION_FIRMWARE
+  showGreenCalibrationCard();
+#else
   g_app.begin();
+#endif
 }
 
 void loop() {
+#if APP_GREEN_CALIBRATION_FIRMWARE
+  delay(1000);
+#else
   uint32_t now_ms = millis();
   g_app.update(now_ms);
   g_app.render();
@@ -149,4 +261,5 @@ void loop() {
   }
 #endif
   delay(50);
+#endif
 }

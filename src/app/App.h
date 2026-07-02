@@ -60,6 +60,9 @@ class App {
   bool isDailySyncDue(uint32_t now_ms, int32_t *key_out = nullptr) const;
   void beginDisplaySession();
   void endDisplaySession();
+  void persistViewState();
+  bool shouldRestartBeforeRender() const;
+  void restartBeforeRender();
   void setState(AppState next);
   bool ensureCalendarStripeBuffer();
   void rebuildCalendarSceneCache(const struct tm &local_tm, bool time_valid);
@@ -96,6 +99,7 @@ class App {
   uint16_t photo_file_count_ = 0;
   uint16_t last_logged_photo_file_count_ = 0xFFFF;
   bool needs_render_ = true;
+  bool render_restart_prepared_ = false;
   bool peripheral_power_on_ = false;
   static constexpr uint16_t kCalendarStripeRows = 32u;
   render::StripeBuffer calendar_stripe_;

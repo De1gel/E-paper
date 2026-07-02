@@ -7,7 +7,9 @@
 #undef MOTOSHORT
 #undef MOTOLONG
 #include <PNGdec.h>
+#include <Preferences.h>
 #include <SD.h>
+#include <SPI.h>
 #include <esp_heap_caps.h>
 #include <algorithm>
 #include <stdlib.h>
@@ -24,11 +26,33 @@
 #include "system/SdCard.h"
 
 namespace {
+#ifndef APP_EPD_RESTART_BEFORE_REFRESH
+#define APP_EPD_RESTART_BEFORE_REFRESH 0
+#endif
+#ifndef APP_EPD_RESTART_INTERVAL
+#define APP_EPD_RESTART_INTERVAL 1
+#endif
+#ifndef APP_EPD_POST_REFRESH_SETTLE_MS
+#define APP_EPD_POST_REFRESH_SETTLE_MS 0
+#endif
+#ifndef APP_EPD_POWER_CYCLE_BEFORE_RESTART
+#define APP_EPD_POWER_CYCLE_BEFORE_RESTART 0
+#endif
+#ifndef APP_EPD_RESTART_POWER_OFF_MS
+#define APP_EPD_RESTART_POWER_OFF_MS 2000
+#endif
 constexpr uint8_t kKeyUpPin = 0;
 constexpr uint8_t kKeyMidPin = 35;
 constexpr uint8_t kKeyDownPin = 34;
 constexpr uint8_t kIndicatorLedPin = 2;
 constexpr uint8_t kPowerCtrlPin = 32;
+constexpr uint8_t kEpdBusyPin = 25;
+constexpr uint8_t kEpdResetPin = 26;
+constexpr uint8_t kEpdDcPin = 27;
+constexpr uint8_t kEpdCsPin = 33;
+constexpr uint8_t kEpdSckPin = 13;
+constexpr uint8_t kEpdMisoPin = 12;
+constexpr uint8_t kEpdMosiPin = 14;
 constexpr size_t kEpd4Bytes = (800 * 480) / 2;
 constexpr uint16_t kPhotoCount = 1;
 constexpr uint16_t kScreenWidth = 800;
@@ -71,6 +95,57 @@ int g_photo_src_height = 0;
 int g_photo_crop_x = 0;
 int g_photo_crop_y = 0;
 float g_photo_scale = 1.0f;
+
+constexpr uint32_t kRtcViewMagic = 0x45504457u;  // "EPDW"
+constexpr uint32_t kStoredViewMagic = 0x41505056u;  // "APPV"
+constexpr char kViewPreferencesNamespace[] = "app_view";
+constexpr char kViewPreferencesKey[] = "state";
+
+struct ViewStateRecord {
+  uint32_t magic;
+  uint16_t photo_index;
+  uint8_t page;
+  uint8_t reserved;
+};
+
+struct RtcViewState {
+  ViewStateRecord view;
+  uint8_t refresh_pending;
+  uint8_t reserved[3];
+  uint32_t refresh_count;
+};
+
+RTC_DATA_ATTR RtcViewState g_rtc_view_state = {};
+
+bool validViewRecord(const ViewStateRecord &record, uint32_t expected_magic) {
+  return record.magic == expected_magic &&
+         record.page <= static_cast<uint8_t>(AppState::Calendar);
+}
+
+bool loadPersistentViewState(AppState &page, uint16_t &photo_index) {
+  Preferences prefs;
+  if (!prefs.begin(kViewPreferencesNamespace, true)) {
+    return false;
+  }
+  ViewStateRecord record = {};
+  const size_t read = prefs.getBytes(kViewPreferencesKey, &record, sizeof(record));
+  prefs.end();
+  if (read != sizeof(record) || !validViewRecord(record, kStoredViewMagic)) {
+    return false;
+  }
+  page = static_cast<AppState>(record.page);
+  photo_index = record.photo_index;
+  return true;
+}
+
+void updateRtcViewState(AppState page, uint16_t photo_index, bool refresh_pending) {
+  g_rtc_view_state.view.magic = kRtcViewMagic;
+  g_rtc_view_state.view.photo_index = photo_index;
+  g_rtc_view_state.view.page = static_cast<uint8_t>(page);
+  g_rtc_view_state.view.reserved = 0;
+  g_rtc_view_state.refresh_pending = refresh_pending ? 1u : 0u;
+  memset(g_rtc_view_state.reserved, 0, sizeof(g_rtc_view_state.reserved));
+}
 
 uint8_t nearestPanelNibble(uint8_t r, uint8_t g, uint8_t b) {
   struct PanelColor {
@@ -601,6 +676,19 @@ uint32_t saturatingAddMs(uint32_t base_ms, uint32_t delta_ms) {
 void App::begin() {
   state_ = kDebugBootState;
   photo_index_ = 0;
+  const bool persistent_restored = loadPersistentViewState(state_, photo_index_);
+  const bool rtc_valid = validViewRecord(g_rtc_view_state.view, kRtcViewMagic);
+  const bool resume_refresh = rtc_valid && g_rtc_view_state.refresh_pending != 0u;
+  if (rtc_valid) {
+    state_ = static_cast<AppState>(g_rtc_view_state.view.page);
+    photo_index_ = g_rtc_view_state.view.photo_index;
+  }
+  // Consume the one-shot marker before doing any asynchronous preparation. If another
+  // reset happens before the refresh completes, the next boot safely prepares again.
+  updateRtcViewState(state_, photo_index_, false);
+  // A boot is already behind a CPU reset, so the problem-panel build may render once
+  // without requesting another restart. Other builds do not use restart gating.
+  render_restart_prepared_ = APP_EPD_RESTART_BEFORE_REFRESH != 0;
   last_photo_switch_ms_ = millis();
   last_app_switch_ms_ = last_photo_switch_ms_;
   // Always redraw the default page after boot/reset so the panel state matches app state.
@@ -627,6 +715,11 @@ void App::begin() {
   setPeripheralPower(false);
   initPhotoStorage();
   refreshPhotoFileCount();
+  if (photo_file_count_ > 0) {
+    photo_index_ = static_cast<uint16_t>(photo_index_ % photo_file_count_);
+  }
+  updateRtcViewState(state_, photo_index_, false);
+  persistViewState();
 
   Serial.println("[SYSTEM] begin");
   Serial.printf("[INPUT] key pins up=%u mid=%u down=%u\n", kKeyUpPin, kKeyMidPin,
@@ -634,6 +727,11 @@ void App::begin() {
   Serial.printf("[POWER] epd rail pin=%u default=OFF\n", kPowerCtrlPin);
   Serial.printf("[PHOTO] interval=%lus\n", static_cast<unsigned long>(photo_interval_ms_ / 1000UL));
   Serial.printf("[PHOTO] /pic epd4 count=%u\n", photo_file_count_);
+  Serial.printf("[STATE] restored=%s source=%s page=%s photo_index=%u restart_resume=%s\n",
+                (persistent_restored || rtc_valid) ? "true" : "false",
+                rtc_valid ? "rtc" : (persistent_restored ? "nvs" : "default"),
+                appStateName(state_), static_cast<unsigned>(photo_index_),
+                resume_refresh ? "true" : "false");
   Serial.println("[SYSTEM] boot render queued");
 }
 
@@ -1316,6 +1414,12 @@ void App::render() {
       mode == appfw::OperationMode::ConfigSTA) {
     return;
   }
+#if APP_EPD_RESTART_BEFORE_REFRESH
+  if (!render_restart_prepared_ && shouldRestartBeforeRender()) {
+    restartBeforeRender();
+    return;
+  }
+#endif
   const uint32_t now_ms = millis();
   const bool daily_sync_due = isDailySyncDue(now_ms);
   const bool daily_sync_required = daily_sync_due || daily_sync_waiting_;
@@ -1367,6 +1471,10 @@ void App::render() {
                 static_cast<unsigned long>(millis() - render_begin_ms),
                 led_manager_.currentStateName());
   needs_render_ = false;
+#if APP_EPD_RESTART_BEFORE_REFRESH
+  ++g_rtc_view_state.refresh_count;
+  render_restart_prepared_ = false;
+#endif
   led_manager_.update(mode_manager_.mode(), millis(), wifi_manager_.isStaConnected());
 }
 
@@ -1541,8 +1649,13 @@ void App::nextPhoto(const char *reason, uint32_t now_ms) {
     return;
   }
   photo_index_ = static_cast<uint16_t>((photo_index_ + 1) % total);
+#if APP_EPD_RESTART_BEFORE_REFRESH
+  render_restart_prepared_ = false;
+#endif
   last_photo_switch_ms_ = now_ms;
   needs_render_ = true;
+  updateRtcViewState(state_, photo_index_, false);
+  persistViewState();
   Serial.printf("[PHOTO] next -> index=%u/%u reason=%s source=%s\n", photo_index_ + 1, total,
                 reason, (photo_file_count_ > 0) ? "epd4" : "clear");
 }
@@ -1558,8 +1671,13 @@ void App::prevPhoto(const char *reason, uint32_t now_ms) {
   } else {
     photo_index_ = static_cast<uint16_t>(photo_index_ - 1);
   }
+#if APP_EPD_RESTART_BEFORE_REFRESH
+  render_restart_prepared_ = false;
+#endif
   last_photo_switch_ms_ = now_ms;
   needs_render_ = true;
+  updateRtcViewState(state_, photo_index_, false);
+  persistViewState();
   Serial.printf("[PHOTO] prev -> index=%u/%u reason=%s source=%s\n", photo_index_ + 1, total,
                 reason, (photo_file_count_ > 0) ? "epd4" : "clear");
 }
@@ -1634,13 +1752,73 @@ bool App::ensureDailySyncBeforeRefresh(uint32_t now_ms) {
 
 void App::beginDisplaySession() {
   setPeripheralPower(true);
-  EPD_init();
+  EPD_init_fast();
 }
 
 void App::endDisplaySession() {
   EPD_sleep();
   delay(2);
   setPeripheralPower(false);
+}
+
+void App::persistViewState() {
+  const ViewStateRecord record = {
+      kStoredViewMagic, photo_index_, static_cast<uint8_t>(state_), 0u};
+  Preferences prefs;
+  if (!prefs.begin(kViewPreferencesNamespace, false)) {
+    Serial.println("[STATE] NVS open failed");
+    return;
+  }
+  ViewStateRecord stored = {};
+  const bool unchanged =
+      prefs.getBytes(kViewPreferencesKey, &stored, sizeof(stored)) == sizeof(stored) &&
+      memcmp(&stored, &record, sizeof(record)) == 0;
+  if (!unchanged && prefs.putBytes(kViewPreferencesKey, &record, sizeof(record)) != sizeof(record)) {
+    Serial.println("[STATE] NVS write failed");
+  }
+  prefs.end();
+}
+
+bool App::shouldRestartBeforeRender() const {
+#if APP_EPD_RESTART_BEFORE_REFRESH
+#if APP_EPD_RESTART_INTERVAL <= 1
+  return true;
+#else
+  const uint32_t next_refresh_number = g_rtc_view_state.refresh_count + 1u;
+  return next_refresh_number >= APP_EPD_RESTART_INTERVAL &&
+         (next_refresh_number % APP_EPD_RESTART_INTERVAL) == 0u;
+#endif
+#else
+  return false;
+#endif
+}
+
+void App::restartBeforeRender() {
+  updateRtcViewState(state_, photo_index_, true);
+  persistViewState();
+  Serial.printf("[REFRESH] restart prepare page=%s photo_index=%u refresh=%lu interval=%u\n",
+                appStateName(state_), static_cast<unsigned>(photo_index_),
+                static_cast<unsigned long>(g_rtc_view_state.refresh_count + 1u),
+                static_cast<unsigned>(APP_EPD_RESTART_INTERVAL));
+#if APP_EPD_POWER_CYCLE_BEFORE_RESTART
+  Serial.printf("[REFRESH] epd power-cycle before restart off_ms=%u\n",
+                static_cast<unsigned>(APP_EPD_RESTART_POWER_OFF_MS));
+  setPeripheralPower(false);
+  SPI.end();
+  digitalWrite(kPowerCtrlPin, LOW);
+  peripheral_power_on_ = false;
+  pinMode(kEpdBusyPin, INPUT);
+  pinMode(kEpdResetPin, INPUT);
+  pinMode(kEpdDcPin, INPUT);
+  pinMode(kEpdCsPin, INPUT);
+  pinMode(kEpdSckPin, INPUT);
+  pinMode(kEpdMisoPin, INPUT);
+  pinMode(kEpdMosiPin, INPUT);
+  delay(APP_EPD_RESTART_POWER_OFF_MS);
+#endif
+  Serial.flush();
+  delay(50);
+  ESP.restart();
 }
 
 void App::setState(AppState next) {
@@ -1658,6 +1836,9 @@ void App::setState(AppState next) {
   calendar_stop_sta_after_render_ = false;
   calendar_pre_refresh_wifi_connected_ = false;
   state_ = next;
+#if APP_EPD_RESTART_BEFORE_REFRESH
+  render_restart_prepared_ = false;
+#endif
   last_app_switch_ms_ = millis();
   if (state_ == AppState::Calendar) {
     force_calendar_full_refresh_ = true;
@@ -1667,6 +1848,8 @@ void App::setState(AppState next) {
   }
   sleep_inhibit_until_ms_ = saturatingAddMs(millis(), kLightSleepWakeInhibitMs);
   needs_render_ = true;
+  updateRtcViewState(state_, photo_index_, false);
+  persistViewState();
 }
 
 void App::renderPhotoPage() {
@@ -2325,4 +2508,7 @@ void App::waitEpdReadyWithLed() {
   if (appfw::kDebugLogs && elapsed_ms >= 200) {
     Serial.printf("[EPD] busy wait=%lums (led updated)\n", static_cast<unsigned long>(elapsed_ms));
   }
+#if APP_EPD_POST_REFRESH_SETTLE_MS > 0
+  delay(APP_EPD_POST_REFRESH_SETTLE_MS);
+#endif
 }
